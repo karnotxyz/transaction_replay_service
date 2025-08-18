@@ -1,0 +1,41 @@
+{
+  "name": "transaction_replay_service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "check": "tsc --noEmit",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "module",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@polkadot/api": "^16.4.4",
+    "aws-sdk": "^2.1692.0",
+    "axios": "^1.11.0",
+    "body-parser": "^2.2.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "pg": "^8.16.3",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.7",
+    "starknet": "^7.6.4",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "@types/body-parser": "^1.19.6",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
+    "@types/sequelize": "^6.12.0",
+    "@types/winston": "^2.4.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
