@@ -1,28 +1,73 @@
-import axios, { AxiosResponse } from "axios";
 import { RpcProvider } from "starknet";
 
 import * as starknet from "starknet";
-import { getBalance, getNonce } from "./utils.js";
+import {TransactionWithHash, TransactionType} from "starknet";
+import { getBalance, getNonce } from "../utils.js";
+import { generalInvoke } from "./invoke.js";
+import { generalDeclare } from "./declare.js";
 
-interface Provider {
-  nodeUrl: string;
-  getClassByHash: (hash: string) => Promise<any>;
+
+async function processTx(tx: TransactionWithHash,  block_no: number): Promise<string> {
+  // TODO: maybe do this later
+  // if (tx === "0x0" && !feesDisabled) {
+  //   await setDisableFee(true);
+  //   feesDisabled = true;
+  // } else if (tx.max_fee !== "0x0" && feesDisabled) {
+  //   await setDisableFee(false);
+  //   feesDisabled = false;
+  // }
+
+  let transaction_type = tx.type;
+
+  switch (transaction_type) {
+    case "INVOKE": {
+      let tx_hash = await generalInvoke(tx, syncingProvider);
+      return tx_hash;
+    }
+    // case "L1_HANDLER": {
+    //   await l1_handler(tx, syncingProvider);
+    //   return `L1_HANDLER-${(tx.transaction_hash, syncingProvider)}`;
+    // }
+    // case "DEPLOY_ACCOUNT": {
+    //   let tx_hash = await deploy_account(tx, syncingProvider);
+    //   return tx_hash;
+    // }
+    case "DECLARE": {
+      let tx_hash = await generalDeclare(tx, syncingProvider);
+      return tx_hash;
+    }
+    // case "DEPLOY": {
+    //   let tx_hash = await declare(tx, originalProvider, syncingProvider);
+    //   return tx_hash;
+    // }
+    // case "DEPLOY_ACCOUNT": {
+    //   let tx_hash = await declare(tx, originalProvider, syncingProvider);
+    //   return tx_hash;
+    // }
+  }
+
+  return tx.transaction_hash;
 }
 
-interface Transaction {
-  class_hash?: string;
-  sender_address?: string;
-  max_fee: string;
-  signature: string[];
-  nonce: string;
-  version: string;
-  compiled_class_hash?: string;
-  contract_address_salt?: string;
-  constructor_calldata?: string[];
-  contract_address?: string;
-  entry_point_selector?: string;
-  calldata?: string[];
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 async function declare(
   tx: Transaction,
@@ -125,25 +170,6 @@ async function deploy_account(tx: Transaction, syncingProvider: RpcProvider) {
   return txn_hash;
 }
 
-async function invoke(tx: Transaction, syncingProvider: RpcProvider) {
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
-    jsonrpc: "2.0",
-    method: "starknet_addInvokeTransaction",
-    params: {
-      invoke_transaction: {
-        type: "INVOKE",
-        sender_address: tx.sender_address,
-        calldata: tx.calldata,
-        max_fee: tx.max_fee,
-        signature: tx.signature,
-        nonce: await getNonce(tx.sender_address!, syncingProvider, tx.nonce),
-        version: tx.version,
-      },
-    },
-  });
-  return result.data.result.transaction_hash;
-}
 
 // TODO: handle by sending the actual transaction on L1
 async function l1_handler(tx: Transaction, syncingProvider: RpcProvider) {
@@ -166,23 +192,4 @@ async function l1_handler(tx: Transaction, syncingProvider: RpcProvider) {
   return "L1_HANDLER";
 }
 
-async function postWithRetry(
-  url: string,
-  data: Record<string, any>,
-): Promise<AxiosResponse<any>> {
-  const MAX_ATTEMPTS = 3;
-  const SLEEP = 30000;
-
-  for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const result = await axios.post(url, data);
-    if (result.data.error && result.data.error.code === 55) {
-      console.log("Account validation failed, retrying in 30 seconds");
-      await new Promise((resolve) => setTimeout(resolve, SLEEP));
-    } else {
-      return result;
-    }
-  }
-  throw new Error("Max retries exceeded for transaction");
-}
-
-export { declare, deploy_account, invoke, l1_handler };
+export { processTx, declare, deploy_account, invoke, l1_handler };

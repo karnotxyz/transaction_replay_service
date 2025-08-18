@@ -6,11 +6,8 @@ import db from "./models/index.js";
 import { LAST_SYNCED_BLOCK_KEY, LAST_SYNCED_TXN_INDEX } from "./constants.js";
 import logger from "./logger.js";
 import {
-  declare,
-  deploy_account,
-  invoke,
-  l1_handler,
-} from "./transactions.js";
+  processTx
+} from "./transactions/transactions.js";
 import {
   setDisableFee,
   syncDbCreateOrUpdate,
@@ -19,6 +16,7 @@ import {
 import { sendAlert } from "./sns.js";
 import { originalProvider, syncingProvider } from "./providers.js";
 import { verifyEvents } from "./verify_events.js";
+import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
 
 let feesDisabled = false;
 
@@ -106,8 +104,9 @@ export async function syncBlocks(syncTo?: number): Promise<void> {
   await verifyEvents();
 }
 
+
 async function syncBlock(block_no: number, skip_transactions: number): Promise<void> {
-  const blockWithTxs: any = await originalProvider.getBlockWithTxs(block_no);
+  const blockWithTxs = await originalProvider.getBlockWithTxs(block_no);
 
   logger.info(
     `Found ${blockWithTxs.transactions.length} transactions to process in block - ${block_no}`,
@@ -124,8 +123,10 @@ async function syncBlock(block_no: number, skip_transactions: number): Promise<v
     throw new Error("No transactions to process in block");
   }
 
+
   for (let i = skip_transactions; i < blockWithTxs.transactions.length; i++) {
-    const tx = blockWithTxs.transactions[i];
+    const tx : TransactionWithHash = blockWithTxs.transactions[i];
+
     console.log(`Processing transaction - ${tx.transaction_hash}`);
     let tx_hash: string;
 
@@ -166,17 +167,4 @@ async function syncBlock(block_no: number, skip_transactions: number): Promise<v
 
     logger.info(`Completed transaction - ${i}`);
   }
-}
-
-async function processTx(tx: any, _block_no: number): Promise<string> {
-  if (tx.max_fee === "0x0" && !feesDisabled) {
-    await setDisableFee(true);
-    feesDisabled = true;
-  } else if (tx.max_fee !== "0x0" && feesDisabled) {
-    await setDisableFee(false);
-    feesDisabled = false;
-  }
-
-  // TODO: use processTxnsInner
-  return tx.transaction_hash;
 }

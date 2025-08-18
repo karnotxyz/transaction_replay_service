@@ -2,6 +2,7 @@ import { Contract, Provider, RpcProvider } from "starknet";
 import ERC20 from "./contracts/ERC20.json" with { type: "json" };
 import { ApiPromise, HttpProvider } from "@polkadot/api";
 import logger from "./logger.js";
+import axios, { AxiosResponse } from "axios";
 import db from "./models/index.js";
 
 const eth_address =
@@ -91,4 +92,27 @@ export async function syncDbCreateOrUpdate(
 export async function getLatestBlockNumber(provider: RpcProvider): Promise<number> {
   const latestBlock: any = await provider.getBlockLatestAccepted();
   return latestBlock.block_number;
+}
+
+
+
+
+
+export async function postWithRetry(
+  url: string,
+  data: Record<string, any>,
+): Promise<AxiosResponse<any>> {
+  const MAX_ATTEMPTS = 3;
+  const SLEEP = 30000;
+
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const result = await axios.post(url, data);
+    if (result.data.error && result.data.error.code === 55) {
+      console.log("Account validation failed, retrying in 30 seconds");
+      await new Promise((resolve) => setTimeout(resolve, SLEEP));
+    } else {
+      return result;
+    }
+  }
+  throw new Error("Max retries exceeded for transaction");
 }
