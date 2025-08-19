@@ -7,9 +7,8 @@ import { LAST_SYNCED_BLOCK_KEY, LAST_SYNCED_TXN_INDEX } from "./constants.js";
 import logger from "./logger.js";
 import {
   processTx
-} from "./transactions/transactions.js";
+} from "./transactions/index.js";
 import {
-  setDisableFee,
   syncDbCreateOrUpdate,
   getLatestBlockNumber,
 } from "./utils.js";
@@ -33,7 +32,7 @@ interface SyncingDbInstance extends Model<SyncingDbAttributes>, SyncingDbAttribu
 
 export async function syncBlocks(syncTo?: number): Promise<void> {
   try {
-    await setDisableFee(false);
+    // await setDisableFee(false);
   } catch (err) {
     logger.error(`Error setting disable fee to false, error - ${err}`);
     console.error(err);

@@ -1,6 +1,5 @@
 import { Contract, Provider, RpcProvider } from "starknet";
 import ERC20 from "./contracts/ERC20.json" with { type: "json" };
-import { ApiPromise, HttpProvider } from "@polkadot/api";
 import logger from "./logger.js";
 import axios, { AxiosResponse } from "axios";
 import db from "./models/index.js";
@@ -9,7 +8,6 @@ const eth_address =
   "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7";
 
 const nonce_tracker: Record<string, number> = {};
-const polkadotProvider = new HttpProvider(process.env.RPC_URL_SYNCING_NODE || "");
 
 // ---- Functions ----
 
@@ -50,18 +48,15 @@ export async function getNonce(
   return `0x${address_nonce.toString(16)}`;
 }
 
-/**
- * Sets disableFee flag on polkadot side.
- */
-export async function setDisableFee(value: boolean): Promise<void> {
-  logger.info(`Setting disable fees to - ${value}`);
-  const api = await ApiPromise.create({ provider: polkadotProvider });
-  const extrinsic = api.tx.starknet.setDisableFee(value);
-  await extrinsic.send();
+// export async function setDisableFee(value: boolean): Promise<void> {
+//   logger.info(`Setting disable fees to - ${value}`);
+//   const api = await ApiPromise.create({ provider: polkadotProvider });
+//   const extrinsic = api.tx.starknet.setDisableFee(value);
+//   await extrinsic.send();
 
-  // Sleep for 7 seconds
-  await new Promise((resolve) => setTimeout(resolve, 7000));
-}
+//   // Sleep for 7 seconds
+//   await new Promise((resolve) => setTimeout(resolve, 7000));
+// }
 
 /**
  * Create or update syncing_db row.

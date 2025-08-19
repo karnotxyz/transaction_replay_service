@@ -22,11 +22,12 @@ export async function generalDeclare(tx: starknet.TransactionWithHash, syncingPr
       return declareV3(tx, syncingProvider);
     }
     default: {
-      throw new Error(`Unsupported transaction version: ${tx_version}`);
+      throw new Error(`Unsupported Declare transaction version: ${tx_version}`);
     }
   }
 }
 
+// Declare V0 - Legacy declare transaction
 async function declareV0(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
   type DECLARE_TXN_V0 = {
       type: 'DECLARE';
@@ -40,20 +41,21 @@ async function declareV0(tx: starknet.TransactionWithHash, syncingProvider: star
   let txn = tx as unknown as DECLARE_TXN_V0;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeclareTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "DECLARE",
         sender_address: txn.sender_address,
         max_fee: txn.max_fee,
         version: txn.version,
         signature: txn.signature,
         class_hash: txn.class_hash
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }
 
@@ -72,11 +74,11 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
   let txn = tx as unknown as DECLARE_TXN_V1;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeclareTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "DECLARE",
         sender_address: txn.sender_address,
         max_fee: txn.max_fee,
@@ -84,12 +86,12 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
         signature: txn.signature,
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
         class_hash: txn.class_hash
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }
-
 
 async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
   type DECLARE_TXN_V2 = {
@@ -101,16 +103,17 @@ async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: star
       signature: starknet.Signature;
       nonce: starknet.FELT;
       class_hash: starknet.FELT;
+      // Note: class_hash is typically computed from contract_class, not a separate field in V2
   };
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeclareTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "DECLARE",
         sender_address: txn.sender_address,
         compiled_class_hash: txn.compiled_class_hash,
@@ -118,10 +121,11 @@ async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: star
         version: txn.version,
         signature: txn.signature,
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-        class_hash: txn.class_hash
-      },
-    },
+        class_hash: txn.class_hash,
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }
 
@@ -146,12 +150,12 @@ async function declareV3(tx: starknet.TransactionWithHash, syncingProvider: star
   let txn = tx as unknown as DECLARE_TXN_V3;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addInvokeTransaction",
-    params: {
-      invoke_transaction: {
-        type: "INVOKE",
+    method: "starknet_addDeclareTransaction",
+    params: [
+      {
+        type: "DECLARE",
         sender_address: txn.sender_address,
         compiled_class_hash: txn.compiled_class_hash,
         version: txn.version,
@@ -159,13 +163,14 @@ async function declareV3(tx: starknet.TransactionWithHash, syncingProvider: star
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
         class_hash: txn.class_hash,
         resource_bounds: txn.resource_bounds,
-        tip : txn.tip,
-        paymaster_data : txn.paymaster_data,
+        tip: txn.tip,
+        paymaster_data: txn.paymaster_data,
         account_deployment_data: txn.account_deployment_data,
         nonce_data_availability_mode: txn.nonce_data_availability_mode,
         fee_data_availability_mode: txn.fee_data_availability_mode,
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }

@@ -18,7 +18,7 @@ export async function generalInvoke(tx: starknet.TransactionWithHash, syncingPro
       return invokeV3(tx, syncingProvider);
     }
     default: {
-      throw new Error(`Unsupported transaction version: ${tx_version}`);
+      throw new Error(`Unsupported Invoke transaction version: ${tx_version}`);
     }
   }
 }
@@ -37,21 +37,22 @@ async function invokeV0(tx: starknet.TransactionWithHash, syncingProvider: stark
   let txn = tx as unknown as INVOKE_TXN_V0;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addInvokeTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "INVOKE",
         max_fee: txn.max_fee,
-        version: tx.version,
+        version: txn.version,
         signature: txn.signature,
         contract_address: txn.contract_address,
         entry_point_selector: txn.entry_point_selector,
         calldata: txn.calldata,
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }
 
@@ -69,24 +70,24 @@ async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: stark
   let txn = tx as unknown as INVOKE_TXN_V1;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addInvokeTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "INVOKE",
         sender_address: txn.sender_address,
         calldata: txn.calldata,
         max_fee: txn.max_fee,
-        version: tx.version,
+        version: txn.version,
         signature: txn.signature,
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }
-
 
 async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
   type INVOKE_TXN_V3 = {
@@ -107,11 +108,11 @@ async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: stark
   let txn = tx as unknown as INVOKE_TXN_V3;
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 0,
+    id: 1,
     jsonrpc: "2.0",
     method: "starknet_addInvokeTransaction",
-    params: {
-      invoke_transaction: {
+    params: [
+      {
         type: "INVOKE",
         sender_address: txn.sender_address,
         calldata: txn.calldata,
@@ -119,13 +120,14 @@ async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: stark
         signature: txn.signature,
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
         resource_bounds: txn.resource_bounds,
-        tip : txn.tip,
-        paymaster_data : txn.paymaster_data,
+        tip: txn.tip,
+        paymaster_data: txn.paymaster_data,
         account_deployment_data: txn.account_deployment_data,
         nonce_data_availability_mode: txn.nonce_data_availability_mode,
         fee_data_availability_mode: txn.fee_data_availability_mode,
-      },
-    },
+      }
+    ],
   });
+
   return result.data.result.transaction_hash;
 }

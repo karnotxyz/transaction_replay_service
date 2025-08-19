@@ -16,7 +16,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@polkadot/api": "^16.4.4",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.11.0",
     "body-parser": "^2.2.0",
