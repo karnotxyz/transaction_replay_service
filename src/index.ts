@@ -15,6 +15,16 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Health check endpoint
+app.get("/health", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    service: "transaction_replay_service"
+  });
+});
+
 app.post("/sync", async (req: Request, res: Response) => {
   try {
     await syncBlocks(req.body.syncFrom, req.body.syncTo);
