@@ -4,7 +4,7 @@ import bodyParser from "body-parser";
 
 import { syncBlocks } from "./sync_blocks.js";
 import logger from "./logger.js";
-import { verifyEvents } from "./verify_events.js";
+// import { verifyEvents } from "./verify_events.js";
 
 dotenv.config();
 
@@ -25,15 +25,15 @@ app.post("/sync", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/verifyEvents", async (_req: Request, res: Response) => {
-  try {
-    await verifyEvents();
-    res.status(200).send("Verification started");
-  } catch (e) {
-    console.error(e);
-    res.status(500).send(`Error verifying - ${e}`);
-  }
-});
+// app.post("/verifyEvents", async (_req: Request, res: Response) => {
+//   try {
+//     await verifyEvents();
+//     res.status(200).send("Verification started");
+//   } catch (e) {
+//     console.error(e);
+//     res.status(500).send(`Error verifying - ${e}`);
+//   }
+// });
 
 app.listen(PORT, () => {
   logger.info(`Syncing service listening on port ${PORT}`);

@@ -2,7 +2,7 @@ import { BlockWithTxHashes, Contract, GetTransactionReceiptResponse, Provider, R
 import ERC20 from "./contracts/ERC20.json" with { type: "json" };
 import logger from "./logger.js";
 import axios, { AxiosResponse } from "axios";
-import db from "./models/index.js";
+// import db from "./models/index.js";
 import { originalProvider, syncingProvider } from "./providers.js";
 
 const eth_address =
@@ -62,24 +62,24 @@ export async function getNonce(
 /**
  * Create or update syncing_db row.
  */
-export async function syncDbCreateOrUpdate(
-  attribute: string,
-  // FIX: The 'value' parameter is changed from 'string' to 'number' to match
-  // the model definition (DataTypes.INTEGER) and how it's being called.
-  value: number
-): Promise<void> {
-  // FIX: Use the initialized model from the db object.
-  const row = await db.syncing_db.findOne({ where: { attribute } });
+// export async function syncDbCreateOrUpdate(
+//   attribute: string,
+//   // FIX: The 'value' parameter is changed from 'string' to 'number' to match
+//   // the model definition (DataTypes.INTEGER) and how it's being called.
+//   value: number
+// ): Promise<void> {
+//   // FIX: Use the initialized model from the db object.
+//   const row = await db.syncing_db.findOne({ where: { attribute } });
 
-  if (row != null) {
-    row.dataValues.value = value;
-    await row.save();
-    return;
-  }
+//   if (row != null) {
+//     row.dataValues.value = value;
+//     await row.save();
+//     return;
+//   }
 
-  // FIX: Use the initialized model from the db object.
-  await db.syncing_db.create({ attribute, value });
-}
+//   // FIX: Use the initialized model from the db object.
+//   await db.syncing_db.create({ attribute, value });
+// }
 
 
 /**

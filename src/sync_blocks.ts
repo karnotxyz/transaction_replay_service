@@ -2,14 +2,14 @@
 import { Model } from "sequelize";
 // FIX: Import the central 'db' object instead of the model factory function directly.
 // The 'db' object contains all fully initialized Sequelize models.
-import db from "./models/index.js";
+// import db from "./models/index.js";
 import { LAST_SYNCED_BLOCK_KEY, LAST_SYNCED_TXN_INDEX } from "./constants.js";
 import logger from "./logger.js";
 import {
   processTx
 } from "./transactions/index.js";
 import {
-  syncDbCreateOrUpdate,
+  // syncDbCreateOrUpdate,
   getLatestBlockNumber,
   closeBlock,
   validateTransactionReceipt,
@@ -24,12 +24,12 @@ let feesDisabled = false;
 // FIX: This type definition is corrected.
 // We define an interface for the model's attributes and an instance type
 // that combines Sequelize's Model class with our attributes for type safety.
-interface SyncingDbAttributes {
-  id: number;
-  attribute: string;
-  value: number;
-}
-interface SyncingDbInstance extends Model<SyncingDbAttributes>, SyncingDbAttributes {}
+// interface SyncingDbAttributes {
+//   id: number;
+//   attribute: string;
+//   value: number;
+// }
+// interface SyncingDbInstance extends Model<SyncingDbAttributes>, SyncingDbAttributes {}
 
 export async function syncBlocks(syncFrom: number, syncTo: number): Promise<void> {
   console.log(`Starting sync from block ${syncFrom} to block ${syncTo}`);
