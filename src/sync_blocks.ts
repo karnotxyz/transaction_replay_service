@@ -151,6 +151,9 @@ async function syncBlock(block_no: number): Promise<void> {
         // TODO: fix: we should get tx_hash for L1_Handler transaction as well
         await new Promise(resolve => setTimeout(resolve, 1000));
       } else {
+        if (i == 0) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
         // Let's wait for transaction receipt here
         let txn_receipt_promise = await validateTransactionReceipt(syncingProvider, tx_hash);
         transactionHashes.push(tx_hash);

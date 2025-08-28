@@ -177,7 +177,7 @@ export async function validateTransactionReceipt(
   provider: RpcProvider,
   tx_hash: string,
 ): Promise<void> {
-  const maxRetries = 10; // Adjust as needed
+  const maxRetries = 20; // Adjust as needed
   let retryCount = 0;
 
   while (retryCount <= maxRetries) {
