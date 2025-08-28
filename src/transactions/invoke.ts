@@ -3,6 +3,7 @@ import { postWithRetry, getNonce } from "../utils.js";
 
 // https://www.quicknode.com/docs/starknet/starknet_addInvokeTransaction
 export async function generalInvoke(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
+  console.log("Invoking transaction with version : ", tx.version);
   let tx_version = tx.version;
 
   switch (tx_version) {
@@ -57,6 +58,7 @@ async function invokeV0(tx: starknet.TransactionWithHash, syncingProvider: stark
 }
 
 async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
+
   type INVOKE_TXN_V1 = {
       type: 'INVOKE';
       sender_address: string;
@@ -68,6 +70,7 @@ async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: stark
   };
 
   let txn = tx as unknown as INVOKE_TXN_V1;
+
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
     id: 1,

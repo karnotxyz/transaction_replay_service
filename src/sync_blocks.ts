@@ -11,10 +11,12 @@ import {
 import {
   syncDbCreateOrUpdate,
   getLatestBlockNumber,
+  closeBlock,
+  validateTransactionReceipt,
+  matchBlockHash
 } from "./utils.js";
 import { sendAlert } from "./sns.js";
 import { originalProvider, syncingProvider } from "./providers.js";
-import { verifyEvents } from "./verify_events.js";
 import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
 
 let feesDisabled = false;
@@ -29,82 +31,94 @@ interface SyncingDbAttributes {
 }
 interface SyncingDbInstance extends Model<SyncingDbAttributes>, SyncingDbAttributes {}
 
+export async function syncBlocks(syncFrom: number, syncTo: number): Promise<void> {
+  console.log(`Starting sync from block ${syncFrom} to block ${syncTo}`);
 
-export async function syncBlocks(syncTo?: number): Promise<void> {
   try {
-    // await setDisableFee(false);
-  } catch (err) {
-    logger.error(`Error setting disable fee to false, error - ${err}`);
-    console.error(err);
-    await sendAlert(
-      "[SYNCING_SERVICE] Error setting disable fee to false",
-      `Error setting disable fee to false, error - ${err}`,
-    );
-    return;
-  }
+    // Get the latest block number to validate sync range
+    const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
+    console.log(`Latest block number: ${latestBlockNumber}`);
 
-  feesDisabled = false;
-
-  // FIX: We now call 'findOne' on the correctly initialized model (db.syncing_db)
-  // and cast the result to our new interface for type-safe access to 'value'.
-  let lastSyncedBlockRecord = (await db.syncing_db.findOne({
-    where: { attribute: LAST_SYNCED_BLOCK_KEY },
-  })) as SyncingDbInstance | null;
-
-  let lastSyncedBlock = lastSyncedBlockRecord ? lastSyncedBlockRecord.value : -1;
-
-  let skipTransactionsRecord = (await db.syncing_db.findOne({
-    where: { attribute: LAST_SYNCED_TXN_INDEX },
-  })) as SyncingDbInstance | null;
-
-  let skipTransactions = skipTransactionsRecord ? skipTransactionsRecord.value : -1;
-
-  let latestBlock = await getLatestBlockNumber(originalProvider);
-  if (syncTo) {
-    latestBlock = syncTo;
-  }
-
-  logger.info(`Last synced block - ${lastSyncedBlock}`);
-  logger.info(`Latest block - ${latestBlock}`);
-
-  for (let i = lastSyncedBlock + 1; i <= latestBlock; i++) {
-    logger.info(`Syncing block - ${i}`);
-    try {
-      await syncBlock(i, skipTransactions + 1);
-      skipTransactions = -1;
-    } catch (e) {
-      logger.error(`Error syncing block - ${i}, error - ${e}`);
-      console.error(e);
-      await sendAlert(
-        "[SYNCING_SERVICE] Error syncing block",
-        `Error syncing block - ${i}, error - ${e}`,
-      );
-      return;
+    // Validate sync range
+    if (latestBlockNumber > syncTo) {
+      throw new Error(`Sync target ${syncTo} lags behind latest block ${latestBlockNumber}`);
     }
 
-    try {
-      // FIX: These calls now correctly pass a number, matching the updated
-      // function signature in utils.ts. The TypeScript error is gone.
-      await syncDbCreateOrUpdate(LAST_SYNCED_BLOCK_KEY, i);
-      await syncDbCreateOrUpdate(LAST_SYNCED_TXN_INDEX, -1);
-    } catch (e) {
-      logger.error(
-        `Error updating last synced block in DB, block - ${i}, error - ${e}`,
-      );
-      console.error(e);
-      await sendAlert(
-        "[SYNCING_SERVICE] Error updating last synced block in DB",
-        `Error updating last synced block in DB, block - ${i}, error - ${e}`,
-      );
-      throw e;
+    if (syncFrom > syncTo) {
+      throw new Error(`Sync from ${syncFrom} cannot be greater than sync to ${syncTo}`);
     }
-  }
 
-  await verifyEvents();
+    // Loop through each block in the range
+    for (let currentBlock = syncFrom; currentBlock <= syncTo; currentBlock++) {
+      console.log(`Syncing block ${currentBlock}...`);
+
+      try {
+
+        // Validate the current block
+        await validateBlock(currentBlock);
+
+        // Start syncing the next block
+        await syncBlock(currentBlock);
+        console.log(`Successfully synced block ${currentBlock}`);
+
+        // Close the block after successful sync
+        await closeBlock();
+        console.log(`Block ${currentBlock} closed successfully`);
+        console.log(`Block ${currentBlock} completed successfully`);
+
+        // Validate block
+        await matchBlockHash(currentBlock);
+        console.log(`Block ${currentBlock} validated successfully`);
+
+      } catch (error) {
+        console.error(`Failed to process block ${currentBlock}:`, error);
+        throw new Error(`Sync failed at block ${currentBlock}: ${error}`);
+      }
+    }
+
+    console.log(`Successfully completed sync from block ${syncFrom} to ${syncTo}`);
+
+  } catch (error) {
+    console.error('Sync blocks operation failed:', error);
+    throw error;
+  }
 }
 
+// Separate function to handle block validation and syncing
+async function validateBlock(currentBlock: number): Promise<void> {
+  // Validate that the latest block is only 1 lesser than the current block with retry
+  const maxRetries = 5; // Adjust as needed
+  let retryCount = 0;
+  let blockValidated = false;
 
-async function syncBlock(block_no: number, skip_transactions: number): Promise<void> {
+  while (retryCount <= maxRetries && !blockValidated) {
+    try {
+      const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
+      console.log(`Latest block number check (attempt ${retryCount + 1}): ${latestBlockNumber}, expecting: ${currentBlock - 1}`);
+
+      if (latestBlockNumber + 1 === currentBlock) {
+        blockValidated = true;
+        console.log(`Block ${currentBlock} validation successful`);
+      } else {
+        throw new Error(`Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`);
+      }
+    } catch (error) {
+      retryCount++;
+      console.warn(`Block validation attempt ${retryCount} failed for block ${currentBlock}:`, error);
+
+      if (retryCount > maxRetries) {
+        throw new Error(`Failed to validate block ${currentBlock} after ${maxRetries + 1} attempts. Latest error: ${error}`);
+      }
+
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+      const delay = Math.pow(2, retryCount) * 1000;
+      console.log(`Retrying block ${currentBlock} validation in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function syncBlock(block_no: number): Promise<void> {
   const blockWithTxs = await originalProvider.getBlockWithTxs(block_no);
 
   logger.info(
@@ -122,15 +136,26 @@ async function syncBlock(block_no: number, skip_transactions: number): Promise<v
     throw new Error("No transactions to process in block");
   }
 
+  // Process all transactions and collect their hashes
+  const transactionHashes: string[] = [];
 
-  for (let i = skip_transactions; i < blockWithTxs.transactions.length; i++) {
-    const tx : TransactionWithHash = blockWithTxs.transactions[i];
+  for (let i = 0; i < blockWithTxs.transactions.length; i++) {
+    const tx: TransactionWithHash = blockWithTxs.transactions[i];
 
     console.log(`Processing transaction - ${tx.transaction_hash}`);
     let tx_hash: string;
 
     try {
       tx_hash = await processTx(tx, block_no);
+      if (tx_hash === "L1_HANDLER") {
+        // TODO: fix: we should get tx_hash for L1_Handler transaction as well
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        // Let's wait for transaction receipt here
+        let txn_receipt_promise = await validateTransactionReceipt(syncingProvider, tx_hash);
+        transactionHashes.push(tx_hash);
+      }
+
     } catch (err) {
       logger.error(
         `Error processing transaction - ${tx.transaction_hash}, error - ${err}`,
@@ -142,28 +167,35 @@ async function syncBlock(block_no: number, skip_transactions: number): Promise<v
       );
       throw err;
     }
-
-    if (tx_hash !== tx.transaction_hash && tx.type !== "L1_HANDLER") {
-      await sendAlert(
-        "[SYNCING_SERVICE] Transaction hash mismatch",
-        `Transaction hash mismatch, original - ${tx.transaction_hash}, synced - ${tx_hash}`,
-      );
-      logger.warn(
-        `Transaction hash mismatch, original - ${tx.transaction_hash}, synced - ${tx_hash}`,
-      );
-    }
-
-    try {
-      // FIX: This call now correctly passes a number.
-      await syncDbCreateOrUpdate(LAST_SYNCED_TXN_INDEX, i);
-    } catch (e) {
-      logger.error(
-        `Error updating last synced transaction index in DB, transaction - ${tx.transaction_hash}, error - ${e}`,
-      );
-      console.error(e);
-      throw new Error("Error updating last synced transaction index in DB");
-    }
-
-    logger.info(`Completed transaction - ${i}`);
   }
+
+  // Wait for all transaction receipts in parallel
+  // console.log(`Waiting for receipts of ${transactionHashes.length} transactions...`);
+
+  // // sleep for 1 minute here
+  // console.log("Sleeping for 20 secs...");
+  // await new Promise(resolve => setTimeout(resolve, 10000));
+  // console.log("Finished Sleeping...");
+
+  // try {
+  //   const receiptPromises = transactionHashes.map(tx_hash =>
+  //     validateTransactionReceipt(syncingProvider, tx_hash)
+  //   );
+
+  //   // Wait for all receipts to be validated
+  //   await Promise.all(receiptPromises);
+
+  //   console.log(`All ${transactionHashes.length} transaction receipts validated successfully`);
+  //   logger.info(`Block ${block_no} - all transaction receipts validated successfully`);
+
+  // } catch (error) {
+  //   const errorMsg = `Receipt validation failed for block ${block_no}: ${error}`;
+  //   logger.error(errorMsg);
+  //   console.error(errorMsg);
+  //   await sendAlert(
+  //     "[SYNCING_SERVICE] Block receipt validation failed",
+  //     errorMsg
+  //   );
+  //   throw error;
+  // }
 }

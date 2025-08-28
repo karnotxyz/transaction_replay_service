@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 
 app.post("/sync", async (req: Request, res: Response) => {
   try {
-    await syncBlocks(req.body.syncTo);
+    await syncBlocks(req.body.syncFrom, req.body.syncTo);
     res.status(200).send("Syncing started");
   } catch (e) {
     console.error(e);

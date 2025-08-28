@@ -6,6 +6,7 @@ import { getBalance, getNonce } from "../utils.js";
 import { generalInvoke } from "./invoke.js";
 import { generalDeclare } from "./declare.js";
 import { generalDeployAccount } from "./deploy_account.js";
+import { l1_handler_message } from "./l1_handler.js";
 import { originalProvider, syncingProvider } from "../providers.js";
 
 export async function processTx(tx: TransactionWithHash,  block_no: number): Promise<string> {
@@ -33,10 +34,10 @@ export async function processTx(tx: TransactionWithHash,  block_no: number): Pro
       let tx_hash = await generalDeclare(tx, syncingProvider);
       return tx_hash;
     }
-    //  // case "L1_HANDLER": {
-    //   await l1_handler(tx, syncingProvider);
-    //   return `L1_HANDLER-${(tx.transaction_hash, syncingProvider)}`;
-    // }
+    case "L1_HANDLER": {
+      let _ = await l1_handler_message(tx, syncingProvider);
+      return "L1_HANDLER";
+    }
     // case "DEPLOY": {
     //   let tx_hash = await declare(tx, originalProvider, syncingProvider);
     //   return tx_hash;
