@@ -3,8 +3,6 @@ import { postWithRetry, getNonce } from "../utils.js";
 
 export async function l1_handler_message(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
 
-  console.log("L1 Handler Message:", tx);
-
   type L1_HANDLER_TXN = {
     version: string;
     nonce: string;
@@ -49,8 +47,10 @@ export async function l1_handler_message(tx: starknet.TransactionWithHash, synci
 
   // Check if the status is successful
   if (result.status === 200) {
-    console.log("L1 Handler Message sent successfully");
+    console.log("L1 Handler Message sent successfully: ", result.data.result.transaction_hash);
   } else {
     console.error("Failed to send L1 Handler Message");
   }
+
+  return result.data.result.transaction_hash;
 }

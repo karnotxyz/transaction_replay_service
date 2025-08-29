@@ -172,12 +172,22 @@ export async function postWithRetry(
 }
 
 
-// Process receipt validation for a single transaction with retry logic
+// Process receipt validation for a single transaction with configurable retry logic
 export async function validateTransactionReceipt(
   provider: RpcProvider,
   tx_hash: string,
+  options: {
+    maxRetries?: number;
+    useExponentialBackoff?: boolean;
+    fixedDelay?: number;
+  } = {}
 ): Promise<void> {
-  const maxRetries = 20; // Adjust as needed
+  const {
+    maxRetries = 20,
+    useExponentialBackoff = false,
+    fixedDelay = 100
+  } = options;
+
   let retryCount = 0;
 
   while (retryCount <= maxRetries) {
@@ -208,14 +218,16 @@ export async function validateTransactionReceipt(
       console.warn(`Receipt validation attempt ${retryCount} failed for transaction ${tx_hash}:`);
 
       if (retryCount > maxRetries) {
-        const errorMsg = `Failed to validate receipt for transaction ${tx_hash} after ${maxRetries + 1} attempts. Latest error: ${error}`;
+        const errorMsg = `Failed to validate receipt for transaction ${tx_hash} after ${maxRetries} attempts. Latest error: ${error}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
       }
 
-      // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
-      // const delay = Math.pow(2, retryCount) * 1000;
-      const delay = 100;
+      // Calculate delay based on strategy
+      const delay = useExponentialBackoff
+        ? Math.pow(2, retryCount) * 1000  // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
+        : fixedDelay;                     // Fixed delay
+
       console.log(`Retrying receipt validation for transaction ${tx_hash} in ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -223,7 +235,7 @@ export async function validateTransactionReceipt(
 }
 
 export async function matchBlockHash(block_number: number): Promise<void> {
-  const maxAttempts = 2;
+  const maxAttempts = 4;
   const baseDelay = 2000; // 2 seconds
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {

@@ -147,18 +147,16 @@ async function syncBlock(block_no: number): Promise<void> {
 
     try {
       tx_hash = await processTx(tx, block_no);
-      if (tx_hash === "L1_HANDLER") {
-        // TODO: fix: we should get tx_hash for L1_Handler transaction as well
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      if (i == 0) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await validateTransactionReceipt(syncingProvider, tx_hash, {
+          useExponentialBackoff: true
+        });
       } else {
-        if (i == 0) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        // Let's wait for transaction receipt here
-        let txn_receipt_promise = await validateTransactionReceipt(syncingProvider, tx_hash);
-        transactionHashes.push(tx_hash);
+        await validateTransactionReceipt(syncingProvider, tx_hash);
       }
-
+      // Let's wait for transaction receipt here
+      transactionHashes.push(tx_hash);
     } catch (err) {
       logger.error(
         `Error processing transaction - ${tx.transaction_hash}, error - ${err}`,

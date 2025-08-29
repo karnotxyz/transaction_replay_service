@@ -9,7 +9,7 @@ import { generalDeployAccount } from "./deploy_account.js";
 import { l1_handler_message } from "./l1_handler.js";
 import { originalProvider, syncingProvider } from "../providers.js";
 
-export async function processTx(tx: TransactionWithHash,  block_no: number): Promise<string> {
+export async function processTx(tx: TransactionWithHash, block_no: number): Promise<string> {
   // TODO: maybe do this later
   // if (tx === "0x0" && !feesDisabled) {
   //   await setDisableFee(true);
@@ -19,35 +19,25 @@ export async function processTx(tx: TransactionWithHash,  block_no: number): Pro
   //   feesDisabled = false;
   // }
 
-  let transaction_type = tx.type;
+  const handlers: Record<string, () => Promise<string>> = {
+    INVOKE: () => generalInvoke(tx, syncingProvider),
+    DEPLOY_ACCOUNT: () => generalDeployAccount(tx, syncingProvider),
+    DECLARE: () => generalDeclare(tx, syncingProvider),
+    L1_HANDLER: () => l1_handler_message(tx, syncingProvider),
+  };
 
-  switch (transaction_type) {
-    case "INVOKE": {
-      let tx_hash = await generalInvoke(tx, syncingProvider);
-      return tx_hash;
-    }
-    case "DEPLOY_ACCOUNT": {
-      let tx_hash = await generalDeployAccount(tx, syncingProvider);
-      return tx_hash;
-    }
-    case "DECLARE": {
-      let tx_hash = await generalDeclare(tx, syncingProvider);
-      return tx_hash;
-    }
-    case "L1_HANDLER": {
-      let _ = await l1_handler_message(tx, syncingProvider);
-      return "L1_HANDLER";
-    }
-    // case "DEPLOY": {
-    //   let tx_hash = await declare(tx, originalProvider, syncingProvider);
-    //   return tx_hash;
-    // }
+  const handler = handlers[tx.type];
+  if (handler) {
+    return await handler();
   }
+
+  // case "DEPLOY": {
+  //   let tx_hash = await declare(tx, originalProvider, syncingProvider);
+  //   return tx_hash;
+  // }
 
   return tx.transaction_hash;
 }
-
-
 // async function declare(
 //   tx: Transaction,
 //   originalProvider: RpcProvider,
