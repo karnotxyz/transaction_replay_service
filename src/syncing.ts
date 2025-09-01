@@ -6,6 +6,7 @@ import {
 } from "./transactions/index.js";
 import {
   getLatestBlockNumber,
+  getLatestBlockNumberWithRetry,
   closeBlock,
   validateTransactionReceipt,
   matchBlockHash
@@ -19,21 +20,22 @@ interface SyncProcess {
   id: string;
   status: 'running' | 'completed' | 'cancelled' | 'failed';
   syncFrom: number;
-  syncTo: number;
+  syncTo: number | "LATEST";
   currentBlock: number;
   currentTxIndex: number;
-  totalBlocks: number;
+  totalBlocks: number | null; // null for continuous sync
   processedBlocks: number;
   startTime: Date;
   endTime?: Date;
   error?: string;
   cancelRequested: boolean;
-  completeCurrentBlock?: boolean; // New field for completion mode
+  completeCurrentBlock?: boolean;
+  isContinuousSync: boolean; // New field to track continuous sync
 }
 
 interface SyncRequest {
   syncFrom: number;
-  syncTo: number;
+  syncTo: number | "LATEST"; // Allow LATEST for continuous sync
   startTxIndex?: number; // Starting transaction index
   endTxIndex?: number;   // Ending transaction index (optional)
 }
@@ -48,13 +50,13 @@ export const syncEndpoint = async (req: Request, res: Response) => {
     const { syncFrom, syncTo, startTxIndex = 0, endTxIndex }: SyncRequest = req.body;
 
     // Validate request
-    if (!syncFrom || !syncTo) {
+    if (!syncFrom || (syncTo !== "LATEST" && !syncTo)) {
       return res.status(400).json({
-        error: "Missing required fields: syncFrom and syncTo"
+        error: "Missing required fields: syncFrom and syncTo (or use 'LATEST')"
       });
     }
 
-    if (syncFrom > syncTo) {
+    if (syncTo !== "LATEST" && syncFrom > syncTo) {
       return res.status(400).json({
         error: "syncFrom cannot be greater than syncTo"
       });
@@ -86,6 +88,7 @@ export const syncEndpoint = async (req: Request, res: Response) => {
 
     // Create new process
     const processId = uuidv4();
+    const isContinuousSync = syncTo === "LATEST";
     const newProcess: SyncProcess = {
       id: processId,
       status: 'running',
@@ -93,10 +96,11 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       syncTo,
       currentBlock: syncFrom,
       currentTxIndex: startTxIndex,
-      totalBlocks: syncTo - syncFrom + 1,
+      totalBlocks: isContinuousSync ? null : (syncTo as number) - syncFrom + 1,
       processedBlocks: 0,
       startTime: new Date(),
-      cancelRequested: false
+      cancelRequested: false,
+      isContinuousSync
     };
 
     currentProcess = newProcess;
@@ -110,16 +114,19 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       newProcess.endTime = new Date();
     });
 
-    // Immediate response
+      // Immediate response
     res.status(202).json({
-      message: "Sync process started successfully",
+      message: isContinuousSync ?
+        "Continuous sync process started successfully" :
+        "Sync process started successfully",
       processId: processId,
+      syncMode: isContinuousSync ? "continuous" : "fixed_range",
       status: {
         syncFrom,
         syncTo,
         startTxIndex,
         endTxIndex,
-        estimatedBlocks: newProcess.totalBlocks
+        estimatedBlocks: newProcess.totalBlocks || "continuous"
       }
     });
 
@@ -152,7 +159,10 @@ export const getSyncStatus = async (req: Request, res: Response) => {
           currentTxIndex: process.currentTxIndex,
           processedBlocks: process.processedBlocks,
           totalBlocks: process.totalBlocks,
-          percentage: Math.round((process.processedBlocks / process.totalBlocks) * 100)
+          percentage: process.totalBlocks ?
+            Math.round((process.processedBlocks / process.totalBlocks) * 100) :
+            null, // No percentage for continuous sync
+          syncMode: process.isContinuousSync ? "continuous" : "fixed_range"
         },
         timing: {
           startTime: process.startTime,
@@ -170,12 +180,15 @@ export const getSyncStatus = async (req: Request, res: Response) => {
       return res.json({
         processId: currentProcess.id,
         status: currentProcess.status,
+        syncMode: currentProcess.isContinuousSync ? "continuous" : "fixed_range",
         progress: {
           currentBlock: currentProcess.currentBlock,
           currentTxIndex: currentProcess.currentTxIndex,
           processedBlocks: currentProcess.processedBlocks,
           totalBlocks: currentProcess.totalBlocks,
-          percentage: Math.round((currentProcess.processedBlocks / currentProcess.totalBlocks) * 100)
+          percentage: currentProcess.totalBlocks ?
+            Math.round((currentProcess.processedBlocks / currentProcess.totalBlocks) * 100) :
+            null
         }
       });
     }
@@ -226,7 +239,7 @@ export const cancelSync = async (req: Request, res: Response) => {
         "Process will stop after completing current transaction",
       resumeInfo: {
         message: "To resume from this point, use these parameters in your next sync request:",
-        syncFrom: currentProcess.currentBlock + 1,
+        syncFrom: currentProcess.currentBlock,
         startTxIndex: completeCurrentBlock ? 0 : currentProcess.currentTxIndex
       }
     });
@@ -273,20 +286,24 @@ export const getProcessHistory = async (req: Request, res: Response) => {
 // Validate sync bounds and transaction indices
 async function validateSyncBounds(
   syncFrom: number,
-  syncTo: number,
+  syncTo: number | "LATEST",
   startTxIndex: number = 0,
   endTxIndex?: number
 ): Promise<void> {
-  // Validate block range
-  const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
+  // Get latest block with retry logic (up to 256 seconds)
+  const latestBlockNumber = await getLatestBlockNumberWithRetry();
 
-  if (syncFrom < 0 || syncTo < 0) {
+  if (syncFrom < 0) {
     throw new Error("Block numbers cannot be negative");
   }
 
-  // if (syncFrom > latestBlockNumber || syncTo > latestBlockNumber) {
-  //   throw new Error(`Block numbers cannot exceed latest block ${latestBlockNumber}`);
-  // }
+  if (syncFrom > latestBlockNumber) {
+    throw new Error(`syncFrom ${syncFrom} cannot exceed latest block ${latestBlockNumber}`);
+  }
+
+  if (syncTo !== "LATEST" && syncTo > latestBlockNumber) {
+    throw new Error(`syncTo ${syncTo} cannot exceed latest block ${latestBlockNumber}`);
+  }
 
   // Validate transaction indices for the starting block
   try {
@@ -306,12 +323,35 @@ async function validateSyncBounds(
   }
 }
 
-// Async sync function with cancellation support
+// Async sync function with cancellation support and continuous sync
 async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
-    logger.info(`Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo}`);
+    const syncMode = process.isContinuousSync ? "continuous" : "fixed range";
+    logger.info(`Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo} (${syncMode})`);
 
-    for (let currentBlock = process.syncFrom; currentBlock <= process.syncTo; currentBlock++) {
+    let currentBlock = process.syncFrom;
+
+    while (true) {
+      // For continuous sync, get the latest block number to determine when to stop
+      if (process.isContinuousSync) {
+        const latestBlockNumber = await getLatestBlockNumberWithRetry();
+
+        // If we've caught up to the latest block, wait for new blocks
+        if (currentBlock > latestBlockNumber) {
+          logger.info(`Continuous sync caught up to latest block ${latestBlockNumber}. Waiting for new blocks...`);
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+          continue;
+        }
+
+        // Update syncTo for status reporting
+        process.syncTo = latestBlockNumber;
+      } else {
+        // For fixed range sync, check if we've reached the end
+        if (currentBlock > (process.syncTo as number)) {
+          break;
+        }
+      }
+
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
         process.status = 'cancelled';
@@ -329,7 +369,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`Syncing block ${currentBlock} (Process: ${process.id})...`);
+      logger.info(`Syncing block ${currentBlock} (Process: ${process.id}, Mode: ${syncMode})...`);
 
       try {
         await validateBlock(currentBlock);
@@ -358,6 +398,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           return;
         }
 
+        // Move to next block
+        currentBlock++;
+
       } catch (error) {
         process.status = 'failed';
         // process.error = error;
@@ -368,6 +411,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
     }
 
+    // Only reach here for fixed range sync that completed normally
     process.status = 'completed';
     process.endTime = new Date();
     logger.info(`Sync process ${process.id} completed successfully`);

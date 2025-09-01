@@ -102,6 +102,33 @@ export async function getBlockHash(provider: RpcProvider, block_number: number):
   return null; // or throw new Error('Block hash not available for pending blocks');
 }
 
+// Get latest block number with extended retry logic (up to 256 seconds)
+export async function getLatestBlockNumberWithRetry(): Promise<number> {
+  const maxRetries = 8; // 2^8 = 256 seconds max
+  let retryCount = 0;
+
+  while (retryCount <= maxRetries) {
+    try {
+      return await getLatestBlockNumber(syncingProvider);
+    } catch (error) {
+      retryCount++;
+
+      if (retryCount > maxRetries) {
+        throw new Error(`Failed to get latest block number after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
+      const delay = Math.pow(2, retryCount) * 1000;
+      logger.warn(`Failed to get latest block number (attempt ${retryCount}), retrying in ${delay}ms:`, error);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  // This should never be reached, but satisfies TypeScript
+  throw new Error('Unexpected end of retry loop');
+}
+
+
 /**
  * Get receipt of a transaction.
  */
