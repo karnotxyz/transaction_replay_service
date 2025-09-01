@@ -297,14 +297,6 @@ async function validateSyncBounds(
     throw new Error("Block numbers cannot be negative");
   }
 
-  if (syncFrom > latestBlockNumber) {
-    throw new Error(`syncFrom ${syncFrom} cannot exceed latest block ${latestBlockNumber}`);
-  }
-
-  if (syncTo !== "LATEST" && syncTo > latestBlockNumber) {
-    throw new Error(`syncTo ${syncTo} cannot exceed latest block ${latestBlockNumber}`);
-  }
-
   // Validate transaction indices for the starting block
   try {
     const startBlock = await originalProvider.getBlockWithTxs(syncFrom);
@@ -432,6 +424,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
 // Enhanced sync block with transaction index support
 async function syncBlock(block_no: number, process: SyncProcess): Promise<boolean> {
+  const dsf = await syncingProvider.declareContract
+
   const blockWithTxs = await originalProvider.getBlockWithTxs(block_no);
 
   logger.info(
