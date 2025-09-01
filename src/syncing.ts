@@ -46,6 +46,7 @@ const processHistory: Map<string, SyncProcess> = new Map();
 
 // Enhanced sync endpoint
 export const syncEndpoint = async (req: Request, res: Response) => {
+  console.log("declareV2 #1");
   try {
     const { syncFrom, syncTo, startTxIndex = 0, endTxIndex }: SyncRequest = req.body;
 
@@ -475,11 +476,11 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
       process.currentTxIndex = i;
 
     } catch (err) {
-      logger.error(`Error processing transaction ${tx.transaction_hash}:`, err);
-      await sendAlert(
-        "[SYNCING_SERVICE] Error processing transaction",
-        `Error processing transaction ${tx.transaction_hash}, error: ${err}`
-      );
+      // logger.error(`Error processing transaction ${tx.transaction_hash}:`, err);
+      // await sendAlert(
+      //   "[SYNCING_SERVICE] Error processing transaction",
+      //   `Error processing transaction ${tx.transaction_hash}, error: ${err}`
+      // );
       throw err;
     }
   }

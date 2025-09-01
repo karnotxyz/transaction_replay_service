@@ -89,7 +89,6 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
       contract: contractClass as starknet.ContractClass,
       senderAddress: txn.sender_address,
       signature: txn.signature,
-      compiledClassHash: txn.class_hash,
   }
 
   let invocationDetails = {
@@ -105,8 +104,12 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
   return declareTransactionResult.transaction_hash;
 }
 
+
 async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
-  type DECLARE_TXN_V2 = {
+
+    console.log("declareV2 #1");
+
+		type DECLARE_TXN_V2 = {
       type: "DECLARE";
       sender_address: string;
       compiled_class_hash: starknet.FELT;
@@ -115,32 +118,52 @@ async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: star
       signature: starknet.Signature;
       nonce: starknet.FELT;
       class_hash: starknet.FELT;
-      // Note: class_hash is typically computed from contract_class, not a separate field in V2
   };
+
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "starknet_addDeclareTransaction",
-    params: [
-      {
-        type: "DECLARE",
-        sender_address: txn.sender_address,
-        compiled_class_hash: txn.compiled_class_hash,
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-        class_hash: txn.class_hash,
-      }
-    ],
-  });
+  console.log("declareV2 #2");
 
-  return result.data.result.transaction_hash;
+  let contractClass = await originalProvider.getClassByHash(txn.class_hash);
+
+  console.log("declareV2 #3");
+
+
+  // contractClass.entry_points_by_type.EXTERNAL.forEach(entry => {
+  //   let typedEntry = entry as starknet.ContractEntryPointFields;
+  //   if (typeof typedEntry.offset === 'number') {
+  //     typedEntry.offset = "0x" + typedEntry.offset.toString(16);
+  //   }
+  // });
+
+  let transaction =  {
+      contract: contractClass as starknet.SierraContractClass,
+      senderAddress: txn.sender_address,
+      signature: txn.signature,
+      compiledClassHash: txn.compiled_class_hash,
+  }
+
+  console.log("declareV2 #4");
+
+  let invocationDetails = {
+      nonce: txn.nonce,
+      maxFee: txn.max_fee,
+      version: txn.version
+  }
+
+  console.log("declareV2 #5");
+
+
+  let declareTransactionResult = await syncingv7Provider.declareContract(
+    transaction, invocationDetails
+  );
+
+
+  console.log("declareV2 #6");
+
+  return declareTransactionResult.transaction_hash;
 }
-
 
 async function declareV3(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
   type DECLARE_TXN_V3 = {
