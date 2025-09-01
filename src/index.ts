@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import express, { Request, Response } from "express";
 import bodyParser from "body-parser";
 
-import { syncBlocks } from "./sync_blocks.js";
+import { syncEndpoint, getSyncStatus, cancelSync, gracefulShutdown , getProcessHistory} from "./syncing.js";
 import logger from "./logger.js";
 // import { verifyEvents } from "./verify_events.js";
 
@@ -25,15 +25,30 @@ app.get("/health", (req: Request, res: Response) => {
   });
 });
 
-app.post("/sync", async (req: Request, res: Response) => {
-  try {
-    await syncBlocks(req.body.syncFrom, req.body.syncTo);
-    res.status(200).send("Syncing started");
-  } catch (e) {
-    console.error(e);
-    res.status(500).send(`Error syncing - ${e}`);
-  }
-});
+// app.post("/sync", async (req: Request, res: Response) => {
+//   try {
+//     await syncBlocks(req.body.syncFrom, req.body.syncTo);
+//     res.status(200).send("Syncing started");
+//   } catch (e) {
+//     console.error(e);
+//     res.status(500).send(`Error syncing - ${e}`);
+//   }
+// });
+
+// Start sync process - returns immediately with process ID
+app.post("/sync", syncEndpoint);
+
+// Get status of sync process
+app.get("/sync/status/:processId", getSyncStatus); // For specific process
+app.get("/sync/status", getSyncStatus); // For current process
+
+// Cancel sync process
+app.post("/sync/cancel/:processId", cancelSync); // Cancel specific process
+app.post("/sync/cancel", cancelSync); // Cancel current process
+app.delete("/sync/:processId", cancelSync); // Alternative endpoint for specific process
+
+// Get process history
+app.get("/sync/history", getProcessHistory);
 
 // app.post("/verifyEvents", async (_req: Request, res: Response) => {
 //   try {
