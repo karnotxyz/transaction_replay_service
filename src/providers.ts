@@ -16,6 +16,7 @@ const originalv7Provider = new RpcProvider({
 
 const syncingProvider = new RpcProvider({
   nodeUrl: `${baseSyncingUrl}`,
+  specVersion:  "0.8.1"
 
 });
 

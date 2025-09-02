@@ -137,9 +137,6 @@ export async function getTransactionReceipt(provider: RpcProvider, transaction_h
   return transactionReceipt;
 }
 
-
-
-
 interface MadaraCloseBlockRpcResponse {
   jsonrpc: string;
   id: number;

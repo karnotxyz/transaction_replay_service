@@ -106,9 +106,6 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
 
 
 async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
-
-    console.log("declareV2 #1");
-
 		type DECLARE_TXN_V2 = {
       type: "DECLARE";
       sender_address: string;
@@ -120,25 +117,30 @@ async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: star
       class_hash: starknet.FELT;
   };
 
-
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  console.log("declareV2 #2");
+  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
 
-  let contractClass = await originalProvider.getClassByHash(txn.class_hash);
+  let contract_class_parsed = starknet.provider.parseContract(
+    {
+      sierra_program: (contract_class as starknet.SierraContractClass).sierra_program,
+      contract_class_version: (contract_class as starknet.SierraContractClass).contract_class_version,
+      entry_points_by_type: (contract_class as starknet.SierraContractClass).entry_points_by_type,
+      //@ts-ignore
+      abi: (contract_class as starknet.SierraContractClass).abi,
+    }
+  );
 
-  console.log("declareV2 #3");
-
-
-  // contractClass.entry_points_by_type.EXTERNAL.forEach(entry => {
-  //   let typedEntry = entry as starknet.ContractEntryPointFields;
-  //   if (typeof typedEntry.offset === 'number') {
-  //     typedEntry.offset = "0x" + typedEntry.offset.toString(16);
-  //   }
-  // });
+  let x : starknet.SierraContractClass = {
+    sierra_program: (contract_class_parsed as starknet.SierraContractClass).sierra_program,
+    //@ts-ignore
+    abi: contract_class_parsed.abi,
+    contract_class_version: (contract_class_parsed as starknet.SierraContractClass).contract_class_version,
+    entry_points_by_type: (contract_class_parsed as starknet.SierraContractClass).entry_points_by_type,
+  }
 
   let transaction =  {
-      contract: contractClass as starknet.SierraContractClass,
+      contract: x,
       senderAddress: txn.sender_address,
       signature: txn.signature,
       compiledClassHash: txn.compiled_class_hash,
@@ -152,15 +154,9 @@ async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: star
       version: txn.version
   }
 
-  console.log("declareV2 #5");
-
-
   let declareTransactionResult = await syncingv7Provider.declareContract(
     transaction, invocationDetails
   );
-
-
-  console.log("declareV2 #6");
 
   return declareTransactionResult.transaction_hash;
 }
