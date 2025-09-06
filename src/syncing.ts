@@ -46,7 +46,7 @@ const processHistory: Map<string, SyncProcess> = new Map();
 
 // Enhanced sync endpoint
 export const syncEndpoint = async (req: Request, res: Response) => {
-  console.log("declareV2 #1");
+  // console.log("declareV2 #1");
   try {
     const { syncFrom, syncTo, startTxIndex = 0, endTxIndex }: SyncRequest = req.body;
 
@@ -397,7 +397,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       } catch (error) {
         process.status = 'failed';
         // process.error = error;
-        console.log("Error happened: ", error);
+        // console.log("Error happened: ", error);
         process.endTime = new Date();
         logger.error(`Failed to process block ${currentBlock} in process ${process.id}:`, error);
         throw error;
@@ -456,7 +456,7 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
     const tx: TransactionWithHash = blockWithTxs.transactions[i];
     process.currentTxIndex = i;
 
-    console.log(`Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${tx.transaction_hash} (Process: ${process.id})`);
+    logger.info(`Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${tx.transaction_hash}`);
 
     try {
       const tx_hash = await processTx(tx, block_no);
@@ -499,11 +499,11 @@ async function validateBlock(currentBlock: number): Promise<void> {
   while (retryCount <= maxRetries && !blockValidated) {
     try {
       const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
-      console.log(`Latest block number check (attempt ${retryCount + 1}): ${latestBlockNumber}, expecting: ${currentBlock - 1}`);
+      // console.log(`Latest block number check (attempt ${retryCount + 1}): ${latestBlockNumber}, expecting: ${currentBlock - 1}`);
 
       if (latestBlockNumber + 1 === currentBlock) {
         blockValidated = true;
-        console.log(`Block ${currentBlock} validation successful`);
+        // console.log(`Block ${currentBlock} validation successful`);
       } else {
         throw new Error(`Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`);
       }

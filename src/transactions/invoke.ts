@@ -3,7 +3,7 @@ import { postWithRetry, getNonce } from "../utils.js";
 
 // https://www.quicknode.com/docs/starknet/starknet_addInvokeTransaction
 export async function generalInvoke(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
-  console.log("Invoking transaction with version : ", tx.version);
+  // console.log("Invoking transaction with version : ", tx.version);
   let tx_version = tx.version;
 
   switch (tx_version) {
@@ -94,18 +94,18 @@ async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: stark
 
 async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
   type INVOKE_TXN_V3 = {
-      type: 'INVOKE';
-      sender_address: string;
-      calldata: starknet.FELT[];
-      version: '0x3';
-      signature: starknet.Signature;
-      nonce: starknet.FELT;
-      resource_bounds: starknet.ResourceBounds;
-      tip: string; // u64 is internally a string
-      paymaster_data: starknet.FELT[];
-      account_deployment_data: starknet.FELT[];
-      nonce_data_availability_mode: starknet.EDataAvailabilityMode;
-      fee_data_availability_mode: starknet.EDataAvailabilityMode;
+    type: 'INVOKE';
+    sender_address: string;
+    calldata: starknet.FELT[];
+    version: '0x3';
+    signature: starknet.Signature;
+    nonce: starknet.FELT;
+    resource_bounds: starknet.ResourceBounds;
+    tip: string; // u64 is internally a string
+    paymaster_data: starknet.FELT[];
+    account_deployment_data: starknet.FELT[];
+    nonce_data_availability_mode: starknet.EDataAvailabilityMode;
+    fee_data_availability_mode: starknet.EDataAvailabilityMode;
   };
 
   let txn = tx as unknown as INVOKE_TXN_V3;

@@ -220,9 +220,10 @@ export async function validateTransactionReceipt(
 
       const transactionReceipt = await getTransactionReceipt(provider, tx_hash);
 
+      // console.log('Getting receipt for transaction', transactionReceipt.statusReceipt);
       // Validate if the transaction was a success or not !
-      if (!transactionReceipt.isSuccess()) {
-        throw new Error(`Transaction failed ${tx_hash}`);
+      if (!transactionReceipt.isSuccess() && !transactionReceipt.isReverted()) {
+          throw new Error(`Transaction in unexpected state ${tx_hash}`);
       }
 
       // Validate that the transaction was successful and in the correct block
@@ -232,14 +233,14 @@ export async function validateTransactionReceipt(
       //   );
       // }
 
-      console.log(`Successfully validated receipt for transaction - ${tx_hash}`);
+      // console.log(`Successfully validated receipt for transaction - ${tx_hash}`);
 
       // Success - exit the retry loop
       return;
 
     } catch (error) {
       retryCount++;
-      console.warn(`Receipt validation attempt ${retryCount} failed for transaction ${tx_hash}:`);
+      // console.warn(`Receipt validation attempt ${retryCount} failed for transaction ${tx_hash}:`);
 
       if (retryCount > maxRetries) {
         const errorMsg = `Failed to validate receipt for transaction ${tx_hash} after ${maxRetries} attempts. Latest error: ${error}`;
@@ -252,7 +253,7 @@ export async function validateTransactionReceipt(
         ? Math.pow(2, retryCount) * 1000  // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
         : fixedDelay;                     // Fixed delay
 
-      console.log(`Retrying receipt validation for transaction ${tx_hash} in ${delay}ms...`);
+      // console.log(`Retrying receipt validation for transaction ${tx_hash} in ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -273,15 +274,15 @@ export async function matchBlockHash(block_number: number): Promise<void> {
         throw new Error(errorMsg);
       }
 
-      console.log(`Paradex block hash: ${paradexBlock}`);
-      console.log(`Madara block hash: ${madaraBlock}`);
+      logger.info(`Paradex block hash: ${paradexBlock}`);
+      logger.info(`Madara block hash : ${madaraBlock}`);
 
       // check if block hashes match
-      // if (paradexBlock !== madaraBlock) {
-      //   const errorMsg = `Block hashes do not match for block number ${block_number}`;
-      //   logger.error(errorMsg);
-      //   throw new Error(errorMsg);
-      // }
+      if (paradexBlock !== madaraBlock) {
+        const errorMsg = `Block hashes do not match for block number ${block_number}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
 
       // Success - exit the retry loop
       return;

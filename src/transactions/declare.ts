@@ -106,7 +106,7 @@ async function declareV1(tx: starknet.TransactionWithHash, syncingProvider: star
 
 
 async function declareV2(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
-		type DECLARE_TXN_V2 = {
+	type DECLARE_TXN_V2 = {
       type: "DECLARE";
       sender_address: string;
       compiled_class_hash: starknet.FELT;
