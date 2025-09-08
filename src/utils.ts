@@ -168,9 +168,9 @@ export async function closeBlock(): Promise<void> {
       throw new Error(`RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`);
     }
 
-    console.log('Block closed successfully');
+    logger.info('Block closed successfully');
   } catch (error) {
-    console.error('Error closing block:', error);
+    logger.info('Error closing block:', error);
     throw error;
   }
 }
@@ -216,7 +216,7 @@ export async function validateTransactionReceipt(
 
   while (retryCount <= maxRetries) {
     try {
-      console.log(`Getting receipt for transaction - ${tx_hash} (attempt ${retryCount + 1}/${maxRetries + 1})`);
+      logger.debug(`Getting receipt for transaction - ${tx_hash} (attempt ${retryCount + 1}/${maxRetries + 1})`);
 
       const transactionReceipt = await getTransactionReceipt(provider, tx_hash);
 
