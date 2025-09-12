@@ -467,7 +467,9 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
           useExponentialBackoff: true
         });
       } else {
-        await validateTransactionReceipt(syncingProvider, tx_hash);
+        await validateTransactionReceipt(syncingProvider, tx_hash, {
+          maxRetries: 150, // 150 * 100ms = 15 seconds
+        });
       }
 
       transactionHashes.push(tx_hash);
