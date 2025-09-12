@@ -91,15 +91,36 @@ export async function getLatestBlockNumber(provider: RpcProvider): Promise<numbe
 }
 
 export async function getBlockHash(provider: RpcProvider, block_number: number): Promise<string | null> {
-  const latestBlock = await provider.getBlockWithTxHashes(block_number);
+  const maxRetries = 8; // 2^8 = 256 seconds max
+  let retryCount = 0;
 
-  // Check if it's a pending block
-  if ('block_hash' in latestBlock && latestBlock.block_hash) {
-    return latestBlock.block_hash;
+  while (retryCount <= maxRetries) {
+    try {
+      const latestBlock = await provider.getBlockWithTxHashes(block_number);
+
+      // Check if it's a pending block
+      if ('block_hash' in latestBlock && latestBlock.block_hash) {
+        return latestBlock.block_hash;
+      }
+
+      // Return null for pending blocks
+      return null;
+    } catch (error) {
+      retryCount++;
+
+      if (retryCount > maxRetries) {
+        throw new Error(`Failed to get block hash for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
+      const delay = Math.pow(2, retryCount) * 1000;
+      logger.warn(`Failed to get block hash for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`, error);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 
-  // Return null for pending blocks or throw an error
-  return null; // or throw new Error('Block hash not available for pending blocks');
+  // This should never be reached, but satisfies TypeScript
+  throw new Error('Unexpected end of retry loop');
 }
 
 // Get latest block number with extended retry logic (up to 256 seconds)
@@ -265,8 +286,19 @@ export async function matchBlockHash(block_number: number): Promise<void> {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+
+      // Calculate delay: 2^attempt * baseDelay (2s, 4s, 8s, 16s)
+      const delay = Math.pow(2, attempt - 1) * baseDelay;
+      logger.info(`Retrying in ${delay}ms... (attempt ${attempt}/${maxAttempts})`);
+
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+
       const paradexBlock = await getBlockHash(originalProvider, block_number);
+      logger.info(`Paradex block hash: ${paradexBlock}`);
+
       const madaraBlock = await getBlockHash(syncingProvider, block_number);
+      logger.info(`Madara block hash : ${madaraBlock}`);
 
       if (!paradexBlock || !madaraBlock) {
         const errorMsg = `Failed to fetch block hash for block number ${block_number}`;
@@ -274,8 +306,6 @@ export async function matchBlockHash(block_number: number): Promise<void> {
         throw new Error(errorMsg);
       }
 
-      logger.info(`Paradex block hash: ${paradexBlock}`);
-      logger.info(`Madara block hash : ${madaraBlock}`);
 
       // check if block hashes match
       if (paradexBlock !== madaraBlock) {
@@ -295,13 +325,6 @@ export async function matchBlockHash(block_number: number): Promise<void> {
         logger.error(`All ${maxAttempts} attempts failed for block ${block_number}`);
         throw error;
       }
-
-      // Calculate delay: 2^attempt * baseDelay (2s, 4s, 8s, 16s)
-      const delay = Math.pow(2, attempt - 1) * baseDelay;
-      logger.info(`Retrying in ${delay}ms... (attempt ${attempt + 1}/${maxAttempts})`);
-
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 }
