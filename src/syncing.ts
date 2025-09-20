@@ -9,7 +9,8 @@ import {
   getLatestBlockNumberWithRetry,
   closeBlock,
   validateTransactionReceipt,
-  matchBlockHash
+  matchBlockHash,
+  setCustomHeader
 } from "./utils.js";
 import { sendAlert } from "./sns.js";
 import { originalProvider, syncingProvider } from "./providers.js";
@@ -366,6 +367,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
       try {
         await validateBlock(currentBlock);
+        await setCustomHeader(currentBlock);
         const blockCompleted = await syncBlock(currentBlock, process);
 
         // If block was cancelled mid-way, don't close it
@@ -468,7 +470,7 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
         });
       } else {
         await validateTransactionReceipt(syncingProvider, tx_hash, {
-          maxRetries: 150, // 150 * 100ms = 15 seconds
+          maxRetries: 2000, // 150 * 100ms = 15 seconds
         });
       }
 

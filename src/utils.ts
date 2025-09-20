@@ -90,6 +90,41 @@ export async function getLatestBlockNumber(provider: RpcProvider): Promise<numbe
   return latestBlock.block_number;
 }
 
+
+export async function getBlockTimestamp(provider: RpcProvider, block_number: number): Promise<number | null> {
+  const maxRetries = 8; // 2^8 = 256 seconds max
+  let retryCount = 0;
+
+  while (retryCount <= maxRetries) {
+    try {
+      const latestBlock = await provider.getBlockWithTxHashes(block_number);
+
+      // Check if it's a pending block
+      if ('timestamp' in latestBlock && latestBlock.timestamp) {
+        return latestBlock.timestamp;
+      }
+
+      // Return null for pending blocks
+      return null;
+    } catch (error) {
+      retryCount++;
+
+      if (retryCount > maxRetries) {
+        throw new Error(`Failed to get block timestamp for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
+      const delay = Math.pow(2, retryCount) * 1000;
+      logger.warn(`Failed to get block timestamp for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`, error);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  // This should never be reached, but satisfies TypeScript
+  throw new Error('Unexpected end of retry loop');
+}
+
+
 export async function getBlockHash(provider: RpcProvider, block_number: number): Promise<string | null> {
   const maxRetries = 8; // 2^8 = 256 seconds max
   let retryCount = 0;
@@ -158,7 +193,7 @@ export async function getTransactionReceipt(provider: RpcProvider, transaction_h
   return transactionReceipt;
 }
 
-interface MadaraCloseBlockRpcResponse {
+interface MadaraRpcResponse {
   jsonrpc: string;
   id: number;
   result?: any;
@@ -170,12 +205,58 @@ interface MadaraCloseBlockRpcResponse {
 
 export async function closeBlock(): Promise<void> {
   try {
-    const response = await axios.post<MadaraCloseBlockRpcResponse>(
+    const response = await axios.post<MadaraRpcResponse>(
       process.env.ADMIN_RPC_URL_SYNCING_NODE!,
       {
         jsonrpc: '2.0',
         method: 'madara_V0_1_0_closeBlock',
         id: 1
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    // Check for RPC errors
+    if (response.data.error) {
+      throw new Error(`RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`);
+    }
+
+    logger.info('Block closed successfully');
+  } catch (error) {
+    logger.info('Error closing block:', error);
+    throw error;
+  }
+}
+
+export async function setCustomHeader(currentBlock: number): Promise<void> {
+  try {
+
+    const timestamp = await getBlockTimestamp(originalProvider, currentBlock);
+
+    const response = await axios.post<MadaraRpcResponse>(
+      process.env.ADMIN_RPC_URL_SYNCING_NODE!,
+      {
+        jsonrpc: '2.0',
+        method: 'madara_V0_1_0_setCustomBlockHeader',
+        id: 1,
+        params: [
+          {
+            block_n: currentBlock,
+            timestamp: timestamp,
+            gas_prices: {
+              eth_l1_gas_price: 1000000000,
+              strk_l1_gas_price: 1000000000,
+              eth_l1_data_gas_price: 100000,
+              strk_l1_data_gas_price: 100000,
+              // The below two fields will change to 1 for 0.13.2 and 25000 for 0.13.5
+              eth_l2_gas_price: 25000,
+              strk_l2_gas_price: 25000
+            }
+          }
+        ]
       },
       {
         headers: {
