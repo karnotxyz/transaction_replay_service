@@ -1,4 +1,11 @@
-import { BlockWithTxHashes, Contract, GetTransactionReceiptResponse, Provider, RpcProvider, TransactionReceipt } from "starknet";
+import {
+  BlockWithTxHashes,
+  Contract,
+  GetTransactionReceiptResponse,
+  Provider,
+  RpcProvider,
+  TransactionReceipt,
+} from "starknet";
 import ERC20 from "./contracts/ERC20.json" with { type: "json" };
 import logger from "./logger.js";
 import axios, { AxiosResponse } from "axios";
@@ -32,7 +39,7 @@ export async function getBalance(
 export async function getNonce(
   address: string,
   provider: RpcProvider,
-  nonce: string
+  nonce: string,
 ): Promise<string> {
   if (address !== "0x1") {
     return nonce;
@@ -81,17 +88,20 @@ export async function getNonce(
 //   await db.syncing_db.create({ attribute, value });
 // }
 
-
 /**
  * Get latest block number from provider.
  */
-export async function getLatestBlockNumber(provider: RpcProvider): Promise<number> {
+export async function getLatestBlockNumber(
+  provider: RpcProvider,
+): Promise<number> {
   const latestBlock: any = await provider.getBlockLatestAccepted();
   return latestBlock.block_number;
 }
 
-
-export async function getBlockTimestamp(provider: RpcProvider, block_number: number): Promise<number | null> {
+export async function getBlockTimestamp(
+  provider: RpcProvider,
+  block_number: number,
+): Promise<number | null> {
   const maxRetries = 8; // 2^8 = 256 seconds max
   let retryCount = 0;
 
@@ -100,7 +110,7 @@ export async function getBlockTimestamp(provider: RpcProvider, block_number: num
       const latestBlock = await provider.getBlockWithTxHashes(block_number);
 
       // Check if it's a pending block
-      if ('timestamp' in latestBlock && latestBlock.timestamp) {
+      if ("timestamp" in latestBlock && latestBlock.timestamp) {
         return latestBlock.timestamp;
       }
 
@@ -110,22 +120,90 @@ export async function getBlockTimestamp(provider: RpcProvider, block_number: num
       retryCount++;
 
       if (retryCount > maxRetries) {
-        throw new Error(`Failed to get block timestamp for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+        throw new Error(
+          `Failed to get block timestamp for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`,
+        );
       }
 
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
       const delay = Math.pow(2, retryCount) * 1000;
-      logger.warn(`Failed to get block timestamp for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`, error);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      logger.warn(
+        `Failed to get block timestamp for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
   // This should never be reached, but satisfies TypeScript
-  throw new Error('Unexpected end of retry loop');
+  throw new Error("Unexpected end of retry loop");
 }
 
+export interface GasPrices {
+  l1_data_gas_price: {
+    price_in_fri: string;
+    price_in_wei: string;
+  };
+  l1_gas_price: {
+    price_in_fri: string;
+    price_in_wei: string;
+  };
+  l2_gas_price: {
+    price_in_fri: string;
+    price_in_wei: string;
+  };
+}
 
-export async function getBlockHash(provider: RpcProvider, block_number: number): Promise<string | null> {
+export async function getGasPrices(
+  provider: RpcProvider,
+  block_number: number,
+): Promise<GasPrices> {
+  const maxRetries = 8; // 2^8 = 256 seconds max
+  let retryCount = 0;
+
+  while (retryCount <= maxRetries) {
+    try {
+      const block = await provider.getBlockWithTxHashes(block_number);
+
+      // Check if it's a pending block
+      if (!("block_hash" in block && block.block_hash)) {
+        throw new Error(`Block ${block_number} is pending`);
+      }
+
+      // Extract gas prices
+      return {
+        l1_data_gas_price: block.l1_data_gas_price,
+        l1_gas_price: block.l1_gas_price,
+        // @ts-ignore
+        l2_gas_price: block.l2_gas_price,
+      };
+    } catch (error) {
+      retryCount++;
+
+      if (retryCount > maxRetries) {
+        throw new Error(
+          `Failed to get gas prices for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`,
+        );
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
+      const delay = Math.pow(2, retryCount) * 1000;
+      logger.warn(
+        `Failed to get gas prices for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  // This should never be reached, but satisfies TypeScript
+  throw new Error("Unexpected end of retry loop");
+}
+
+export async function getBlockHash(
+  provider: RpcProvider,
+  block_number: number,
+): Promise<string | null> {
   const maxRetries = 8; // 2^8 = 256 seconds max
   let retryCount = 0;
 
@@ -134,7 +212,7 @@ export async function getBlockHash(provider: RpcProvider, block_number: number):
       const latestBlock = await provider.getBlockWithTxHashes(block_number);
 
       // Check if it's a pending block
-      if ('block_hash' in latestBlock && latestBlock.block_hash) {
+      if ("block_hash" in latestBlock && latestBlock.block_hash) {
         return latestBlock.block_hash;
       }
 
@@ -144,18 +222,23 @@ export async function getBlockHash(provider: RpcProvider, block_number: number):
       retryCount++;
 
       if (retryCount > maxRetries) {
-        throw new Error(`Failed to get block hash for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+        throw new Error(
+          `Failed to get block hash for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`,
+        );
       }
 
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
       const delay = Math.pow(2, retryCount) * 1000;
-      logger.warn(`Failed to get block hash for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`, error);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      logger.warn(
+        `Failed to get block hash for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
   // This should never be reached, but satisfies TypeScript
-  throw new Error('Unexpected end of retry loop');
+  throw new Error("Unexpected end of retry loop");
 }
 
 // Get latest block number with extended retry logic (up to 256 seconds)
@@ -170,26 +253,34 @@ export async function getLatestBlockNumberWithRetry(): Promise<number> {
       retryCount++;
 
       if (retryCount > maxRetries) {
-        throw new Error(`Failed to get latest block number after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`);
+        throw new Error(
+          `Failed to get latest block number after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`,
+        );
       }
 
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
       const delay = Math.pow(2, retryCount) * 1000;
-      logger.warn(`Failed to get latest block number (attempt ${retryCount}), retrying in ${delay}ms:`, error);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      logger.warn(
+        `Failed to get latest block number (attempt ${retryCount}), retrying in ${delay}ms:`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
   // This should never be reached, but satisfies TypeScript
-  throw new Error('Unexpected end of retry loop');
+  throw new Error("Unexpected end of retry loop");
 }
-
 
 /**
  * Get receipt of a transaction.
  */
-export async function getTransactionReceipt(provider: RpcProvider, transaction_hash: string): Promise<GetTransactionReceiptResponse> {
-  const transactionReceipt = await provider.getTransactionReceipt(transaction_hash);
+export async function getTransactionReceipt(
+  provider: RpcProvider,
+  transaction_hash: string,
+): Promise<GetTransactionReceiptResponse> {
+  const transactionReceipt =
+    await provider.getTransactionReceipt(transaction_hash);
   return transactionReceipt;
 }
 
@@ -208,75 +299,103 @@ export async function closeBlock(): Promise<void> {
     const response = await axios.post<MadaraRpcResponse>(
       process.env.ADMIN_RPC_URL_SYNCING_NODE!,
       {
-        jsonrpc: '2.0',
-        method: 'madara_V0_1_0_closeBlock',
-        id: 1
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_closeBlock",
+        id: 1,
       },
       {
         headers: {
-          'Content-Type': 'application/json'
-        }
-      }
+          "Content-Type": "application/json",
+        },
+      },
     );
 
     // Check for RPC errors
     if (response.data.error) {
-      throw new Error(`RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`);
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
     }
 
-    logger.info('Block closed successfully');
+    logger.info("Block closed successfully");
   } catch (error) {
-    logger.info('Error closing block:', error);
+    logger.info("Error closing block:", error);
     throw error;
   }
 }
 
 export async function setCustomHeader(currentBlock: number): Promise<void> {
   try {
-
     const timestamp = await getBlockTimestamp(originalProvider, currentBlock);
+    const expectedBlockHash = await getBlockHash(
+      originalProvider,
+      currentBlock,
+    );
+
+    const gas_prices = await getGasPrices(originalProvider, currentBlock);
+    console.log(gas_prices);
 
     const response = await axios.post<MadaraRpcResponse>(
       process.env.ADMIN_RPC_URL_SYNCING_NODE!,
       {
-        jsonrpc: '2.0',
-        method: 'madara_V0_1_0_setCustomBlockHeader',
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_setCustomBlockHeader",
         id: 1,
         params: [
           {
             block_n: currentBlock,
             timestamp: timestamp,
             gas_prices: {
-              eth_l1_gas_price: 1000000000,
-              strk_l1_gas_price: 1000000000,
-              eth_l1_data_gas_price: 100000,
-              strk_l1_data_gas_price: 100000,
+              eth_l1_gas_price: parseInt(
+                gas_prices.l1_gas_price.price_in_wei,
+                16,
+              ),
+              strk_l1_gas_price: parseInt(
+                gas_prices.l1_gas_price.price_in_fri,
+                16,
+              ),
+              eth_l1_data_gas_price: parseInt(
+                gas_prices.l1_data_gas_price.price_in_wei,
+                16,
+              ),
+              strk_l1_data_gas_price: parseInt(
+                gas_prices.l1_data_gas_price.price_in_fri,
+                16,
+              ),
               // The below two fields will change to 1 for 0.13.2 and 25000 for 0.13.5
-              eth_l2_gas_price: 25000,
-              strk_l2_gas_price: 25000
-            }
-          }
-        ]
+              eth_l2_gas_price: parseInt(
+                gas_prices.l2_gas_price.price_in_wei,
+                16,
+              ),
+              strk_l2_gas_price: parseInt(
+                gas_prices.l2_gas_price.price_in_fri,
+                16,
+              ),
+            },
+            expected_block_hash: expectedBlockHash,
+          },
+        ],
       },
       {
         headers: {
-          'Content-Type': 'application/json'
-        }
-      }
+          "Content-Type": "application/json",
+        },
+      },
     );
 
     // Check for RPC errors
     if (response.data.error) {
-      throw new Error(`RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`);
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
     }
 
-    logger.info('Block closed successfully');
+    logger.info("Block closed successfully");
   } catch (error) {
-    logger.info('Error closing block:', error);
+    logger.info("Error closing block:", error);
     throw error;
   }
 }
-
 
 export async function postWithRetry(
   url: string,
@@ -297,7 +416,6 @@ export async function postWithRetry(
   throw new Error("Max retries exceeded for transaction");
 }
 
-
 // Process receipt validation for a single transaction with configurable retry logic
 export async function validateTransactionReceipt(
   provider: RpcProvider,
@@ -306,26 +424,28 @@ export async function validateTransactionReceipt(
     maxRetries?: number;
     useExponentialBackoff?: boolean;
     fixedDelay?: number;
-  } = {}
+  } = {},
 ): Promise<void> {
   const {
     maxRetries = 20,
     useExponentialBackoff = false,
-    fixedDelay = 100
+    fixedDelay = 100,
   } = options;
 
   let retryCount = 0;
 
   while (retryCount <= maxRetries) {
     try {
-      logger.debug(`Getting receipt for transaction - ${tx_hash} (attempt ${retryCount + 1}/${maxRetries + 1})`);
+      logger.debug(
+        `Getting receipt for transaction - ${tx_hash} (attempt ${retryCount + 1}/${maxRetries + 1})`,
+      );
 
       const transactionReceipt = await getTransactionReceipt(provider, tx_hash);
 
       // console.log('Getting receipt for transaction', transactionReceipt.statusReceipt);
       // Validate if the transaction was a success or not !
       if (!transactionReceipt.isSuccess() && !transactionReceipt.isReverted()) {
-          throw new Error(`Transaction in unexpected state ${tx_hash}`);
+        throw new Error(`Transaction in unexpected state ${tx_hash}`);
       }
 
       // Validate that the transaction was successful and in the correct block
@@ -339,7 +459,6 @@ export async function validateTransactionReceipt(
 
       // Success - exit the retry loop
       return;
-
     } catch (error) {
       retryCount++;
       // console.warn(`Receipt validation attempt ${retryCount} failed for transaction ${tx_hash}:`);
@@ -352,11 +471,11 @@ export async function validateTransactionReceipt(
 
       // Calculate delay based on strategy
       const delay = useExponentialBackoff
-        ? Math.pow(2, retryCount) * 1000  // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
-        : fixedDelay;                     // Fixed delay
+        ? Math.pow(2, retryCount) * 1000 // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
+        : fixedDelay; // Fixed delay
 
       // console.log(`Retrying receipt validation for transaction ${tx_hash} in ${delay}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
@@ -367,13 +486,14 @@ export async function matchBlockHash(block_number: number): Promise<void> {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-
       // Calculate delay: 2^attempt * baseDelay (2s, 4s, 8s, 16s)
       const delay = Math.pow(2, attempt - 1) * baseDelay;
-      logger.info(`Retrying in ${delay}ms... (attempt ${attempt}/${maxAttempts})`);
+      logger.info(
+        `Retrying in ${delay}ms... (attempt ${attempt}/${maxAttempts})`,
+      );
 
       // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
 
       const paradexBlock = await getBlockHash(originalProvider, block_number);
       logger.info(`Paradex block hash: ${paradexBlock}`);
@@ -387,7 +507,6 @@ export async function matchBlockHash(block_number: number): Promise<void> {
         throw new Error(errorMsg);
       }
 
-
       // check if block hashes match
       if (paradexBlock !== madaraBlock) {
         const errorMsg = `Block hashes do not match for block number ${block_number}`;
@@ -397,13 +516,16 @@ export async function matchBlockHash(block_number: number): Promise<void> {
 
       // Success - exit the retry loop
       return;
-
     } catch (error) {
-      logger.warn(`Attempt ${attempt}/${maxAttempts} failed for block ${block_number}:`);
+      logger.warn(
+        `Attempt ${attempt}/${maxAttempts} failed for block ${block_number}:`,
+      );
 
       // If this was the last attempt, throw the error
       if (attempt === maxAttempts) {
-        logger.error(`All ${maxAttempts} attempts failed for block ${block_number}`);
+        logger.error(
+          `All ${maxAttempts} attempts failed for block ${block_number}`,
+        );
         throw error;
       }
     }
