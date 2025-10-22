@@ -1,25 +1,24 @@
-import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { Request, Response } from "express";
+import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
-import {
-  processTx
-} from "./transactions/index.js";
+import { processTx } from "./transactions/index.js";
 import {
   getLatestBlockNumber,
   getLatestBlockNumberWithRetry,
   closeBlock,
   validateTransactionReceipt,
   matchBlockHash,
-  setCustomHeader
+  setCustomHeader,
 } from "./utils.js";
 import { sendAlert } from "./sns.js";
 import { originalProvider, syncingProvider } from "./providers.js";
 import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
+import { persistence } from "./persistence.js";
 
 // Process state management
 interface SyncProcess {
   id: string;
-  status: 'running' | 'completed' | 'cancelled' | 'failed';
+  status: "running" | "completed" | "cancelled" | "failed";
   syncFrom: number;
   syncTo: number | "LATEST";
   currentBlock: number;
@@ -38,7 +37,7 @@ interface SyncRequest {
   syncFrom: number;
   syncTo: number | "LATEST"; // Allow LATEST for continuous sync
   startTxIndex?: number; // Starting transaction index
-  endTxIndex?: number;   // Ending transaction index (optional)
+  endTxIndex?: number; // Ending transaction index (optional)
 }
 
 // Global process state - in-memory only
@@ -49,23 +48,28 @@ const processHistory: Map<string, SyncProcess> = new Map();
 export const syncEndpoint = async (req: Request, res: Response) => {
   // console.log("declareV2 #1");
   try {
-    const { syncFrom, syncTo, startTxIndex = 0, endTxIndex }: SyncRequest = req.body;
+    const {
+      syncFrom,
+      syncTo,
+      startTxIndex = 0,
+      endTxIndex,
+    }: SyncRequest = req.body;
 
     // Validate request
     if (!syncFrom || (syncTo !== "LATEST" && !syncTo)) {
       return res.status(400).json({
-        error: "Missing required fields: syncFrom and syncTo (or use 'LATEST')"
+        error: "Missing required fields: syncFrom and syncTo (or use 'LATEST')",
       });
     }
 
     if (syncTo !== "LATEST" && syncFrom > syncTo) {
       return res.status(400).json({
-        error: "syncFrom cannot be greater than syncTo"
+        error: "syncFrom cannot be greater than syncTo",
       });
     }
 
     // Check if sync is already in progress
-    if (currentProcess && currentProcess.status === 'running') {
+    if (currentProcess && currentProcess.status === "running") {
       return res.status(409).json({
         error: "Sync already in progress",
         currentProcessId: currentProcess.id,
@@ -74,8 +78,8 @@ export const syncEndpoint = async (req: Request, res: Response) => {
           status: currentProcess.status,
           currentBlock: currentProcess.currentBlock,
           currentTxIndex: currentProcess.currentTxIndex,
-          progress: `${currentProcess.processedBlocks}/${currentProcess.totalBlocks} blocks`
-        }
+          progress: `${currentProcess.processedBlocks}/${currentProcess.totalBlocks} blocks`,
+        },
       });
     }
 
@@ -84,7 +88,7 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       await validateSyncBounds(syncFrom, syncTo, startTxIndex, endTxIndex);
     } catch (error) {
       return res.status(400).json({
-        error: `Invalid sync bounds: ${error}`
+        error: `Invalid sync bounds: ${error}`,
       });
     }
 
@@ -93,7 +97,7 @@ export const syncEndpoint = async (req: Request, res: Response) => {
     const isContinuousSync = syncTo === "LATEST";
     const newProcess: SyncProcess = {
       id: processId,
-      status: 'running',
+      status: "running",
       syncFrom,
       syncTo,
       currentBlock: syncFrom,
@@ -102,25 +106,33 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       processedBlocks: 0,
       startTime: new Date(),
       cancelRequested: false,
-      isContinuousSync
+      isContinuousSync,
     };
 
     currentProcess = newProcess;
     processHistory.set(processId, newProcess);
 
+    // ✨ REDIS PERSISTENCE: Save initial state
+    await persistence.saveSyncProcess(
+      processId,
+      syncFrom,
+      typeof syncTo === "number" ? syncTo : 999999999, // Use large number for LATEST
+      startTxIndex,
+    );
+
     // Start sync process asynchronously
-    syncBlocksAsync(newProcess).catch(error => {
+    syncBlocksAsync(newProcess).catch((error) => {
       logger.error(`Sync process ${processId} failed:`, error);
-      newProcess.status = 'failed';
+      newProcess.status = "failed";
       newProcess.error = error;
       newProcess.endTime = new Date();
     });
 
-      // Immediate response
+    // Immediate response
     res.status(202).json({
-      message: isContinuousSync ?
-        "Continuous sync process started successfully" :
-        "Sync process started successfully",
+      message: isContinuousSync
+        ? "Continuous sync process started successfully"
+        : "Sync process started successfully",
       processId: processId,
       syncMode: isContinuousSync ? "continuous" : "fixed_range",
       status: {
@@ -128,14 +140,13 @@ export const syncEndpoint = async (req: Request, res: Response) => {
         syncTo,
         startTxIndex,
         endTxIndex,
-        estimatedBlocks: newProcess.totalBlocks || "continuous"
-      }
+        estimatedBlocks: newProcess.totalBlocks || "continuous",
+      },
     });
-
   } catch (error) {
     logger.error("Error starting sync process:", error);
     res.status(500).json({
-      error: `Failed to start sync: ${error}`
+      error: `Failed to start sync: ${error}`,
     });
   }
 };
@@ -143,13 +154,31 @@ export const syncEndpoint = async (req: Request, res: Response) => {
 // Get sync status endpoint
 export const getSyncStatus = async (req: Request, res: Response) => {
   try {
-    const processId = req.params.processId || req.query.processId as string;
+    const processId = req.params.processId || (req.query.processId as string);
 
     if (processId) {
+      // ✨ REDIS PERSISTENCE: Try to get from Redis first
+      const redisState = await persistence.getSyncProcess(processId);
+
+      if (redisState) {
+        return res.json({
+          processId,
+          status: redisState.status,
+          progress: {
+            currentBlock: redisState.currentBlock,
+            currentTxIndex: redisState.currentTxIndex,
+            syncFrom: redisState.syncFrom,
+            syncTo: redisState.syncTo,
+          },
+          source: "redis", // Indicate this came from Redis
+        });
+      }
+
+      // Fallback to in-memory
       const process = processHistory.get(processId);
       if (!process) {
         return res.status(404).json({
-          error: "Process not found"
+          error: "Process not found",
         });
       }
 
@@ -161,19 +190,20 @@ export const getSyncStatus = async (req: Request, res: Response) => {
           currentTxIndex: process.currentTxIndex,
           processedBlocks: process.processedBlocks,
           totalBlocks: process.totalBlocks,
-          percentage: process.totalBlocks ?
-            Math.round((process.processedBlocks / process.totalBlocks) * 100) :
-            null, // No percentage for continuous sync
-          syncMode: process.isContinuousSync ? "continuous" : "fixed_range"
+          percentage: process.totalBlocks
+            ? Math.round((process.processedBlocks / process.totalBlocks) * 100)
+            : null, // No percentage for continuous sync
+          syncMode: process.isContinuousSync ? "continuous" : "fixed_range",
         },
         timing: {
           startTime: process.startTime,
           endTime: process.endTime,
-          duration: process.endTime ?
-            process.endTime.getTime() - process.startTime.getTime() :
-            Date.now() - process.startTime.getTime()
+          duration: process.endTime
+            ? process.endTime.getTime() - process.startTime.getTime()
+            : Date.now() - process.startTime.getTime(),
         },
-        error: process.error
+        error: process.error,
+        source: "memory",
       });
     }
 
@@ -182,26 +212,30 @@ export const getSyncStatus = async (req: Request, res: Response) => {
       return res.json({
         processId: currentProcess.id,
         status: currentProcess.status,
-        syncMode: currentProcess.isContinuousSync ? "continuous" : "fixed_range",
+        syncMode: currentProcess.isContinuousSync
+          ? "continuous"
+          : "fixed_range",
         progress: {
           currentBlock: currentProcess.currentBlock,
           currentTxIndex: currentProcess.currentTxIndex,
           processedBlocks: currentProcess.processedBlocks,
           totalBlocks: currentProcess.totalBlocks,
-          percentage: currentProcess.totalBlocks ?
-            Math.round((currentProcess.processedBlocks / currentProcess.totalBlocks) * 100) :
-            null
-        }
+          percentage: currentProcess.totalBlocks
+            ? Math.round(
+                (currentProcess.processedBlocks / currentProcess.totalBlocks) *
+                  100,
+              )
+            : null,
+        },
       });
     }
 
     res.json({
-      message: "No sync process currently running"
+      message: "No sync process currently running",
     });
-
   } catch (error) {
     res.status(500).json({
-      error: `Failed to get status: ${error}`
+      error: `Failed to get status: ${error}`,
     });
   }
 };
@@ -214,13 +248,13 @@ export const cancelSync = async (req: Request, res: Response) => {
 
     if (processId && processId !== currentProcess?.id) {
       return res.status(404).json({
-        error: "Process not found or not currently running"
+        error: "Process not found or not currently running",
       });
     }
 
-    if (!currentProcess || currentProcess.status !== 'running') {
+    if (!currentProcess || currentProcess.status !== "running") {
       return res.status(400).json({
-        error: "No sync process currently running"
+        error: "No sync process currently running",
       });
     }
 
@@ -228,27 +262,32 @@ export const cancelSync = async (req: Request, res: Response) => {
     currentProcess.cancelRequested = true;
     currentProcess.completeCurrentBlock = completeCurrentBlock;
 
+    // ✨ REDIS PERSISTENCE: Update status
+    await persistence.updateStatus(currentProcess.id, "cancelling");
+
     res.json({
-      message: completeCurrentBlock ?
-        "Cancellation requested - will complete current block and stop" :
-        "Cancellation requested - will stop immediately after current transaction",
+      message: completeCurrentBlock
+        ? "Cancellation requested - will complete current block and stop"
+        : "Cancellation requested - will stop immediately after current transaction",
       processId: currentProcess.id,
-      cancellationMode: completeCurrentBlock ? "complete_current_block" : "immediate",
+      cancellationMode: completeCurrentBlock
+        ? "complete_current_block"
+        : "immediate",
       currentBlock: currentProcess.currentBlock,
       currentTxIndex: currentProcess.currentTxIndex,
-      note: completeCurrentBlock ?
-        "Process will complete all transactions in current block before stopping" :
-        "Process will stop after completing current transaction",
+      note: completeCurrentBlock
+        ? "Process will complete all transactions in current block before stopping"
+        : "Process will stop after completing current transaction",
       resumeInfo: {
-        message: "To resume from this point, use these parameters in your next sync request:",
+        message:
+          "To resume from this point, use these parameters in your next sync request:",
         syncFrom: currentProcess.currentBlock,
-        startTxIndex: completeCurrentBlock ? 0 : currentProcess.currentTxIndex
-      }
+        startTxIndex: completeCurrentBlock ? 0 : currentProcess.currentTxIndex,
+      },
     });
-
   } catch (error) {
     res.status(500).json({
-      error: `Failed to cancel sync: ${error}`
+      error: `Failed to cancel sync: ${error}`,
     });
   }
 };
@@ -262,7 +301,7 @@ export const getProcessHistory = async (req: Request, res: Response) => {
       .slice(0, limit);
 
     res.json({
-      processes: processes.map(p => ({
+      processes: processes.map((p) => ({
         processId: p.id,
         status: p.status,
         syncFrom: p.syncFrom,
@@ -272,15 +311,103 @@ export const getProcessHistory = async (req: Request, res: Response) => {
         progress: `${p.processedBlocks}/${p.totalBlocks} blocks`,
         startTime: p.startTime,
         endTime: p.endTime,
-        duration: p.endTime ?
-          p.endTime.getTime() - p.startTime.getTime() :
-          null,
-        error: p.error
-      }))
+        duration: p.endTime
+          ? p.endTime.getTime() - p.startTime.getTime()
+          : null,
+        error: p.error,
+      })),
     });
   } catch (error) {
     res.status(500).json({
-      error: `Failed to get process history: ${error}`
+      error: `Failed to get process history: ${error}`,
+    });
+  }
+};
+
+// ✨ NEW: Resume sync from Redis state
+export const resumeSync = async (req: Request, res: Response) => {
+  try {
+    const processId = req.params.processId;
+
+    if (!processId) {
+      return res.status(400).json({
+        error: "processId is required",
+      });
+    }
+
+    // Get state from Redis
+    const savedState = await persistence.getSyncProcess(processId);
+
+    if (!savedState) {
+      return res.status(404).json({
+        error: "No saved state found for this process ID",
+      });
+    }
+
+    if (savedState.status === "completed") {
+      return res.status(400).json({
+        error: "Process already completed",
+        savedState,
+      });
+    }
+
+    // Check if sync is already in progress
+    if (currentProcess && currentProcess.status === "running") {
+      return res.status(409).json({
+        error: "Sync already in progress",
+        currentProcessId: currentProcess.id,
+      });
+    }
+
+    logger.info(
+      `Resuming sync process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`,
+    );
+
+    // Create new process with saved state
+    const isContinuousSync = savedState.syncTo === 999999999;
+    const newProcess: SyncProcess = {
+      id: processId,
+      status: "running",
+      syncFrom: savedState.currentBlock,
+      syncTo: isContinuousSync ? "LATEST" : savedState.syncTo,
+      currentBlock: savedState.currentBlock,
+      currentTxIndex: savedState.currentTxIndex,
+      totalBlocks: isContinuousSync
+        ? null
+        : savedState.syncTo - savedState.currentBlock + 1,
+      processedBlocks: 0,
+      startTime: new Date(),
+      cancelRequested: false,
+      isContinuousSync,
+    };
+
+    currentProcess = newProcess;
+    processHistory.set(processId, newProcess);
+
+    // Update Redis status
+    await persistence.updateStatus(processId, "running");
+
+    // Start sync process asynchronously
+    syncBlocksAsync(newProcess).catch((error) => {
+      logger.error(`Resumed sync process ${processId} failed:`, error);
+      newProcess.status = "failed";
+      newProcess.error = error;
+      newProcess.endTime = new Date();
+    });
+
+    res.status(202).json({
+      message: "Sync process resumed successfully",
+      processId,
+      resumedFrom: {
+        block: savedState.currentBlock,
+        txIndex: savedState.currentTxIndex,
+      },
+      syncTo: newProcess.syncTo,
+    });
+  } catch (error) {
+    logger.error("Error resuming sync process:", error);
+    res.status(500).json({
+      error: `Failed to resume sync: ${error}`,
     });
   }
 };
@@ -290,7 +417,7 @@ async function validateSyncBounds(
   syncFrom: number,
   syncTo: number | "LATEST",
   startTxIndex: number = 0,
-  endTxIndex?: number
+  endTxIndex?: number,
 ): Promise<void> {
   // Get latest block with retry logic (up to 256 seconds)
   const latestBlockNumber = await getLatestBlockNumberWithRetry();
@@ -304,12 +431,19 @@ async function validateSyncBounds(
     const startBlock = await originalProvider.getBlockWithTxs(syncFrom);
 
     if (startTxIndex < 0 || startTxIndex >= startBlock.transactions.length) {
-      throw new Error(`Invalid startTxIndex ${startTxIndex}. Block ${syncFrom} has ${startBlock.transactions.length} transactions`);
+      throw new Error(
+        `Invalid startTxIndex ${startTxIndex}. Block ${syncFrom} has ${startBlock.transactions.length} transactions`,
+      );
     }
 
     if (endTxIndex !== undefined) {
-      if (endTxIndex < startTxIndex || endTxIndex >= startBlock.transactions.length) {
-        throw new Error(`Invalid endTxIndex ${endTxIndex}. Must be >= ${startTxIndex} and < ${startBlock.transactions.length}`);
+      if (
+        endTxIndex < startTxIndex ||
+        endTxIndex >= startBlock.transactions.length
+      ) {
+        throw new Error(
+          `Invalid endTxIndex ${endTxIndex}. Must be >= ${startTxIndex} and < ${startBlock.transactions.length}`,
+        );
       }
     }
   } catch (error) {
@@ -321,7 +455,9 @@ async function validateSyncBounds(
 async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const syncMode = process.isContinuousSync ? "continuous" : "fixed range";
-    logger.info(`Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo} (${syncMode})`);
+    logger.info(
+      `Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo} (${syncMode})`,
+    );
 
     let currentBlock = process.syncFrom;
 
@@ -332,8 +468,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         // If we've caught up to the latest block, wait for new blocks
         if (currentBlock > latestBlockNumber) {
-          logger.info(`Continuous sync caught up to latest block ${latestBlockNumber}. Waiting for new blocks...`);
-          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+          logger.info(
+            `Continuous sync caught up to latest block ${latestBlockNumber}. Waiting for new blocks...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
           continue;
         }
 
@@ -348,22 +486,36 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
-        process.status = 'cancelled';
+        process.status = "cancelled";
         process.endTime = new Date();
-        logger.info(`Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`);
+        // ✨ REDIS PERSISTENCE: Update status
+        await persistence.updateStatus(process.id, "cancelled");
+        logger.info(
+          `Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`,
+        );
         return;
       }
 
       // If completing current block, check if we should stop after this block
-      if (process.cancelRequested && process.completeCurrentBlock && currentBlock > process.currentBlock) {
-        process.status = 'cancelled';
+      if (
+        process.cancelRequested &&
+        process.completeCurrentBlock &&
+        currentBlock > process.currentBlock
+      ) {
+        process.status = "cancelled";
         process.endTime = new Date();
-        logger.info(`Sync process ${process.id} cancelled after completing block ${process.currentBlock}`);
+        // ✨ REDIS PERSISTENCE: Update status
+        await persistence.updateStatus(process.id, "cancelled");
+        logger.info(
+          `Sync process ${process.id} cancelled after completing block ${process.currentBlock}`,
+        );
         return;
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`Syncing block ${currentBlock} (Process: ${process.id}, Mode: ${syncMode})...`);
+      logger.info(
+        `Syncing block ${currentBlock} (Process: ${process.id}, Mode: ${syncMode})...`,
+      );
 
       try {
         await validateBlock(currentBlock);
@@ -372,7 +524,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         // If block was cancelled mid-way, don't close it
         if (!blockCompleted) {
-          logger.info(`Block ${currentBlock} partially processed - cancellation requested`);
+          logger.info(
+            `Block ${currentBlock} partially processed - cancellation requested`,
+          );
           return;
         }
 
@@ -383,39 +537,52 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.processedBlocks++;
         process.currentTxIndex = 0; // Reset for next block
 
-        logger.info(`Block ${currentBlock} completed successfully (Process: ${process.id})`);
+        // ✨ REDIS PERSISTENCE: Update progress after block completion
+        await persistence.updateProgress(process.id, currentBlock + 1, 0);
+
+        logger.info(
+          `Block ${currentBlock} completed successfully (Process: ${process.id})`,
+        );
 
         // If we completed current block due to cancellation, stop here
         if (process.cancelRequested && process.completeCurrentBlock) {
-          process.status = 'cancelled';
+          process.status = "cancelled";
           process.endTime = new Date();
-          logger.info(`Sync process ${process.id} cancelled after completing current block ${currentBlock}`);
+          // ✨ REDIS PERSISTENCE: Update status
+          await persistence.updateStatus(process.id, "cancelled");
+          logger.info(
+            `Sync process ${process.id} cancelled after completing current block ${currentBlock}`,
+          );
           return;
         }
 
         // Move to next block
         currentBlock++;
-
       } catch (error) {
-        process.status = 'failed';
-        // process.error = error;
-        // console.log("Error happened: ", error);
+        process.status = "failed";
         process.endTime = new Date();
-        logger.error(`Failed to process block ${currentBlock} in process ${process.id}:`, error);
+        // ✨ REDIS PERSISTENCE: Update status
+        await persistence.updateStatus(process.id, "failed");
+        logger.error(
+          `Failed to process block ${currentBlock} in process ${process.id}:`,
+          error,
+        );
         throw error;
       }
     }
 
     // Only reach here for fixed range sync that completed normally
-    process.status = 'completed';
+    process.status = "completed";
     process.endTime = new Date();
+    // ✨ REDIS PERSISTENCE: Update status
+    await persistence.updateStatus(process.id, "completed");
     logger.info(`Sync process ${process.id} completed successfully`);
-
   } catch (error) {
-    process.status = 'failed';
-    // process.error = error;
+    process.status = "failed";
     console.log("Error happened: ", error);
     process.endTime = new Date();
+    // ✨ REDIS PERSISTENCE: Update status
+    await persistence.updateStatus(process.id, "failed");
     throw error;
   } finally {
     // Clear current process if it's this one
@@ -426,13 +593,16 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 }
 
 // Enhanced sync block with transaction index support
-async function syncBlock(block_no: number, process: SyncProcess): Promise<boolean> {
-  const dsf = await syncingProvider.declareContract
+async function syncBlock(
+  block_no: number,
+  process: SyncProcess,
+): Promise<boolean> {
+  const dsf = await syncingProvider.declareContract;
 
   const blockWithTxs = await originalProvider.getBlockWithTxs(block_no);
 
   logger.info(
-    `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no} (Process: ${process.id})`
+    `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no} (Process: ${process.id})`,
   );
 
   if (blockWithTxs.transactions.length === 0) {
@@ -449,24 +619,28 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
     // Check for cancellation before each transaction
     if (process.cancelRequested && !process.completeCurrentBlock) {
       process.currentTxIndex = i;
-      process.status = 'cancelled';
+      process.status = "cancelled";
       process.endTime = new Date();
-      logger.info(`Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${i - 1}`);
+      logger.info(
+        `Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${i - 1}`,
+      );
       return false; // Block not completed
     }
 
     const tx: TransactionWithHash = blockWithTxs.transactions[i];
     process.currentTxIndex = i;
 
-    logger.info(`Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${tx.transaction_hash}`);
+    logger.info(
+      `Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${tx.transaction_hash}`,
+    );
 
     try {
       const tx_hash = await processTx(tx, block_no);
 
       if (i === startIndex) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         await validateTransactionReceipt(syncingProvider, tx_hash, {
-          useExponentialBackoff: true
+          useExponentialBackoff: true,
         });
       } else {
         await validateTransactionReceipt(syncingProvider, tx_hash, {
@@ -479,12 +653,9 @@ async function syncBlock(block_no: number, process: SyncProcess): Promise<boolea
       // Update the last processed transaction index
       process.currentTxIndex = i;
 
+      // ✨ REDIS PERSISTENCE: Update progress after each transaction
+      await persistence.updateProgress(process.id, block_no, i);
     } catch (err) {
-      // logger.error(`Error processing transaction ${tx.transaction_hash}:`, err);
-      // await sendAlert(
-      //   "[SYNCING_SERVICE] Error processing transaction",
-      //   `Error processing transaction ${tx.transaction_hash}, error: ${err}`
-      // );
       throw err;
     }
   }
@@ -503,72 +674,171 @@ async function validateBlock(currentBlock: number): Promise<void> {
   while (retryCount <= maxRetries && !blockValidated) {
     try {
       const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
-      // console.log(`Latest block number check (attempt ${retryCount + 1}): ${latestBlockNumber}, expecting: ${currentBlock - 1}`);
 
       if (latestBlockNumber + 1 === currentBlock) {
         blockValidated = true;
-        // console.log(`Block ${currentBlock} validation successful`);
       } else {
-        throw new Error(`Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`);
+        throw new Error(
+          `Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`,
+        );
       }
     } catch (error) {
       retryCount++;
-      console.warn(`Block validation attempt ${retryCount} failed for block ${currentBlock}:`, error);
+      console.warn(
+        `Block validation attempt ${retryCount} failed for block ${currentBlock}:`,
+        error,
+      );
 
       if (retryCount > maxRetries) {
-        throw new Error(`Failed to validate block ${currentBlock} after ${maxRetries + 1} attempts. Latest error: ${error}`);
+        throw new Error(
+          `Failed to validate block ${currentBlock} after ${maxRetries + 1} attempts. Latest error: ${error}`,
+        );
       }
 
       const delay = Math.pow(2, retryCount) * 1000;
       console.log(`Retrying block ${currentBlock} validation in ${delay}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
+
+// ✨ NEW: Auto-resume on startup
+export const autoResumeOnStartup = async (): Promise<void> => {
+  try {
+    logger.info("Checking Redis for incomplete sync processes...");
+
+    const resumableProcessIds = await persistence.getResumableProcesses();
+
+    if (resumableProcessIds.length === 0) {
+      logger.info("No incomplete sync processes found in Redis");
+      return;
+    }
+
+    logger.info(`Found ${resumableProcessIds.length} incomplete process(es)`);
+
+    for (const processId of resumableProcessIds) {
+      try {
+        // Check if this process should actually be resumed
+        const shouldResume = await persistence.shouldResumeProcess(
+          processId,
+          originalProvider,
+        );
+
+        if (!shouldResume) {
+          logger.info(
+            `Skipping process ${processId} - already at last transaction`,
+          );
+          continue;
+        }
+
+        // Get saved state
+        const savedState = await persistence.getSyncProcess(processId);
+
+        if (!savedState) {
+          logger.warn(`No state found for process ${processId}`);
+          continue;
+        }
+
+        // Check if sync is already running
+        if (currentProcess && currentProcess.status === "running") {
+          logger.warn(
+            `Cannot auto-resume ${processId} - another sync is running`,
+          );
+          continue;
+        }
+
+        logger.info(
+          `Auto-resuming process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`,
+        );
+
+        // Create new process with saved state
+        const isContinuousSync = savedState.syncTo === 999999999;
+        const newProcess: SyncProcess = {
+          id: processId,
+          status: "running",
+          syncFrom: savedState.currentBlock,
+          syncTo: isContinuousSync ? "LATEST" : savedState.syncTo,
+          currentBlock: savedState.currentBlock,
+          currentTxIndex: savedState.currentTxIndex,
+          totalBlocks: isContinuousSync
+            ? null
+            : savedState.syncTo - savedState.currentBlock + 1,
+          processedBlocks: 0,
+          startTime: new Date(),
+          cancelRequested: false,
+          isContinuousSync,
+        };
+
+        currentProcess = newProcess;
+        processHistory.set(processId, newProcess);
+
+        // Update Redis status
+        await persistence.updateStatus(processId, "running");
+
+        // Start sync process asynchronously
+        syncBlocksAsync(newProcess).catch((error) => {
+          logger.error(`Auto-resumed sync process ${processId} failed:`, error);
+          newProcess.status = "failed";
+          newProcess.error = error;
+          newProcess.endTime = new Date();
+        });
+
+        logger.info(`Successfully auto-resumed process ${processId}`);
+
+        // Only resume one process at a time
+        break;
+      } catch (error) {
+        logger.error(`Error auto-resuming process ${processId}:`, error);
+      }
+    }
+  } catch (error) {
+    logger.error("Error in auto-resume on startup:", error);
+  }
+};
 
 // Graceful shutdown handler
 export const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`\nReceived ${signal}. Starting graceful shutdown...`);
 
-  if (currentProcess && currentProcess.status === 'running') {
+  if (currentProcess && currentProcess.status === "running") {
     logger.info(`Gracefully shutting down sync process ${currentProcess.id}`);
     currentProcess.cancelRequested = true;
 
     // Wait a bit for the current transaction to complete, but not too long
-    console.log('Waiting for current transaction to complete...');
+    console.log("Waiting for current transaction to complete...");
     await Promise.race([
-      new Promise(resolve => setTimeout(resolve, 3000)), // Max 3 seconds wait
-      new Promise(resolve => {
+      new Promise((resolve) => setTimeout(resolve, 3000)), // Max 3 seconds wait
+      new Promise((resolve) => {
         const checkInterval = setInterval(() => {
-          if (!currentProcess || currentProcess.status !== 'running') {
+          if (!currentProcess || currentProcess.status !== "running") {
             clearInterval(checkInterval);
             resolve(undefined);
           }
         }, 100);
-      })
+      }),
     ]);
   }
 
-  console.log('Shutting down...');
+  console.log("Shutting down...");
   process.exit(0);
 };
 
 // Process cleanup on application exit
 let shutdownInProgress = false;
 
-process.on('SIGINT', async () => {
+process.on("SIGINT", async () => {
   if (shutdownInProgress) {
-    console.log('\nForce exiting...');
+    console.log("\nForce exiting...");
     process.exit(1);
   }
   shutdownInProgress = true;
-  await gracefulShutdown('SIGINT');
+  await gracefulShutdown("SIGINT");
 });
 
-process.on('SIGTERM', async () => {
+process.on("SIGTERM", async () => {
   if (shutdownInProgress) {
     process.exit(1);
   }
   shutdownInProgress = true;
-  await gracefulShutdown('SIGTERM');
+  await gracefulShutdown("SIGTERM");
 });
