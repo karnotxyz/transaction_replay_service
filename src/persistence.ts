@@ -4,6 +4,7 @@ import logger from "./logger.js";
 class PersistenceLayer {
   private redis: Redis.Redis;
   private connected: boolean = false;
+  private onReconnectCallback: (() => Promise<void>) | null = null;
 
   constructor() {
     const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
@@ -13,17 +14,40 @@ class PersistenceLayer {
         return delay;
       },
       maxRetriesPerRequest: 3,
+      enableOfflineQueue: true, // Keep commands in queue while reconnecting
     });
 
     this.redis.on("connect", () => {
       logger.info("Redis connected successfully");
       this.connected = true;
+
+      // Trigger auto-resume on reconnection
+      if (this.onReconnectCallback) {
+        logger.info("Redis reconnected - triggering auto-resume check");
+        this.onReconnectCallback().catch((error) => {
+          logger.error(`Error in reconnect callback: ${error}`);
+        });
+      }
     });
 
     this.redis.on("error", (err) => {
       logger.error(`Redis error: ${err.message}`);
       this.connected = false;
     });
+
+    this.redis.on("close", () => {
+      logger.warn("Redis connection closed");
+      this.connected = false;
+    });
+
+    this.redis.on("reconnecting", () => {
+      logger.info("Redis reconnecting...");
+    });
+  }
+
+  // Set callback to run when Redis reconnects
+  setReconnectCallback(callback: () => Promise<void>): void {
+    this.onReconnectCallback = callback;
   }
 
   // Save sync process metadata

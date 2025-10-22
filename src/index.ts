@@ -8,10 +8,12 @@ import {
   cancelSync,
   gracefulShutdown,
   getProcessHistory,
-  resumeSync, // ✨ NEW: Import resume function
-  autoResumeOnStartup, // ✨ NEW: Import auto-resume function
+  resumeSync,
+  autoResumeOnStartup,
+  startPeriodicAutoResume  // ✨ NEW: Import periodic check function
 } from "./syncing.js";
 import logger from "./logger.js";
+import { persistence } from "./persistence.js";  // ✨ NEW: Import persistence
 
 dotenv.config();
 
@@ -28,7 +30,7 @@ app.get("/health", (req: Request, res: Response) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    service: "transaction_replay_service",
+    service: "transaction_replay_service"
   });
 });
 
@@ -53,7 +55,17 @@ app.get("/sync/history", getProcessHistory);
 app.listen(PORT, async () => {
   logger.info(`Syncing service listening on port ${PORT}`);
 
-  // ✨ NEW: Auto-resume incomplete syncs from Redis
+  // ✨ Set up Redis reconnection callback
+  persistence.setReconnectCallback(async () => {
+    logger.info("Redis reconnected - attempting auto-resume");
+    try {
+      await autoResumeOnStartup();
+    } catch (error) {
+      logger.error("Failed to auto-resume after Redis reconnection:", error);
+    }
+  });
+
+  // ✨ Auto-resume incomplete syncs from Redis on startup
   setTimeout(async () => {
     try {
       await autoResumeOnStartup();
@@ -61,4 +73,7 @@ app.listen(PORT, async () => {
       logger.error("Failed to auto-resume on startup:", error);
     }
   }, 2000); // Wait 2 seconds for service to fully initialize
+
+  // ✨ NEW: Start periodic auto-resume checks (every 3 minutes)
+  startPeriodicAutoResume();
 });

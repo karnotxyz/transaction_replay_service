@@ -117,7 +117,7 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       processId,
       syncFrom,
       typeof syncTo === "number" ? syncTo : 999999999, // Use large number for LATEST
-      startTxIndex,
+      startTxIndex
     );
 
     // Start sync process asynchronously
@@ -360,7 +360,7 @@ export const resumeSync = async (req: Request, res: Response) => {
     }
 
     logger.info(
-      `Resuming sync process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`,
+      `Resuming sync process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`
     );
 
     // Create new process with saved state
@@ -702,9 +702,16 @@ async function validateBlock(currentBlock: number): Promise<void> {
   }
 }
 
+
 // ✨ NEW: Auto-resume on startup
 export const autoResumeOnStartup = async (): Promise<void> => {
   try {
+    // Wait for Redis to be connected
+    if (!persistence.isConnected()) {
+      logger.warn("Redis not connected - will retry auto-resume when connected");
+      return;
+    }
+
     logger.info("Checking Redis for incomplete sync processes...");
 
     const resumableProcessIds = await persistence.getResumableProcesses();
@@ -721,13 +728,11 @@ export const autoResumeOnStartup = async (): Promise<void> => {
         // Check if this process should actually be resumed
         const shouldResume = await persistence.shouldResumeProcess(
           processId,
-          originalProvider,
+          originalProvider
         );
 
         if (!shouldResume) {
-          logger.info(
-            `Skipping process ${processId} - already at last transaction`,
-          );
+          logger.info(`Skipping process ${processId} - already at last transaction`);
           continue;
         }
 
@@ -741,14 +746,12 @@ export const autoResumeOnStartup = async (): Promise<void> => {
 
         // Check if sync is already running
         if (currentProcess && currentProcess.status === "running") {
-          logger.warn(
-            `Cannot auto-resume ${processId} - another sync is running`,
-          );
+          logger.warn(`Cannot auto-resume ${processId} - another sync is running`);
           continue;
         }
 
         logger.info(
-          `Auto-resuming process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`,
+          `Auto-resuming process ${processId} from block ${savedState.currentBlock}, tx ${savedState.currentTxIndex}`
         );
 
         // Create new process with saved state
@@ -796,9 +799,53 @@ export const autoResumeOnStartup = async (): Promise<void> => {
   }
 };
 
+// ✨ NEW: Periodic auto-resume check
+let periodicCheckInterval: NodeJS.Timeout | null = null;
+
+export const startPeriodicAutoResume = (): void => {
+  const CHECK_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+
+  logger.info(`Starting periodic auto-resume check (every ${CHECK_INTERVAL_MS / 1000 / 60} minutes)`);
+
+  // Set up periodic check
+  periodicCheckInterval = setInterval(async () => {
+    try {
+      // Only check if no sync is currently running
+      if (currentProcess && currentProcess.status === "running") {
+        logger.debug("Periodic check skipped - sync already running");
+        return;
+      }
+
+      // Check if Redis is connected
+      if (!persistence.isConnected()) {
+        logger.debug("Periodic check skipped - Redis not connected");
+        return;
+      }
+
+      logger.info("Periodic auto-resume check starting...");
+      await autoResumeOnStartup();
+    } catch (error) {
+      logger.error("Error in periodic auto-resume check:", error);
+    }
+  }, CHECK_INTERVAL_MS);
+
+  logger.info("Periodic auto-resume check started");
+};
+
+export const stopPeriodicAutoResume = (): void => {
+  if (periodicCheckInterval) {
+    clearInterval(periodicCheckInterval);
+    periodicCheckInterval = null;
+    logger.info("Periodic auto-resume check stopped");
+  }
+};
+
 // Graceful shutdown handler
 export const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`\nReceived ${signal}. Starting graceful shutdown...`);
+
+  // Stop periodic auto-resume checks
+  stopPeriodicAutoResume();
 
   if (currentProcess && currentProcess.status === "running") {
     logger.info(`Gracefully shutting down sync process ${currentProcess.id}`);
@@ -818,6 +865,9 @@ export const gracefulShutdown = async (signal: string): Promise<void> => {
       }),
     ]);
   }
+
+  // Close Redis connection
+  await persistence.close();
 
   console.log("Shutting down...");
   process.exit(0);
