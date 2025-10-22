@@ -31,7 +31,7 @@ class PersistenceLayer {
     processId: string,
     syncFrom: number,
     syncTo: number,
-    startTxIndex: number,
+    startTxIndex: number
   ): Promise<void> {
     const key = `sync:${processId}`;
     await this.redis.hmset(key, {
@@ -49,7 +49,7 @@ class PersistenceLayer {
   async updateProgress(
     processId: string,
     currentBlock: number,
-    currentTxIndex: number,
+    currentTxIndex: number
   ): Promise<void> {
     const key = `sync:${processId}`;
     await this.redis.hmset(key, {
@@ -114,14 +114,25 @@ class PersistenceLayer {
   // Check if process should be resumed
   async shouldResumeProcess(
     processId: string,
-    originalProvider: any,
+    originalProvider: any
   ): Promise<boolean> {
     const state = await this.getSyncProcess(processId);
 
     if (!state) return false;
     if (state.status !== "running") return false;
 
-    // Check if we're at the very last transaction
+    // Check if this is a continuous sync (syncTo = 999999999 means "LATEST")
+    const isContinuousSync = state.syncTo === 999999999;
+
+    if (isContinuousSync) {
+      // For continuous syncs, ALWAYS resume - they never "complete"
+      logger.info(
+        `Process ${processId} is continuous sync - will resume from block ${state.currentBlock}, tx ${state.currentTxIndex}`
+      );
+      return true;
+    }
+
+    // For fixed-range syncs, check if we're at the very last transaction
     try {
       const lastBlock = await originalProvider.getBlockWithTxs(state.syncTo);
       const totalTransactions = lastBlock.transactions.length;
@@ -132,7 +143,7 @@ class PersistenceLayer {
         state.currentTxIndex === totalTransactions - 1
       ) {
         logger.info(
-          `Process ${processId} is at last transaction - marking as completed`,
+          `Process ${processId} is at last transaction - marking as completed`
         );
         await this.updateStatus(processId, "completed");
         return false;
@@ -140,9 +151,7 @@ class PersistenceLayer {
 
       return true;
     } catch (error) {
-      logger.warn(
-        `Error checking if process ${processId} should resume: ${error}`,
-      );
+      logger.warn(`Error checking if process ${processId} should resume: ${error}`);
       return false;
     }
   }
