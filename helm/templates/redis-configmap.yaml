@@ -1,0 +1,24 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.redis.name }}-config
+  namespace: {{ .Values.namespace.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  redis.conf: |
+    appendonly {{ .Values.redis.config.appendonly }}
+    appendfsync {{ .Values.redis.config.appendfsync }}
+    save {{ .Values.redis.config.save }}
+    
+    # Persistence settings
+    dir /data
+    dbfilename dump.rdb
+    
+    # Performance settings
+    maxmemory-policy allkeys-lru
+    
+    # Logging
+    loglevel notice
+{{- end }}
