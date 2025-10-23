@@ -84,7 +84,7 @@ The Helm chart deploys:
 
 | Variable | Description | Required | Example |
 |----------|-------------|----------|---------|
-| `RPC_URL_ORIGINAL_NODE` | Paradex network node RPC URL | Yes | `https://pathfinder.api.nightly.paradex.trade` |
+| `RPC_URL_ORIGINAL_NODE` | Original Network node RPC URL | Yes |
 | `RPC_URL_SYNCING_NODE` | Madara node RPC URL | Yes | `http://madara-service:9944` |
 | `ADMIN_RPC_URL_SYNCING_NODE` | Madara admin RPC URL | Yes | `http://madara-service:9943` |
 | `REDIS_URL` | Redis connection URL | Yes | `redis://redis-instance:6379` |
