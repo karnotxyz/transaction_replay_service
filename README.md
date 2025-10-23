@@ -658,51 +658,6 @@ kubectl logs -f transaction-syncing-service-yyy
 
 ---
 
-## 🔧 Operator Integration
-
-### Changes Required
-
-#### 1. Update Madara Docker Image
-
-Replace Madara image in operator CRD:
-```yaml
-image: prkpandey942/madara:paradex_sync_d13b45c1b041bfa6b490f15ce21509d50ac15fd1
-```
-
-#### 2. Update Chain Config
-
-Replace `madara-chain-config` ConfigMap with `configs/paradex.yaml`.
-
-Set `latest_protocol_version` based on block range:
-- `0.13.2` for blocks 95271-559325
-- `0.13.5` for blocks 559326+
-
-#### 3. Disable Bootstrapper & Orchestrator
-
-In Madara CRD, set replicas to 0:
-```yaml
-spec:
-  bootstrapper:
-    replicas: 0
-  orchestrator:
-    replicas: 0
-```
-
-#### 4. Use Prepared Database
-
-Mount existing Madara database:
-```yaml
-volumeMounts:
-  - name: madara-db
-    mountPath: /data
-```
-
-#### 5. Deploy Transaction Replay Service
-
-Deploy using the provided Helm chart or manually with the configurations above.
-
----
-
 ## 📊 Monitoring & Logs
 
 ### Key Log Messages
