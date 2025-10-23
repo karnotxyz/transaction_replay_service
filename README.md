@@ -111,7 +111,7 @@ transaction_syncing_service:
       memory: 512Mi
   
   environment:
-    RPC_URL_ORIGINAL_NODE: "https://pathfinder.api.nightly.paradex.trade"
+    RPC_URL_ORIGINAL_NODE: "<<Original_RPC>>"
     RPC_URL_SYNCING_NODE: "http://madara-service:9944"
     ADMIN_RPC_URL_SYNCING_NODE: "http://madara-service:9943"
     REDIS_URL: "redis://redis-instance:6379"
@@ -144,7 +144,7 @@ redis:
 docker run -d \
   --name transaction_syncing_service \
   -p 3000:3000 \
-  -e RPC_URL_ORIGINAL_NODE=https://pathfinder.api.nightly.paradex.trade \
+  -e RPC_URL_ORIGINAL_NODE=<<Original_RPC>> \
   -e RPC_URL_SYNCING_NODE=http://madara:9944 \
   -e ADMIN_RPC_URL_SYNCING_NODE=http://madara:9943 \
   -e REDIS_URL=redis://redis:6379 \
