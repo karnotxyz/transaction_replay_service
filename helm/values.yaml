@@ -37,7 +37,7 @@ transaction_syncing_service:
   replicas: 1
   image:
     repository: "heemank/txn_replay_service"
-    tag: "persistence_a604c2ba36814f1f39f5ca0d667d5f17d7b8338d"
+    tag: "persistence_160d887aec4e86a820260a4520c0ae184ae90877"
   resources:
     limits:
       cpu: 500m
