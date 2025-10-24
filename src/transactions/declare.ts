@@ -1,10 +1,6 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
-import {
-  originalProvider,
-  originalv7Provider,
-  syncingv7Provider,
-} from "../providers.js";
+import { originalProvider_v9, originalProvider_v8 } from "../providers.js";
 
 // https://www.quicknode.com/docs/starknet/starknet_addDeclareTransaction
 export async function generalDeclare(
@@ -88,9 +84,10 @@ async function declareV1(
 
   let txn = tx as unknown as DECLARE_TXN_V1;
 
-  let contractClass = await originalv7Provider.getClassByHash(txn.class_hash);
+  let contractClass = await originalProvider_v9.getClassByHash(txn.class_hash);
 
   contractClass.entry_points_by_type.EXTERNAL.forEach((entry) => {
+    originalProvider_v9;
     let typedEntry = entry as starknet.ContractEntryPointFields;
     if (typeof typedEntry.offset === "number") {
       typedEntry.offset = "0x" + typedEntry.offset.toString(16);
@@ -109,7 +106,7 @@ async function declareV1(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingv7Provider.declareContract(
+  let declareTransactionResult = await syncingProvider.declareContract(
     transaction,
     invocationDetails,
   );
@@ -134,9 +131,10 @@ async function declareV2(
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
+  let contract_class = await originalProvider_v8.getClassByHash(txn.class_hash);
 
   let contract_class_parsed = starknet.provider.parseContract({
+    // @ts-ignore
     sierra_program: (contract_class as starknet.SierraContractClass)
       .sierra_program,
     contract_class_version: (contract_class as starknet.SierraContractClass)
@@ -175,7 +173,7 @@ async function declareV2(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingv7Provider.declareContract(
+  let declareTransactionResult = await syncingProvider.declareContract(
     transaction,
     invocationDetails,
   );
@@ -205,9 +203,10 @@ async function declareV3(
 
   let txn = tx as unknown as DECLARE_TXN_V3;
 
-  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
+  let contract_class = await originalProvider_v9.getClassByHash(txn.class_hash);
 
   let contract_class_parsed = starknet.provider.parseContract({
+    // @ts-ignore
     sierra_program: (contract_class as starknet.SierraContractClass)
       .sierra_program,
     contract_class_version: (contract_class as starknet.SierraContractClass)
@@ -253,31 +252,9 @@ async function declareV3(
 
   let declareTransactionResult = await syncingProvider.declareContract(
     transaction,
+    // @ts-ignore
     invocationDetails,
   );
-
-  // const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
-  //   id: 1,
-  //   jsonrpc: "2.0",
-  //   method: "starknet_addDeclareTransaction",
-  //   params: [
-  //     {
-  //       type: "DECLARE",
-  //       sender_address: txn.sender_address,
-  //       compiled_class_hash: txn.compiled_class_hash,
-  //       version: txn.version,
-  //       signature: txn.signature,
-  //       nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-  //       class_hash: txn.class_hash,
-  //       resource_bounds: txn.resource_bounds,
-  //       tip: txn.tip,
-  //       paymaster_data: txn.paymaster_data,
-  //       account_deployment_data: txn.account_deployment_data,
-  //       nonce_data_availability_mode: txn.nonce_data_availability_mode,
-  //       fee_data_availability_mode: txn.fee_data_availability_mode,
-  //     },
-  //   ],
-  // });
 
   return declareTransactionResult.transaction_hash;
 }

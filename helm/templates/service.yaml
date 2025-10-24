@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-syncing-service-svc
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    app: transaction-syncing-service-svc
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.transaction_syncing_service.name }}
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000

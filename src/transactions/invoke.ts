@@ -2,7 +2,10 @@ import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
 
 // https://www.quicknode.com/docs/starknet/starknet_addInvokeTransaction
-export async function generalInvoke(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
+export async function generalInvoke(
+  tx: starknet.TransactionWithHash,
+  syncingProvider: starknet.RpcProvider,
+) {
   // console.log("Invoking transaction with version : ", tx.version);
   let tx_version = tx.version;
 
@@ -24,15 +27,18 @@ export async function generalInvoke(tx: starknet.TransactionWithHash, syncingPro
   }
 }
 
-async function invokeV0(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
+async function invokeV0(
+  tx: starknet.TransactionWithHash,
+  syncingProvider: starknet.RpcProvider,
+) {
   type INVOKE_TXN_V0 = {
-      type: 'INVOKE';
-      max_fee: starknet.FELT;
-      version: '0x0';
-      signature: starknet.Signature;
-      contract_address: string;
-      entry_point_selector: starknet.FELT;
-      calldata: starknet.FELT[];
+    type: "INVOKE";
+    max_fee: starknet.FELT;
+    version: "0x0";
+    signature: starknet.Signature;
+    contract_address: string;
+    entry_point_selector: starknet.FELT;
+    calldata: starknet.FELT[];
   };
 
   let txn = tx as unknown as INVOKE_TXN_V0;
@@ -50,27 +56,28 @@ async function invokeV0(tx: starknet.TransactionWithHash, syncingProvider: stark
         contract_address: txn.contract_address,
         entry_point_selector: txn.entry_point_selector,
         calldata: txn.calldata,
-      }
+      },
     ],
   });
 
   return result.data.result.transaction_hash;
 }
 
-async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
-
+async function invokeV1(
+  tx: starknet.TransactionWithHash,
+  syncingProvider: starknet.RpcProvider,
+) {
   type INVOKE_TXN_V1 = {
-      type: 'INVOKE';
-      sender_address: string;
-      calldata: starknet.FELT[];
-      max_fee: starknet.FELT;
-      version: '0x1';
-      signature: starknet.Signature;
-      nonce: starknet.FELT;
+    type: "INVOKE";
+    sender_address: string;
+    calldata: starknet.FELT[];
+    max_fee: starknet.FELT;
+    version: "0x1";
+    signature: starknet.Signature;
+    nonce: starknet.FELT;
   };
 
   let txn = tx as unknown as INVOKE_TXN_V1;
-
 
   const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
     id: 1,
@@ -85,19 +92,22 @@ async function invokeV1(tx: starknet.TransactionWithHash, syncingProvider: stark
         version: txn.version,
         signature: txn.signature,
         nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-      }
+      },
     ],
   });
 
   return result.data.result.transaction_hash;
 }
 
-async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: starknet.RpcProvider) {
+async function invokeV3(
+  tx: starknet.TransactionWithHash,
+  syncingProvider: starknet.RpcProvider,
+) {
   type INVOKE_TXN_V3 = {
-    type: 'INVOKE';
+    type: "INVOKE";
     sender_address: string;
     calldata: starknet.FELT[];
-    version: '0x3';
+    version: "0x3";
     signature: starknet.Signature;
     nonce: starknet.FELT;
     resource_bounds: starknet.ResourceBounds;
@@ -128,7 +138,7 @@ async function invokeV3(tx: starknet.TransactionWithHash, syncingProvider: stark
         account_deployment_data: txn.account_deployment_data,
         nonce_data_availability_mode: txn.nonce_data_availability_mode,
         fee_data_availability_mode: txn.fee_data_availability_mode,
-      }
+      },
     ],
   });
 

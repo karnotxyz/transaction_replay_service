@@ -4,33 +4,18 @@ import {
   GetTransactionReceiptResponse,
   Provider,
   RpcProvider,
+  BlockIdentifier,
+  BlockTag,
   TransactionReceipt,
 } from "starknet";
 import ERC20 from "./contracts/ERC20.json" with { type: "json" };
 import logger from "./logger.js";
 import axios, { AxiosResponse } from "axios";
 // import db from "./models/index.js";
-import { originalProvider, syncingProvider } from "./providers.js";
-
-const eth_address =
-  "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7";
-
+import { MadaraRpcResponse } from "./types.js";
+import { GasPrices } from "./types.js";
+import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
 const nonce_tracker: Record<string, number> = {};
-
-// ---- Functions ----
-
-/**
- * Returns ERC20 balance of an address.
- */
-export async function getBalance(
-  address: string,
-  provider: RpcProvider,
-): Promise<bigint> {
-  const erc20 = new Contract(ERC20.abi, eth_address, provider);
-  const balance: any = await erc20.call("balanceOf", [address]);
-  // Only returning the low part as per original code
-  return BigInt(balance.balance.low);
-}
 
 /**
  * Returns the nonce for an address.
@@ -98,6 +83,40 @@ export async function getLatestBlockNumber(
   return latestBlock.block_number;
 }
 
+/**
+ * Get pending block from provider.
+ */
+export async function getBlockWithTxHashes(
+  provider: RpcProvider,
+  block_number: number,
+): Promise<BlockWithTxHashes> {
+  let block_tag: BlockIdentifier = block_number;
+  const pendingBlock = await provider.getBlockWithTxHashes(block_tag);
+  return pendingBlock;
+}
+
+/**
+ * Get pending block from provider.
+ */
+export async function getPreConfirmedBlock(
+  provider: RpcProvider,
+): Promise<BlockWithTxHashes> {
+  let block_tag: BlockIdentifier = BlockTag.PRE_CONFIRMED;
+  const pendingBlock = await provider.getBlockWithTxHashes(block_tag);
+  return pendingBlock;
+}
+
+/**
+ * Get pending block from provider.
+ */
+export async function getBlock(
+  provider: RpcProvider,
+  block_tag: BlockIdentifier,
+): Promise<BlockWithTxHashes> {
+  const block = await provider.getBlockWithTxHashes(block_tag);
+  return block;
+}
+
 export async function getBlockTimestamp(
   provider: RpcProvider,
   block_number: number,
@@ -137,21 +156,6 @@ export async function getBlockTimestamp(
 
   // This should never be reached, but satisfies TypeScript
   throw new Error("Unexpected end of retry loop");
-}
-
-export interface GasPrices {
-  l1_data_gas_price: {
-    price_in_fri: string;
-    price_in_wei: string;
-  };
-  l1_gas_price: {
-    price_in_fri: string;
-    price_in_wei: string;
-  };
-  l2_gas_price: {
-    price_in_fri: string;
-    price_in_wei: string;
-  };
 }
 
 export async function getGasPrices(
@@ -248,7 +252,7 @@ export async function getLatestBlockNumberWithRetry(): Promise<number> {
 
   while (retryCount <= maxRetries) {
     try {
-      return await getLatestBlockNumber(syncingProvider);
+      return await getLatestBlockNumber(syncingProvider_v9);
     } catch (error) {
       retryCount++;
 
@@ -284,16 +288,6 @@ export async function getTransactionReceipt(
   return transactionReceipt;
 }
 
-interface MadaraRpcResponse {
-  jsonrpc: string;
-  id: number;
-  result?: any;
-  error?: {
-    code: number;
-    message: string;
-  };
-}
-
 export async function closeBlock(): Promise<void> {
   try {
     const response = await axios.post<MadaraRpcResponse>(
@@ -326,13 +320,16 @@ export async function closeBlock(): Promise<void> {
 
 export async function setCustomHeader(currentBlock: number): Promise<void> {
   try {
-    const timestamp = await getBlockTimestamp(originalProvider, currentBlock);
+    const timestamp = await getBlockTimestamp(
+      originalProvider_v9,
+      currentBlock,
+    );
     const expectedBlockHash = await getBlockHash(
-      originalProvider,
+      originalProvider_v9,
       currentBlock,
     );
 
-    const gas_prices = await getGasPrices(originalProvider, currentBlock);
+    const gas_prices = await getGasPrices(originalProvider_v9, currentBlock);
     console.log(gas_prices);
 
     const response = await axios.post<MadaraRpcResponse>(
@@ -390,7 +387,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
       );
     }
 
-    logger.info("Block closed successfully");
+    logger.info("Custom headers set for block");
   } catch (error) {
     logger.info("Error closing block:", error);
     throw error;
@@ -495,10 +492,13 @@ export async function matchBlockHash(block_number: number): Promise<void> {
       // Wait before retrying
       await new Promise((resolve) => setTimeout(resolve, delay));
 
-      const paradexBlock = await getBlockHash(originalProvider, block_number);
+      const paradexBlock = await getBlockHash(
+        originalProvider_v9,
+        block_number,
+      );
       logger.info(`Paradex block hash: ${paradexBlock}`);
 
-      const madaraBlock = await getBlockHash(syncingProvider, block_number);
+      const madaraBlock = await getBlockHash(syncingProvider_v9, block_number);
       logger.info(`Madara block hash : ${madaraBlock}`);
 
       if (!paradexBlock || !madaraBlock) {

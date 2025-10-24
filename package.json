@@ -21,10 +21,11 @@
     "body-parser": "^2.2.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "ioredis": "^5.8.2",
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7",
-    "starknet": "^7.6.4",
+    "starknet": "github:starknet-io/starknet.js#78b181c",
     "uuid": "^11.1.0",
     "winston": "^3.17.0"
   },

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transaction-syncing-service-config
+  namespace: {{ .Values.namespace.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+data:
+  RPC_URL_ORIGINAL_NODE: {{ .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE | quote }}
+  RPC_URL_SYNCING_NODE: {{ .Values.transaction_syncing_service.environment.RPC_URL_SYNCING_NODE | quote }}
+  ADMIN_RPC_URL_SYNCING_NODE: {{ .Values.transaction_syncing_service.environment.ADMIN_RPC_URL_SYNCING_NODE | quote }}
+  REDIS_URL: {{ .Values.transaction_syncing_service.environment.REDIS_URL | quote }}
