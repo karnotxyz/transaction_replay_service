@@ -202,25 +202,10 @@ function get_target_block(end_block: BlockIdentifier): BlockTag | number {
 }
 
 export async function start_sync(end_block: BlockIdentifier) {
-  // Check if sync is already in progress (check Redis)
-  const activeProcess = await persistence.getMostRecentActiveProcess();
-
-  if (activeProcess) {
-    const error = new Error("Sync already in progress");
-    (error as any).code = "SYNC_IN_PROGRESS";
-    (error as any).details = {
-      currentProcessId: activeProcess.processId,
-      currentStatus: {
-        processId: activeProcess.processId,
-        status: activeProcess.status,
-        syncFrom: activeProcess.syncFrom,
-        syncTo: activeProcess.syncTo,
-        lastChecked: activeProcess.lastChecked,
-      },
-    };
-    throw error;
-  }
-
+  // Check if sync is already in progress (check in-memory, NOT Redis)
+  // Redis just stores metadata, actual running state is in-memory
+  // Don't check Redis here - that's what causes the issue!
+  
   let targetBlock = get_target_block(end_block);
 
   // Get sync bounds using pending block analysis
@@ -263,7 +248,7 @@ export async function start_sync(end_block: BlockIdentifier) {
   // Start sync process asynchronously
   syncBlocksAsync(newProcess).catch(async (error) => {
     logger.error(`❌ Sync process ${processId} failed:`, error);
-
+    
     // Update Redis status to failed
     try {
       await persistence.updateStatus(processId, "failed");
