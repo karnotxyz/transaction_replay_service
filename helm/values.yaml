@@ -46,7 +46,7 @@ transaction_syncing_service:
       cpu: 250m
       memory: 512Mi
   environment:
-    RPC_URL_ORIGINAL_NODE: "https://pathfinder.api.nightly.paradex.trade"
+    RPC_URL_ORIGINAL_NODE: "<<RPC URL>>"
     RPC_URL_SYNCING_NODE: "http://madara-instance-h-madara-service.madara-system.svc.cluster.local:9944"
     ADMIN_RPC_URL_SYNCING_NODE: "http://madara-instance-h-madara-service.madara-system.svc.cluster.local:9943"
     # Redis URL will be automatically constructed: redis://<redis-name>.<namespace>.svc.cluster.local:<port>
