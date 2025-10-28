@@ -10,12 +10,9 @@ import {
   setCustomHeader,
 } from "./utils.js";
 import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
-import { start_sync } from "./startSyncing.js";
+import { start_sync, currentProcess } from "./startSyncing.js";
 import { SyncProcess, SyncRequest } from "./types.js";
-import {
-  originalProvider_v9,
-  syncingProvider_v9,
-} from "./providers.js";
+import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
 
 export const syncEndpoint = async (req: Request, res: Response) => {
   try {
@@ -77,6 +74,151 @@ export const syncEndpoint = async (req: Request, res: Response) => {
     logger.error("Error starting sync process:", error);
     return res.status(500).json({
       error: `Failed to start sync: ${error.message || error}`,
+    });
+  }
+};
+
+// Cancel sync endpoint
+export const cancelSync = async (req: Request, res: Response) => {
+  try {
+    const processId = req.params.processId;
+    const { complete_current_block } = req.body;
+
+    // Validate processId
+    if (!processId) {
+      return res.status(400).json({
+        error: "Missing required parameter: processId",
+      });
+    }
+
+    // Validate complete_current_block
+    if (typeof complete_current_block !== "boolean") {
+      return res.status(400).json({
+        error:
+          "Missing or invalid required field: complete_current_block (must be boolean)",
+      });
+    }
+
+    // Find the process in the running processes map
+    const process = currentProcess!;
+
+    if (!process) {
+      return res.status(404).json({
+        error: "Process not found or not currently running",
+        processId,
+      });
+    }
+
+    // Check if already cancelled or completed
+    if (process.status !== "running") {
+      return res.status(400).json({
+        error: `Process is not running (current status: ${process.status})`,
+        processId,
+        status: process.status,
+      });
+    }
+
+    // Set cancellation flags
+    process.cancelRequested = true;
+    process.completeCurrentBlock = complete_current_block;
+
+    logger.info(
+      `🛑 Cancellation requested for process ${processId} (complete_current_block: ${complete_current_block})`,
+    );
+
+    // Return success response
+    return res.json({
+      message: complete_current_block
+        ? "Cancellation requested - will complete current block and stop"
+        : "Cancellation requested - will stop immediately after current transaction",
+      processId: process.id,
+      cancellationMode: complete_current_block
+        ? "complete_current_block"
+        : "immediate",
+      currentBlock: process.currentBlock,
+      currentTxIndex: process.currentTxIndex,
+      note: complete_current_block
+        ? "Process will complete all transactions in current block before stopping"
+        : "Process will stop after completing current transaction",
+      resumeInfo: {
+        message:
+          "To resume from this point, use these parameters in your next sync request:",
+        syncFrom: process.currentBlock,
+        startTxIndex: complete_current_block ? 0 : process.currentTxIndex,
+      },
+    });
+  } catch (error: any) {
+    logger.error("Error cancelling sync process:", error);
+    return res.status(500).json({
+      error: `Failed to cancel sync: ${error.message || error}`,
+    });
+  }
+};
+
+// Cancel current sync endpoint (without processId)
+export const cancelCurrentSync = async (req: Request, res: Response) => {
+  try {
+    const { complete_current_block } = req.body;
+
+    // Validate complete_current_block
+    if (typeof complete_current_block !== "boolean") {
+      return res.status(400).json({
+        error:
+          "Missing or invalid required field: complete_current_block (must be boolean)",
+      });
+    }
+
+    // Check if there's a running process
+    if (!currentProcess) {
+      return res.status(404).json({
+        error: "No sync process currently running",
+      });
+    }
+
+    // Check if already cancelled or completed
+    if (currentProcess.status !== "running") {
+      return res.status(400).json({
+        error: `Process is not running (current status: ${currentProcess.status})`,
+        processId: currentProcess.id,
+        status: currentProcess.status,
+      });
+    }
+
+    // Set cancellation flags
+    currentProcess.cancelRequested = true;
+    currentProcess.completeCurrentBlock = complete_current_block;
+
+    logger.info(
+      `🛑 Cancellation requested for current process ${currentProcess.id} (complete_current_block: ${complete_current_block})`,
+    );
+
+    // Return success response
+    return res.json({
+      message: complete_current_block
+        ? "Cancellation requested - will complete current block and stop"
+        : "Cancellation requested - will stop immediately after current transaction",
+      processId: currentProcess.id,
+      cancellationMode: complete_current_block
+        ? "complete_current_block"
+        : "immediate",
+      currentBlock: currentProcess.currentBlock,
+      currentTxIndex: currentProcess.currentTxIndex,
+      note: complete_current_block
+        ? "Process will complete all transactions in current block before stopping"
+        : "Process will stop after completing current transaction",
+      resumeInfo: {
+        message:
+          "To resume from this point, use these parameters in your next sync request:",
+        syncFrom: currentProcess.currentBlock,
+        startTxIndex: complete_current_block
+          ? 0
+          : currentProcess.currentTxIndex,
+      },
+    });
+  } catch (error: any) {
+    logger.error("Error cancelling current sync process:", error);
+    return res.status(500).json({
+      error: `Failed to cancel sync: ${error.message || error}`,
     });
   }
 };

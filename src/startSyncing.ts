@@ -6,6 +6,11 @@ import { v4 as uuidv4 } from "uuid";
 import { SyncBounds, SyncProcess } from "./types.js";
 
 import logger from "./logger.js";
+
+// In-memory registry of running sync processes
+// This is used for cancellation and status tracking while the pod is alive
+// Redis is only used for crash recovery/restart scenarios
+export let currentProcess: SyncProcess | null = null;
 import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
 import {
   closeBlock,
@@ -205,7 +210,7 @@ export async function start_sync(end_block: BlockIdentifier) {
   // Check if sync is already in progress (check in-memory, NOT Redis)
   // Redis just stores metadata, actual running state is in-memory
   // Don't check Redis here - that's what causes the issue!
-  
+
   let targetBlock = get_target_block(end_block);
 
   // Get sync bounds using pending block analysis
@@ -242,13 +247,19 @@ export async function start_sync(end_block: BlockIdentifier) {
     cancelRequested: false,
   };
 
+  // Add to in-memory registry for cancellation and status tracking
+  currentProcess = newProcess;
+
   logger.info(`🚀 Starting sync process ${processId}`);
   logger.info(`📊 ${bounds.message}`);
 
   // Start sync process asynchronously
   syncBlocksAsync(newProcess).catch(async (error) => {
     logger.error(`❌ Sync process ${processId} failed:`, error);
-    
+
+    // Remove from in-memory registry
+    currentProcess = null;
+
     // Update Redis status to failed
     try {
       await persistence.updateStatus(processId, "failed");
@@ -305,6 +316,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
         await persistence.updateStatus(process.id, "cancelled");
+        currentProcess = null;
         logger.info(
           `Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`,
         );
@@ -318,6 +330,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         currentBlock > process.currentBlock
       ) {
         await persistence.updateStatus(process.id, "cancelled");
+        currentProcess = null;
         logger.info(
           `Sync process ${process.id} cancelled after completing block ${process.currentBlock}`,
         );
@@ -357,6 +370,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // If we completed current block due to cancellation, stop here
         if (process.cancelRequested && process.completeCurrentBlock) {
           await persistence.updateStatus(process.id, "cancelled");
+          currentProcess = null;
           logger.info(
             `Sync process ${process.id} cancelled after completing current block ${currentBlock}`,
           );
@@ -377,11 +391,13 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
     // Sync completed successfully
     await persistence.updateStatus(process.id, "completed");
+    currentProcess = null;
     logger.info(
       `✅ Sync process ${process.id} completed successfully (${process.syncFrom} → ${process.syncTo})`,
     );
   } catch (error) {
     await persistence.updateStatus(process.id, "failed");
+    currentProcess = null;
     logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }

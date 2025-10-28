@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import logger from "./logger.js";
 import { persistence } from "./persistence.js";
 import { start_sync } from "./startSyncing.js";
-import { syncEndpoint } from "./syncing.js";
+import { syncEndpoint, cancelSync, cancelCurrentSync } from "./syncing.js";
 
 dotenv.config();
 
@@ -25,6 +25,12 @@ app.get("/health", (req, res) => {
 
 // Sync endpoint
 app.post("/sync", syncEndpoint);
+
+// Cancel sync endpoint
+app.post("/sync/cancel/:processId", cancelSync);
+
+// Cancel sync endpoint
+app.post("/sync/cancel", cancelCurrentSync);
 
 // 🆕 Clean slate function - clears all Redis data if CLEAN_SLATE=true
 async function handleCleanSlate(): Promise<void> {
