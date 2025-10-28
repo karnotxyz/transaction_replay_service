@@ -234,11 +234,11 @@ export async function syncBlock(
     `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no} (Process: ${process.id})`,
   );
 
-  if (blockWithTxs.transactions.length === 0) {
-    const errorMsg = `No transactions to process in block ${block_no}`;
-    logger.error(errorMsg);
-    throw new Error("No transactions to process in block");
-  }
+  // if (blockWithTxs.transactions.length === 0) {
+  //   const errorMsg = `No transactions to process in block ${block_no}`;
+  //   logger.error(errorMsg);
+  //   throw new Error("No transactions to process in block");
+  // }
 
   const transactionHashes: string[] = [];
   const startIndex = block_no === process.syncFrom ? process.currentTxIndex : 0;

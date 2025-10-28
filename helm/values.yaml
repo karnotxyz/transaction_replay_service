@@ -1,6 +1,6 @@
 # Namespace configuration
 namespace:
-  name: madara-system
+  name: madara-full-node
 
 nodePool:
   label: default # Change this to your actual node label
@@ -36,8 +36,8 @@ transaction_syncing_service:
   name: transaction-syncing-service
   replicas: 1
   image:
-    repository: "heemank/txn_replay_service"
-    tag: "persistence_160d887aec4e86a820260a4520c0ae184ae90877"
+    repository: "public.ecr.aws/o5q6k5w4/karnot-operator/txn_replay_service"
+    tag: "latest_74c5c7c9b1c6373151fc18b12c81d3dbd51d1480"
   resources:
     limits:
       cpu: 500m
@@ -46,8 +46,9 @@ transaction_syncing_service:
       cpu: 250m
       memory: 512Mi
   environment:
-    RPC_URL_ORIGINAL_NODE: "<<RPC URL>>"
-    RPC_URL_SYNCING_NODE: "http://madara-instance-h-madara-service.madara-system.svc.cluster.local:9944"
-    ADMIN_RPC_URL_SYNCING_NODE: "http://madara-instance-h-madara-service.madara-system.svc.cluster.local:9943"
+    RPC_URL_ORIGINAL_NODE: "<<API URL>>"
+    RPC_URL_SYNCING_NODE: "http://madara-paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9944"
+    ADMIN_RPC_URL_SYNCING_NODE: "http://madara-paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9943"
     # Redis URL will be automatically constructed: redis://<redis-name>.<namespace>.svc.cluster.local:<port>
-    REDIS_URL: "redis://redis-instance.madara-system.svc.cluster.local:6379"
+    REDIS_URL: "redis://redis-instance.madara-full-node.svc.cluster.local:6379"
+    CLEAN_STATE: "false"
