@@ -210,6 +210,20 @@ export async function start_sync(end_block: BlockIdentifier) {
   // Check if sync is already in progress (check in-memory, NOT Redis)
   // Redis just stores metadata, actual running state is in-memory
   // Don't check Redis here - that's what causes the issue!
+  if (currentProcess && currentProcess.status === "running") {
+    const error = new Error(
+      `Sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
+    ) as any;
+    error.code = "SYNC_IN_PROGRESS";
+    error.details = {
+      processId: currentProcess.id,
+      currentBlock: currentProcess.currentBlock,
+      currentTxIndex: currentProcess.currentTxIndex,
+      syncFrom: currentProcess.syncFrom,
+      syncTo: currentProcess.syncTo,
+    };
+    throw error;
+  }
 
   let targetBlock = get_target_block(end_block);
 
