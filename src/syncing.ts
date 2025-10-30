@@ -8,6 +8,7 @@ import {
   validateTransactionReceipt,
   matchBlockHash,
   setCustomHeader,
+  getBlockWithTxsWithRetry,
 } from "./utils.js";
 import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
 import { start_sync, currentProcess } from "./startSyncing.js";
@@ -228,7 +229,10 @@ export async function syncBlock(
   block_no: number,
   process: SyncProcess,
 ): Promise<boolean> {
-  const blockWithTxs = await originalProvider_v9.getBlockWithTxs(block_no);
+  const blockWithTxs = await getBlockWithTxsWithRetry(
+    originalProvider_v9,
+    block_no,
+  );
 
   logger.info(
     `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no} (Process: ${process.id})`,
@@ -250,7 +254,9 @@ export async function syncBlock(
       process.status = "cancelled";
       process.endTime = new Date();
       logger.info(
-        `Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${i - 1}`,
+        `Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${
+          i - 1
+        }`,
       );
       return false; // Block not completed
     }
@@ -259,7 +265,9 @@ export async function syncBlock(
     process.currentTxIndex = i;
 
     logger.info(
-      `Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${tx.transaction_hash}`,
+      `Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${
+        tx.transaction_hash
+      }`,
     );
 
     try {
@@ -323,7 +331,9 @@ export async function validateBlock(currentBlock: number): Promise<void> {
 
       if (retryCount > maxRetries) {
         throw new Error(
-          `Failed to validate block ${currentBlock} after ${maxRetries + 1} attempts. Latest error: ${error}`,
+          `Failed to validate block ${currentBlock} after ${
+            maxRetries + 1
+          } attempts. Latest error: ${error}`,
         );
       }
 

@@ -245,6 +245,40 @@ export async function getBlockHash(
   throw new Error("Unexpected end of retry loop");
 }
 
+export async function getBlockWithTxsWithRetry(
+  provider: RpcProvider,
+  block_number: number,
+) {
+  const maxRetries = 8; // 2^8 = 256 seconds max
+  let retryCount = 0;
+
+  while (retryCount <= maxRetries) {
+    try {
+      const blockWithTxs = await provider.getBlockWithTxs(block_number);
+      return blockWithTxs;
+    } catch (error) {
+      retryCount++;
+
+      if (retryCount > maxRetries) {
+        throw new Error(
+          `Failed to get block with transactions for block ${block_number} after ${maxRetries + 1} attempts (max 256s). Latest error: ${error}`,
+        );
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
+      const delay = Math.pow(2, retryCount) * 1000;
+      logger.warn(
+        `Failed to get block with transactions for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  // This should never be reached, but satisfies TypeScript
+  throw new Error("Unexpected end of retry loop");
+}
+
 // Get latest block number with extended retry logic (up to 256 seconds)
 export async function getLatestBlockNumberWithRetry(): Promise<number> {
   const maxRetries = 8; // 2^8 = 256 seconds max
@@ -404,7 +438,8 @@ export async function postWithRetry(
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const result = await axios.post(url, data);
     if (result.data.error && result.data.error.code === 55) {
-      console.log("Account validation failed, retrying in 30 seconds, ");
+      console.log(`Account validation failed, retrying in 30 seconds, result:`);
+      console.log(result.data);
       await new Promise((resolve) => setTimeout(resolve, SLEEP));
     } else {
       return result;
