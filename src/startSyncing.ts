@@ -34,8 +34,6 @@ export async function find_syncing_bounds(
   );
 
   const Y = syncing_node_pre_confirmed_block.transactions.length; // Transactions in pending/pre-confirmed block
-  console.log(Y);
-  console.log(syncing_node_pre_confirmed_block);
   const N = syncing_node_pre_confirmed_block.block_number!; // Current block being built
 
   // Get the latest block from original node
@@ -43,8 +41,6 @@ export async function find_syncing_bounds(
     originalProvider_v9,
     BlockTag.LATEST,
   );
-
-  console.log("HERE", original_node_latest_block);
 
   const original_node_latest_block_number =
     original_node_latest_block.block_number!;
@@ -352,7 +348,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`Syncing block ${currentBlock} (Process: ${process.id})...`);
+      logger.info(`Syncing block ${currentBlock}`);
 
       try {
         await validateBlock(currentBlock);
@@ -378,7 +374,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         await persistence.updateLastChecked(process.id);
 
         logger.info(
-          `Block ${currentBlock} completed successfully (Process: ${process.id})`,
+          `Block ${currentBlock} completed successfully`,
         );
 
         // If we completed current block due to cancellation, stop here

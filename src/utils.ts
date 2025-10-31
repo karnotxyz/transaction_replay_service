@@ -37,7 +37,6 @@ export async function getNonce(
   const address_nonce = nonce_tracker[address];
   nonce_tracker[address] += 1;
 
-  console.log(nonce_tracker[address]);
   return `0x${address_nonce.toString(16)}`;
 }
 
@@ -208,7 +207,7 @@ export async function getBlockHash(
   provider: RpcProvider,
   block_number: number,
 ): Promise<string | null> {
-  const maxRetries = 8; // 2^8 = 256 seconds max
+  const maxRetries = 100; // 2^8 = 256 seconds max
   let retryCount = 0;
 
   while (retryCount <= maxRetries) {
@@ -231,8 +230,7 @@ export async function getBlockHash(
         );
       }
 
-      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s = 255s total
-      const delay = Math.pow(2, retryCount) * 1000;
+      const delay = Math.pow(2, retryCount) * 50;
       logger.warn(
         `Failed to get block hash for block ${block_number} (attempt ${retryCount}), retrying in ${delay}ms:`,
         error,
@@ -364,8 +362,6 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     );
 
     const gas_prices = await getGasPrices(originalProvider_v9, currentBlock);
-    console.log(gas_prices);
-
     const response = await axios.post<MadaraRpcResponse>(
       process.env.ADMIN_RPC_URL_SYNCING_NODE!,
       {
@@ -513,8 +509,8 @@ export async function validateTransactionReceipt(
 }
 
 export async function matchBlockHash(block_number: number): Promise<void> {
-  const maxAttempts = 4;
-  const baseDelay = 2000; // 2 seconds
+  const maxAttempts = 400;
+  const baseDelay = 100; // 100 ms
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -547,6 +543,7 @@ export async function matchBlockHash(block_number: number): Promise<void> {
         const errorMsg = `Block hashes do not match for block number ${block_number}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
+        return;
       }
 
       // Success - exit the retry loop
@@ -566,37 +563,3 @@ export async function matchBlockHash(block_number: number): Promise<void> {
     }
   }
 }
-// // Process receipt validation for a single transaction
-// export async function validateTransactionReceipt(
-//   provider: RpcProvider,
-//   tx_hash: string,
-//   expectedBlockNumber: number
-// ): Promise<void> {
-//   try {
-//     console.log(`Getting receipt for transaction - ${tx_hash}`);
-
-//     const transactionReceipt = await getTransactionReceipt(provider, tx_hash);
-
-//     // Validate if the transaction was a success or not !
-//     if (!transactionReceipt.isSuccess()) {
-//       throw new Error(`Transaction ${tx_hash} failed`);
-//     }
-
-//     let txn_receipt = transactionReceipt.value;
-
-//     // Validate that the transaction was successful and in the correct block
-//     if (txn_receipt.block_number !== expectedBlockNumber) {
-//       throw new Error(
-//         `Transaction ${tx_hash} receipt block number ${txn_receipt.block_number} does not match expected block ${expectedBlockNumber}`
-//       );
-//     }
-
-//     console.log(`Successfully validated receipt for transaction - ${tx_hash}`);
-//     logger.info(`Receipt validated for transaction - ${tx_hash} in block ${txn_receipt.block_number}`);
-
-//   } catch (error) {
-//     const errorMsg = `Failed to validate receipt for transaction ${tx_hash}: ${error}`;
-//     logger.error(errorMsg);
-//     throw error;
-//   }
-// }

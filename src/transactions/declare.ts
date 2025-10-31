@@ -8,8 +8,6 @@ export async function generalDeclare(
   syncingProvider: starknet.RpcProvider,
 ) {
   let tx_version = tx.version;
-  console.log("Declare Transaction Version: ", tx);
-  console.log("Declare Transaction Version: ", tx_version);
 
   switch (tx_version) {
     case "0x0": {
@@ -165,8 +163,6 @@ async function declareV2(
     compiledClassHash: txn.compiled_class_hash,
   };
 
-  console.log("declareV2 #4");
-
   let invocationDetails = {
     nonce: txn.nonce,
     maxFee: txn.max_fee,
@@ -236,8 +232,6 @@ async function declareV3(
     signature: txn.signature,
     compiledClassHash: txn.compiled_class_hash,
   };
-
-  console.log("declareV2 #4");
 
   let invocationDetails = {
     nonce: txn.nonce,

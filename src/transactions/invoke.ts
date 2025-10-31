@@ -6,7 +6,6 @@ export async function generalInvoke(
   tx: starknet.TransactionWithHash,
   syncingProvider: starknet.RpcProvider,
 ) {
-  // console.log("Invoking transaction with version : ", tx.version);
   let tx_version = tx.version;
 
   switch (tx_version) {

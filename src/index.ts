@@ -4,6 +4,12 @@ import logger from "./logger.js";
 import { persistence } from "./persistence.js";
 import { start_sync } from "./startSyncing.js";
 import { syncEndpoint, cancelSync, cancelCurrentSync } from "./syncing.js";
+// 🆕 NEW IMPORTS for snap sync
+import {
+  snapSyncEndpoint,
+  cancelSnapSync,
+  getSnapSyncStatus,
+} from "./snapSync.js";
 
 dotenv.config();
 
@@ -23,14 +29,30 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Sync endpoint
+// Sync endpoint - Sequential transaction processing
 app.post("/sync", syncEndpoint);
 
 // Cancel sync endpoint
 app.post("/sync/cancel/:processId", cancelSync);
 
-// Cancel sync endpoint
+// Cancel current sync endpoint
 app.post("/sync/cancel", cancelCurrentSync);
+
+// ========================================
+// 🆕 NEW SNAP SYNC ENDPOINTS (Parallel)
+// ========================================
+
+// Snap sync endpoint - PARALLEL transaction processing
+// Usage: POST /snap_sync with body: { "endBlock": 308142 }
+app.post("/snap_sync", snapSyncEndpoint);
+
+// Cancel snap sync endpoint
+// Usage: POST /snap_sync/cancel
+app.post("/snap_sync/cancel", cancelSnapSync);
+
+// Get snap sync status
+// Usage: GET /snap_sync/status
+app.get("/snap_sync/status", getSnapSyncStatus);
 
 // 🆕 Clean slate function - clears all Redis data if CLEAN_SLATE=true
 async function handleCleanSlate(): Promise<void> {
@@ -134,35 +156,12 @@ async function autoResumeOnStartup(): Promise<void> {
   }
 }
 
-// Periodic auto-resume check (every 3 minutes)
-let periodicCheckInterval: NodeJS.Timeout | null = null;
-
-function startPeriodicAutoResume(): void {
-  const CHECK_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
-
-  logger.info(
-    `⏰ Starting periodic auto-resume check (every ${CHECK_INTERVAL_MS / 1000 / 60} minutes)`,
-  );
-
-  periodicCheckInterval = setInterval(async () => {
-    try {
-      // Only check if Redis is connected
-      if (!persistence.isConnected()) {
-        logger.debug("⏭️  Periodic check skipped - Redis not connected");
-        return;
-      }
-
-      logger.info("🔍 Periodic auto-resume check...");
-      await autoResumeOnStartup();
-    } catch (error) {
-      logger.error("❌ Error in periodic auto-resume check:", error);
-    }
-  }, CHECK_INTERVAL_MS);
-}
-
 // Main function
 async function main() {
   console.log("🚀 Starting Transaction Replay Service");
+  console.log(
+    "⚡ SNAP SYNC mode available - use /snap_sync for parallel processing",
+  );
 
   try {
     app.listen(PORT, async () => {
@@ -177,22 +176,23 @@ async function main() {
       // Auto-resume any incomplete processes (unless clean slate was performed)
       await autoResumeOnStartup();
 
-      // Start periodic checks
-      startPeriodicAutoResume();
-
       logger.info("✅ Service fully initialized and ready");
+      logger.info("📌 Available endpoints:");
+      logger.info("  • POST /sync - Sequential transaction processing");
+      logger.info("  • POST /snap_sync - Parallel transaction processing");
+      logger.info("  • POST /sync/cancel - Cancel sequential sync");
+      logger.info("  • POST /snap_sync/cancel - Cancel snap sync");
+      logger.info("  • GET /snap_sync/status - Get snap sync status");
     });
 
     process.on("SIGINT", async () => {
       logger.info("\n👋 Shutting down gracefully...");
-      if (periodicCheckInterval) clearInterval(periodicCheckInterval);
       await persistence.close();
       process.exit(0);
     });
 
     process.on("SIGTERM", async () => {
       logger.info("\n👋 Shutting down gracefully...");
-      if (periodicCheckInterval) clearInterval(periodicCheckInterval);
       await persistence.close();
       process.exit(0);
     });

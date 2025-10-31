@@ -235,7 +235,7 @@ export async function syncBlock(
   );
 
   logger.info(
-    `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no} (Process: ${process.id})`,
+    `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no}`,
   );
 
   // if (blockWithTxs.transactions.length === 0) {
@@ -272,6 +272,8 @@ export async function syncBlock(
 
     try {
       const tx_hash = await processTx(tx, block_no);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       if (i === startIndex) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -312,11 +314,8 @@ export async function validateBlock(currentBlock: number): Promise<void> {
   while (retryCount <= maxRetries && !blockValidated) {
     try {
       const latestBlockNumber = await getLatestBlockNumber(syncingProvider_v9);
-      // console.log(`Latest block number check (attempt ${retryCount + 1}): ${latestBlockNumber}, expecting: ${currentBlock - 1}`);
-
       if (latestBlockNumber + 1 === currentBlock) {
         blockValidated = true;
-        // console.log(`Block ${currentBlock} validation successful`);
       } else {
         throw new Error(
           `Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`,
