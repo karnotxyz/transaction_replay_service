@@ -42,10 +42,10 @@ async function invokeV0(
 
   let txn = tx as unknown as INVOKE_TXN_V0;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
     id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addInvokeTransaction",
+    method: "madara_V0_1_0_bypassAddInvokeTransaction",
     params: [
       {
         type: "INVOKE",
@@ -78,10 +78,10 @@ async function invokeV1(
 
   let txn = tx as unknown as INVOKE_TXN_V1;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
     id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addInvokeTransaction",
+    method: "madara_V0_1_0_bypassAddInvokeTransaction",
     params: [
       {
         type: "INVOKE",
@@ -119,10 +119,10 @@ async function invokeV3(
 
   let txn = tx as unknown as INVOKE_TXN_V3;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
     id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addInvokeTransaction",
+    method: "madara_V0_1_0_bypassAddInvokeTransaction",
     params: [
       {
         type: "INVOKE",

@@ -105,7 +105,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     logger.info(
       `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
     );
-    logger.info(`⚡ Mode: PARALLEL transaction processing`);
+    logger.info(`⚡ Mode: SEQUENTIAL sending, PARALLEL receipt validation`);
 
     // Start snap sync asynchronously
     snapSyncBlocksAsync(newProcess).catch(async (error) => {
@@ -122,13 +122,13 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     return res.status(202).json({
       message: "Snap sync process started successfully",
       processId,
-      mode: "parallel",
+      mode: "sequential-send-parallel-receipt",
       status: {
         startBlock,
         endBlock: targetBlock,
         totalBlocks: newProcess.totalBlocks,
       },
-      note: "Transactions within each block will be processed in parallel for faster synchronization",
+      note: "Transactions will be sent sequentially, then all receipts validated in parallel before closing block",
     });
   } catch (error: any) {
     logger.error("Error starting snap sync process:", error);
@@ -167,8 +167,8 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 }
 
 /**
- * Process a single block with PARALLEL transaction processing
- * This is the key difference from regular sync - all transactions are sent at once
+ * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
+ * Transactions are sent one by one, then all receipts are validated in parallel
  */
 async function snapSyncBlock(
   blockNumber: number,
@@ -190,13 +190,16 @@ async function snapSyncBlock(
     return;
   }
 
-  // ⚡ PARALLEL PROCESSING - Send all transactions at once
-  logger.info(`⚡ Sending ${transactions.length} transactions in PARALLEL...`);
+  // 📤 SEQUENTIAL SENDING - Send transactions one by one
+  logger.info(`📤 Sending ${transactions.length} transactions SEQUENTIALLY...`);
 
   const startTime = Date.now();
 
-  // Send all transactions in parallel
-  const sendPromises = transactions.map(async (tx, index) => {
+  // Send all transactions sequentially
+  const txResults: TransactionResult[] = [];
+
+  for (let index = 0; index < transactions.length; index++) {
+    const tx = transactions[index];
     try {
       const txWithHash = tx as TransactionWithHash;
       const txHash = txWithHash.transaction_hash;
@@ -208,52 +211,23 @@ async function snapSyncBlock(
       // Process the transaction (send it to syncing node)
       await processTx(txWithHash, blockNumber);
 
-      return {
+      txResults.push({
         txHash,
         success: true,
-      } as TransactionResult;
+      });
     } catch (error: any) {
       logger.error(
         `  ❌ Failed to send transaction ${index + 1}:`,
         error.message,
       );
-      return {
-        txHash: (tx as TransactionWithHash).transaction_hash,
-        success: false,
-        error: error.message,
-      } as TransactionResult;
+      throw new Error(
+        `Failed to send transaction ${index + 1}/${transactions.length} in block ${blockNumber}: ${error.message}`,
+      );
     }
-  });
-
-  // Wait for ALL transactions to be sent
-  const sendResults = await Promise.allSettled(sendPromises);
+  }
 
   const sendDuration = Date.now() - startTime;
-  logger.info(`✅ All transactions sent in ${sendDuration}ms`);
-
-  // Check for failures
-  const failedSends = sendResults.filter(
-    (result) => result.status === "rejected",
-  );
-  if (failedSends.length > 0) {
-    throw new Error(
-      `Failed to send ${failedSends.length}/${transactions.length} transactions in block ${blockNumber}`,
-    );
-  }
-
-  // Get successful results
-  const txResults = sendResults
-    .filter((result) => result.status === "fulfilled")
-    .map(
-      (result) => (result as PromiseFulfilledResult<TransactionResult>).value,
-    );
-
-  const failedTxs = txResults.filter((r) => !r.success);
-  if (failedTxs.length > 0) {
-    throw new Error(
-      `${failedTxs.length}/${transactions.length} transactions failed to send in block ${blockNumber}`,
-    );
-  }
+  logger.info(`✅ All transactions sent sequentially in ${sendDuration}ms`);
 
   // ⚡ PARALLEL RECEIPT VALIDATION - Wait for all receipts at once
   logger.info(`⚡ Waiting for ${transactions.length} receipts in PARALLEL...`);
@@ -263,7 +237,7 @@ async function snapSyncBlock(
   const receiptPromises = txResults.map(async (result) => {
     try {
       await validateTransactionReceipt(syncingProvider_v9, result.txHash, {
-        maxRetries: 20,
+        maxRetries: 2000,
         useExponentialBackoff: false,
         fixedDelay: 100,
       });
@@ -296,12 +270,12 @@ async function snapSyncBlock(
 
   const totalDuration = Date.now() - startTime;
   logger.info(
-    `⚡ Block ${blockNumber} completed in ${totalDuration}ms (${transactions.length} txs in parallel)`,
+    `⚡ Block ${blockNumber} completed in ${totalDuration}ms (${transactions.length} txs sent sequentially, receipts validated in parallel)`,
   );
 }
 
 /**
- * Async function to process blocks sequentially, but transactions in parallel
+ * Async function to process blocks sequentially, with sequential tx sending and parallel receipt validation
  */
 async function snapSyncBlocksAsync(process: SnapSyncProcess): Promise<void> {
   try {
@@ -323,9 +297,7 @@ async function snapSyncBlocksAsync(process: SnapSyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(
-        `\n⚡ SNAP SYNCING Block ${currentBlock}`,
-      );
+      logger.info(`\n⚡ SNAP SYNCING Block ${currentBlock}`);
 
       try {
         // Validate block order
@@ -334,7 +306,7 @@ async function snapSyncBlocksAsync(process: SnapSyncProcess): Promise<void> {
         // Set custom headers for the block
         await setCustomHeader(currentBlock);
 
-        // Process block with PARALLEL transaction processing
+        // Process block with SEQUENTIAL tx sending and PARALLEL receipt validation
         await snapSyncBlock(currentBlock, process);
 
         // Close the block
@@ -461,7 +433,7 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
     return res.json({
       processId: currentSnapSyncProcess.id,
       status: currentSnapSyncProcess.status,
-      mode: "parallel",
+      mode: "sequential-send-parallel-receipt",
       progress: {
         currentBlock: currentSnapSyncProcess.currentBlock,
         endBlock: currentSnapSyncProcess.endBlock,

@@ -542,7 +542,6 @@ export async function matchBlockHash(block_number: number): Promise<void> {
       if (paradexBlock !== madaraBlock) {
         const errorMsg = `Block hashes do not match for block number ${block_number}`;
         logger.error(errorMsg);
-        throw new Error(errorMsg);
         return;
       }
 
