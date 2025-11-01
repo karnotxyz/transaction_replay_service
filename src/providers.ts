@@ -1,39 +1,52 @@
 import { RpcProvider } from "starknet";
-import dotenv from "dotenv";
-dotenv.config();
+import { config } from "./config.js";
+import { RpcVersion, RpcVersionPaths, RpcVersionType } from "./constants.js";
 
-const baseOriginalUrl = process.env.RPC_URL_ORIGINAL_NODE!;
-const baseSyncingUrl = process.env.RPC_URL_SYNCING_NODE!;
-
-type RpcVersion = "0.8.1" | "0.9.0";
 type NodeType = "Original" | "Syncing";
 
-const versionMap: Record<RpcVersion, string> = {
-  // "0.7.1": "/rpc/v0_7_1", # Not supported by latest starknet version
-  "0.8.1": "/rpc/v0_8_1",
-  "0.9.0": "/rpc/v0_9",
-};
+/**
+ * Create an RPC provider for a specific node and version
+ */
+function createProvider(node: NodeType, version: RpcVersionType): RpcProvider {
+  const baseUrl =
+    node === "Original" ? config.rpcUrlOriginalNode : config.rpcUrlSyncingNode;
 
-function createProvider(node: NodeType, version: RpcVersion): RpcProvider {
-  const baseUrl = node === "Original" ? baseOriginalUrl : baseSyncingUrl;
+  const nodeUrl = `${baseUrl}${RpcVersionPaths[version]}`;
 
   return new RpcProvider({
-    nodeUrl: `${baseUrl}${versionMap[version]}`,
+    nodeUrl,
     specVersion: version,
   });
 }
 
-// const originalProvider_v7 = createProvider("Original", "0.7.1");
-const originalProvider_v8 = createProvider("Original", "0.8.1");
-const originalProvider_v9 = createProvider("Original", "0.9.0");
+// Original node providers
+export const originalProvider_v8 = createProvider(
+  "Original",
+  RpcVersion.V0_8_1,
+);
+export const originalProvider_v9 = createProvider(
+  "Original",
+  RpcVersion.V0_9_0,
+);
 
-// const syncingProvider_v7 = createProvider("Syncing", "0.7.1");
-const syncingProvider_v8 = createProvider("Syncing", "0.8.1");
-const syncingProvider_v9 = createProvider("Syncing", "0.9.0");
+// Syncing node providers
+export const syncingProvider_v8 = createProvider("Syncing", RpcVersion.V0_8_1);
+export const syncingProvider_v9 = createProvider("Syncing", RpcVersion.V0_9_0);
 
-export {
-  originalProvider_v9,
-  originalProvider_v8,
-  syncingProvider_v9,
-  syncingProvider_v8,
-};
+/**
+ * Get provider by version and node type
+ */
+export function getProvider(
+  version: RpcVersionType,
+  node: NodeType = "Syncing",
+): RpcProvider {
+  if (node === "Original") {
+    return version === RpcVersion.V0_8_1
+      ? originalProvider_v8
+      : originalProvider_v9;
+  } else {
+    return version === RpcVersion.V0_8_1
+      ? syncingProvider_v8
+      : syncingProvider_v9;
+  }
+}

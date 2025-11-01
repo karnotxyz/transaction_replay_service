@@ -1,23 +1,33 @@
-// persistence.ts
 import Redis from "ioredis";
 import logger from "./logger.js";
 import { StoredSyncProcess } from "./types.js";
+import { config } from "./config.js";
+import {
+  RedisKeys,
+  TimeoutConfig,
+  ProcessStatus,
+  ProcessStatusType,
+} from "./constants.js";
 
 class PersistenceLayer {
   private redis: Redis.Redis;
   private connected: boolean = false;
 
   constructor() {
-    const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-    this.redis = new Redis.Redis(redisUrl, {
+    this.redis = new Redis.Redis(config.redisUrl, {
       retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
+        const delay = Math.min(times * TimeoutConfig.REDIS_RETRY_DELAY, 2000);
         return delay;
       },
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: TimeoutConfig.REDIS_MAX_RETRIES,
       enableOfflineQueue: true,
+      connectTimeout: TimeoutConfig.REDIS_CONNECT_TIMEOUT,
     });
 
+    this.setupEventHandlers();
+  }
+
+  private setupEventHandlers(): void {
     this.redis.on("connect", () => {
       logger.info("✅ Redis connected successfully");
       this.connected = true;
@@ -38,25 +48,27 @@ class PersistenceLayer {
     });
   }
 
-  // Check if connected
-  isConnected(): boolean {
+  /**
+   * Check if Redis is connected
+   */
+  public isConnected(): boolean {
     return this.connected;
   }
 
-  // 🆕 Clear all sync data from Redis
-  async clearAllSyncData(): Promise<number> {
+  /**
+   * Clear all sync data from Redis
+   */
+  public async clearAllSyncData(): Promise<number> {
     try {
       logger.warn("🧹 Clearing all sync data from Redis...");
 
-      // Get all sync keys
-      const keys = await this.redis.keys("sync:*");
+      const keys = await this.redis.keys(`${RedisKeys.SYNC_PROCESS_PREFIX}*`);
 
       if (keys.length === 0) {
         logger.info("✅ No sync data found in Redis (already clean)");
         return 0;
       }
 
-      // Delete all sync keys
       const deleted = await this.redis.del(...keys);
 
       logger.info(`✅ Cleared ${deleted} sync process(es) from Redis`);
@@ -67,20 +79,22 @@ class PersistenceLayer {
     }
   }
 
-  // Save sync process metadata (with continuous sync support)
-  async saveSyncProcess(
+  /**
+   * Save sync process metadata
+   */
+  public async saveSyncProcess(
     processId: string,
     syncFrom: number,
     syncTo: number,
     isContinuous: boolean = false,
     originalTarget?: number,
   ): Promise<void> {
-    const key = `sync:${processId}`;
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     const data: Record<string, string> = {
       processId,
       syncFrom: syncFrom.toString(),
       syncTo: syncTo.toString(),
-      status: "running",
+      status: ProcessStatus.RUNNING,
       createdAt: new Date().toISOString(),
       lastChecked: new Date().toISOString(),
       isContinuous: isContinuous.toString(),
@@ -98,9 +112,13 @@ class PersistenceLayer {
     );
   }
 
-  // Get sync process metadata
-  async getSyncProcess(processId: string): Promise<StoredSyncProcess | null> {
-    const key = `sync:${processId}`;
+  /**
+   * Get sync process metadata
+   */
+  public async getSyncProcess(
+    processId: string,
+  ): Promise<StoredSyncProcess | null> {
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     const data = await this.redis.hgetall(key);
 
     if (!data || Object.keys(data).length === 0) {
@@ -111,7 +129,7 @@ class PersistenceLayer {
       processId: data.processId,
       syncFrom: parseInt(data.syncFrom),
       syncTo: parseInt(data.syncTo),
-      status: data.status as any,
+      status: data.status as ProcessStatusType,
       createdAt: data.createdAt || new Date().toISOString(),
       lastChecked:
         data.lastChecked || data.lastUpdated || new Date().toISOString(),
@@ -120,40 +138,51 @@ class PersistenceLayer {
     };
   }
 
-  // Update sync target (for continuous sync when new blocks are detected)
-  async updateSyncTarget(processId: string, newTarget: number): Promise<void> {
-    const key = `sync:${processId}`;
+  /**
+   * Update sync target (for continuous sync)
+   */
+  public async updateSyncTarget(
+    processId: string,
+    newTarget: number,
+  ): Promise<void> {
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     await this.redis.hset(key, "syncTo", newTarget.toString());
     await this.redis.hset(key, "lastChecked", new Date().toISOString());
     logger.info(`📈 Updated process ${processId} target to block ${newTarget}`);
   }
 
-  // Update last checked timestamp
-  async updateLastChecked(processId: string): Promise<void> {
-    const key = `sync:${processId}`;
+  /**
+   * Update last checked timestamp
+   */
+  public async updateLastChecked(processId: string): Promise<void> {
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     await this.redis.hset(key, "lastChecked", new Date().toISOString());
   }
 
-  // Update status
-  async updateStatus(
+  /**
+   * Update process status
+   */
+  public async updateStatus(
     processId: string,
-    status: "running" | "completed" | "failed" | "cancelled",
+    status: ProcessStatusType,
   ): Promise<void> {
-    const key = `sync:${processId}`;
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     await this.redis.hset(key, "status", status);
     await this.redis.hset(key, "lastChecked", new Date().toISOString());
     logger.info(`📝 Updated process ${processId} status to ${status}`);
   }
 
-  // Get all active (running) processes
-  async getActiveProcesses(): Promise<StoredSyncProcess[]> {
-    const keys = await this.redis.keys("sync:*");
+  /**
+   * Get all active (running) processes
+   */
+  public async getActiveProcesses(): Promise<StoredSyncProcess[]> {
+    const keys = await this.redis.keys(`${RedisKeys.SYNC_PROCESS_PREFIX}*`);
     const processes: StoredSyncProcess[] = [];
 
     for (const key of keys) {
       const status = await this.redis.hget(key, "status");
-      if (status === "running") {
-        const processId = key.replace("sync:", "");
+      if (status === ProcessStatus.RUNNING) {
+        const processId = key.replace(RedisKeys.SYNC_PROCESS_PREFIX, "");
         const process = await this.getSyncProcess(processId);
         if (process) {
           processes.push(process);
@@ -164,8 +193,10 @@ class PersistenceLayer {
     return processes;
   }
 
-  // Get the most recent active process (for auto-resume)
-  async getMostRecentActiveProcess(): Promise<StoredSyncProcess | null> {
+  /**
+   * Get the most recent active process (for auto-resume)
+   */
+  public async getMostRecentActiveProcess(): Promise<StoredSyncProcess | null> {
     const activeProcesses = await this.getActiveProcesses();
 
     if (activeProcesses.length === 0) {
@@ -182,15 +213,19 @@ class PersistenceLayer {
     return activeProcesses[0];
   }
 
-  // Delete a process
-  async deleteProcess(processId: string): Promise<void> {
-    const key = `sync:${processId}`;
+  /**
+   * Delete a process
+   */
+  public async deleteProcess(processId: string): Promise<void> {
+    const key = `${RedisKeys.SYNC_PROCESS_PREFIX}${processId}`;
     await this.redis.del(key);
     logger.info(`🗑️  Deleted process ${processId}`);
   }
 
-  // Close connection
-  async close(): Promise<void> {
+  /**
+   * Close Redis connection
+   */
+  public async close(): Promise<void> {
     await this.redis.quit();
     logger.info("👋 Redis connection closed");
   }

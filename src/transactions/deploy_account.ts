@@ -1,7 +1,10 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
+import { config } from "../config.js";
 
-// https://www.quicknode.com/docs/starknet/starknet_addDeployAccountTransaction
+/**
+ * General deploy account transaction handler
+ */
 export async function generalDeployAccount(
   tx: starknet.TransactionWithHash,
   syncingProvider: starknet.RpcProvider,
@@ -40,7 +43,7 @@ async function deployAccountV1(
   };
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V1;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.rpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeployAccountTransaction",
@@ -82,7 +85,7 @@ async function deployAccountV3(
 
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V3;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.rpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeployAccountTransaction",

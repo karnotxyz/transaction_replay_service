@@ -1,5 +1,7 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
+import { config } from "../config.js";
+import { L1HandlerConfig } from "../constants.js";
 
 export async function l1_handler_message(
   tx: starknet.TransactionWithHash,
@@ -37,10 +39,10 @@ export async function l1_handler_message(
       entry_point_selector: txn.entry_point_selector,
       calldata: txn.calldata,
     },
-    paid_fee_on_l1: 128328, // You may want to make this dynamic based on your needs
+    paid_fee_on_l1: L1HandlerConfig.DEFAULT_PAID_FEE,
   };
 
-  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "madara_V0_1_0_addL1HandlerMessage",

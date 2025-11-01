@@ -1,7 +1,7 @@
 {
   "name": "transaction_replay_service",
   "version": "1.0.0",
-  "description": "",
+  "description": "Transaction replay service for Starknet block synchronization",
   "main": "dist/index.js",
   "scripts": {
     "clean": "rm -rf dist",
@@ -9,10 +9,17 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "check": "tsc --noEmit",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
   },
   "type": "module",
-  "keywords": [],
+  "keywords": [
+    "starknet",
+    "blockchain",
+    "sync",
+    "transactions"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {

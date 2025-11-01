@@ -1,7 +1,10 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
+import { config } from "../config.js";
 
-// https://www.quicknode.com/docs/starknet/starknet_addInvokeTransaction
+/**
+ * General invoke transaction handler - routes to version-specific handlers
+ */
 export async function generalInvoke(
   tx: starknet.TransactionWithHash,
   syncingProvider: starknet.RpcProvider,
@@ -42,7 +45,7 @@ async function invokeV0(
 
   let txn = tx as unknown as INVOKE_TXN_V0;
 
-  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "madara_V0_1_0_bypassAddInvokeTransaction",
@@ -78,7 +81,7 @@ async function invokeV1(
 
   let txn = tx as unknown as INVOKE_TXN_V1;
 
-  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "madara_V0_1_0_bypassAddInvokeTransaction",
@@ -119,7 +122,7 @@ async function invokeV3(
 
   let txn = tx as unknown as INVOKE_TXN_V3;
 
-  const result = await postWithRetry(process.env.ADMIN_RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "madara_V0_1_0_bypassAddInvokeTransaction",

@@ -1,170 +1,78 @@
-import dotenv from "dotenv";
-import express, { Request, Response } from "express";
-import bodyParser from "body-parser";
-import { v4 as uuidv4 } from "uuid";
-
-import { SyncBounds, SyncProcess } from "./types.js";
-
 import logger from "./logger.js";
-
-// In-memory registry of running sync processes
-// This is used for cancellation and status tracking while the pod is alive
-// Redis is only used for crash recovery/restart scenarios
-export let currentProcess: SyncProcess | null = null;
+import { v4 as uuidv4 } from "uuid";
+import { SyncBounds, SyncProcess } from "./types.js";
 import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
 import {
-  closeBlock,
-  getBlock,
   getLatestBlockNumber,
-  getPreConfirmedBlock,
-  MadaraDownError,
+  getBlock,
+  getBlockWithTxs,
+  closeBlock,
   matchBlockHash,
   setCustomHeader,
-  waitForMadaraRecovery,
-} from "./utils.js";
+} from "./operations/blockOperations.js";
 import { BlockTag, BlockIdentifier, BlockWithTxHashes } from "starknet";
 import { persistence } from "./persistence.js";
-import { syncBlock, validateBlock } from "./syncing.js";
+import { syncStateManager } from "./state/index.js";
+import { probeManager } from "./probe/index.js";
+import { blockProcessor } from "./sync/BlockProcessor.js";
+import { sequentialTransactionProcessor } from "./sync/TransactionProcessor.js";
+import { ProcessStatus } from "./constants.js";
+import {
+  SyncInProgressError,
+  InvalidBlockError,
+  MadaraDownError,
+} from "./errors/index.js";
+import { syncBlock } from "./syncing.js";
 
-// 🆕 Probe state management
-let probeInterval: NodeJS.Timeout | null = null;
-const PROBE_INTERVAL_MS = 60 * 1000; // 1 minute
-const PROBE_MAX_RETRIES = 5;
-
-// 🆕 Start the probe loop for continuous sync
-function startProbeLoop(process: SyncProcess): void {
-  if (probeInterval) {
-    logger.warn("⚠️  Probe loop already running, skipping start");
-    return;
-  }
-
-  logger.info("🔍 Starting probe loop for continuous sync (checks every 60s)");
-
-  probeInterval = setInterval(async () => {
-    try {
-      await probeForNewBlocks(process);
-    } catch (error) {
-      logger.error("❌ Probe loop error:", error);
-    }
-  }, PROBE_INTERVAL_MS);
-}
-
-// 🆕 Stop the probe loop
-function stopProbeLoop(): void {
-  if (probeInterval) {
-    clearInterval(probeInterval);
-    probeInterval = null;
-    logger.info("🛑 Probe loop stopped");
-  }
-}
-
-// 🆕 Probe function to check for new blocks with exponential backoff retry
-async function probeForNewBlocks(process: SyncProcess): Promise<void> {
-  if (!process.isContinuous) {
-    logger.debug("Skipping probe - not a continuous sync");
-    return;
-  }
-
-  let retryCount = 0;
-  let lastError: any = null;
-
-  while (retryCount < PROBE_MAX_RETRIES) {
-    try {
-      const latestBlock = await getLatestBlockNumber(originalProvider_v9);
-
-      if (latestBlock > process.syncTo) {
-        const oldTarget = process.syncTo;
-        const newBlocks = latestBlock - oldTarget;
-
-        // Update in-memory process
-        process.syncTo = latestBlock;
-
-        // Update Redis
-        await persistence.updateSyncTarget(process.id, latestBlock);
-
-        logger.info(
-          `📈 Target updated: ${oldTarget} → ${latestBlock} (${newBlocks} new blocks detected)`,
-        );
-      } else {
-        logger.debug(
-          `🔍 Probe: No new blocks (latest: ${latestBlock}, target: ${process.syncTo})`,
-        );
-      }
-
-      // Success - exit retry loop
-      return;
-    } catch (error) {
-      lastError = error;
-      retryCount++;
-
-      if (retryCount < PROBE_MAX_RETRIES) {
-        // Exponential backoff: 2s, 4s, 8s, 16s, 32s
-        const delay = Math.pow(2, retryCount) * 1000;
-        logger.warn(
-          `⚠️  Probe failed (attempt ${retryCount}/${PROBE_MAX_RETRIES}), retrying in ${delay}ms...`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  // All retries failed
-  logger.error(
-    `❌ Probe failed after ${PROBE_MAX_RETRIES} attempts. Last error:`,
-    lastError,
-  );
-  logger.warn(
-    "⚠️  Continuing with current target, will retry on next probe cycle",
-  );
-}
-
-export async function find_syncing_bounds(
-  end_block: BlockTag | number,
+/**
+ * Find syncing bounds by analyzing pending block state
+ */
+export async function findSyncingBounds(
+  endBlock: BlockTag | number,
 ): Promise<SyncBounds> {
-  // Get the PRE_CONFIRMED block from syncing node (pending block equivalent)
-  const syncing_node_pre_confirmed_block: BlockWithTxHashes = await getBlock(
+  // Get the PRE_CONFIRMED block from syncing node
+  const syncingNodePreConfirmedBlock: BlockWithTxHashes = await getBlock(
     syncingProvider_v9,
     BlockTag.PRE_CONFIRMED,
   );
 
-  const Y = syncing_node_pre_confirmed_block.transactions.length; // Transactions in pending/pre-confirmed block
-  const N = syncing_node_pre_confirmed_block.block_number!; // Current block being built
+  const Y = syncingNodePreConfirmedBlock.transactions.length;
+  const N = syncingNodePreConfirmedBlock.block_number!;
 
   // Get the latest block from original node
-  const original_node_latest_block: BlockWithTxHashes = await getBlock(
+  const originalNodeLatestBlock: BlockWithTxHashes = await getBlock(
     originalProvider_v9,
     BlockTag.LATEST,
   );
 
-  const original_node_latest_block_number =
-    original_node_latest_block.block_number!;
+  const originalNodeLatestBlockNumber = originalNodeLatestBlock.block_number!;
 
-  // Determine the target end block (T)
+  // Determine target end block (T)
   let T: number;
-  if (typeof end_block === "number") {
-    T = end_block;
-  } else if (end_block === BlockTag.LATEST) {
-    T = original_node_latest_block_number;
+  if (typeof endBlock === "number") {
+    T = endBlock;
+  } else if (endBlock === BlockTag.LATEST) {
+    T = originalNodeLatestBlockNumber;
   } else if (
-    end_block === BlockTag.PRE_CONFIRMED ||
-    end_block === BlockTag.L1_ACCEPTED
+    endBlock === BlockTag.PRE_CONFIRMED ||
+    endBlock === BlockTag.L1_ACCEPTED
   ) {
-    T = original_node_latest_block_number;
+    T = originalNodeLatestBlockNumber;
   } else {
-    throw new Error(`Unsupported end_block tag: ${end_block}`);
+    throw new InvalidBlockError(`Unsupported end_block tag: ${endBlock}`);
   }
 
   logger.info(`📊 Syncing node state: block=${N}, transactions=${Y}`);
   logger.info(
-    `📊 Original node latest block: ${original_node_latest_block_number}`,
+    `📊 Original node latest block: ${originalNodeLatestBlockNumber}`,
   );
   logger.info(`📊 Target end block: ${T}`);
 
-  // Decision Matrix
+  // Decision logic
   let syncFrom: number;
   let startTxIndex: number;
 
-  // Case C: Pending block AFTER target range (N > T)
+  // Case C: Already past target
   if (N > T) {
     logger.info(`✅ Case C: Syncing node is AHEAD of target (${N} > ${T})`);
     logger.info(`🎉 Sync is already complete or beyond target!`);
@@ -177,10 +85,10 @@ export async function find_syncing_bounds(
     };
   }
 
-  // Case B: Pending block AT OR BEFORE target (N <= T)
+  // Case B: At or before target
   logger.info(`✅ Case B: Syncing node is at or before target (${N} <= ${T})`);
 
-  // Sub-case B1: Empty pending block (Y = 0)
+  // Sub-case B1: Empty pending block
   if (Y === 0) {
     logger.info(`📭 Sub-case B1: Pending block ${N} is EMPTY`);
     syncFrom = N;
@@ -200,23 +108,22 @@ export async function find_syncing_bounds(
     `📦 Pending block ${N} has ${Y} transactions - checking original block`,
   );
 
-  // Get the original block to compare
-  const original_block: BlockWithTxHashes = await getBlock(
+  const originalBlock: BlockWithTxHashes = await getBlock(
     originalProvider_v9,
     N,
   );
-  const X = original_block.transactions.length;
+  const X = originalBlock.transactions.length;
 
   logger.info(`📊 Original block ${N} has ${X} transactions`);
 
-  // Sub-case B4: ERROR - More transactions in pending than original (Y > X)
+  // Sub-case B4: ERROR - More transactions in pending than original
   if (Y > X) {
     const errorMsg = `🚨 CRITICAL ERROR: Syncing node block ${N} has ${Y} txs but original has only ${X}!`;
     logger.error(errorMsg);
     throw new Error(errorMsg);
   }
 
-  // Sub-case B3: All transactions sent (Y = X)
+  // Sub-case B3: All transactions sent
   if (Y === X) {
     logger.info(
       `✅ Sub-case B3: Block ${N} is COMPLETE (${Y}/${X} transactions)`,
@@ -225,19 +132,17 @@ export async function find_syncing_bounds(
       `🔒 Block ${N} needs to be closed, then continue from ${N + 1}`,
     );
 
-    // The block is complete but not closed yet
-    // We should close it and start from the next block
     return {
       syncFrom: N,
       syncTo: T,
-      startTxIndex: X, // This will trigger block close in sync logic
+      startTxIndex: X,
       needsBlockClose: true,
       alreadyComplete: false,
       message: `Block ${N} complete (${X}/${X} txs) - will close and continue from ${N + 1} to ${T}`,
     };
   }
 
-  // Sub-case B2: Partial transactions sent (0 < Y < X)
+  // Sub-case B2: Partial transactions sent
   logger.info(
     `⏸️  Sub-case B2: Block ${N} is PARTIAL (${Y}/${X} transactions)`,
   );
@@ -252,82 +157,89 @@ export async function find_syncing_bounds(
   };
 }
 
-function get_target_block(end_block: BlockIdentifier): BlockTag | number {
-  // Convert BlockIdentifier to acceptable type
-  let targetBlock: number | BlockTag;
+/**
+ * Convert BlockIdentifier to BlockTag or number
+ */
+function getTargetBlock(endBlock: BlockIdentifier): BlockTag | number {
+  if (endBlock === null) {
+    return BlockTag.LATEST;
+  }
 
-  if (end_block === null) {
-    targetBlock = BlockTag.LATEST;
-  } else if (typeof end_block === "number") {
-    targetBlock = end_block;
-  } else if (typeof end_block === "string") {
+  if (typeof endBlock === "number") {
+    return endBlock;
+  }
+
+  if (typeof endBlock === "string") {
     // Check if it's a valid BlockTag
-    if (Object.values(BlockTag).includes(end_block as BlockTag)) {
-      targetBlock = end_block as BlockTag;
-    } else {
-      // Try to parse as hex string or decimal string
-      const parsed = end_block.startsWith("0x")
-        ? parseInt(end_block, 16)
-        : parseInt(end_block, 10);
-
-      if (isNaN(parsed)) {
-        throw new Error(`Invalid block identifier: ${end_block}`);
-      }
-      targetBlock = parsed;
+    if (Object.values(BlockTag).includes(endBlock as BlockTag)) {
+      return endBlock as BlockTag;
     }
-  } else if (typeof end_block === "bigint") {
-    targetBlock = Number(end_block);
-    if (!Number.isSafeInteger(targetBlock)) {
-      throw new Error(
-        `Block number ${end_block} is too large to convert safely`,
+
+    // Try to parse as hex or decimal
+    const parsed = endBlock.startsWith("0x")
+      ? parseInt(endBlock, 16)
+      : parseInt(endBlock, 10);
+
+    if (isNaN(parsed)) {
+      throw new InvalidBlockError(`Invalid block identifier: ${endBlock}`);
+    }
+    return parsed;
+  }
+
+  if (typeof endBlock === "bigint") {
+    const num = Number(endBlock);
+    if (!Number.isSafeInteger(num)) {
+      throw new InvalidBlockError(
+        `Block number ${endBlock} is too large to convert safely`,
       );
     }
-  } else {
-    // Handle other BigNumberish types
-    try {
-      targetBlock = Number(end_block);
-      if (isNaN(targetBlock)) {
-        throw new Error(`Cannot convert ${end_block} to number`);
-      }
-    } catch (error) {
-      throw new Error(`Invalid block identifier type: ${typeof end_block}`);
-    }
+    return num;
   }
-  return targetBlock;
+
+  // Handle other BigNumberish types
+  try {
+    const num = Number(endBlock);
+    if (isNaN(num)) {
+      throw new InvalidBlockError(`Cannot convert ${endBlock} to number`);
+    }
+    return num;
+  } catch (error) {
+    throw new InvalidBlockError(
+      `Invalid block identifier type: ${typeof endBlock}`,
+    );
+  }
 }
 
-export async function start_sync(end_block: BlockIdentifier) {
-  // Check if sync is already in progress (check in-memory, NOT Redis)
-  // Redis just stores metadata, actual running state is in-memory
-  // Don't check Redis here - that's what causes the issue!
-  if (currentProcess && currentProcess.status === "running") {
-    const error = new Error(
+/**
+ * Start a sync process
+ */
+export async function start_sync(endBlock: BlockIdentifier) {
+  // Check if sync is already in progress
+  if (syncStateManager.isSequentialSyncRunning()) {
+    const currentProcess = syncStateManager.getSequentialProcess()!;
+    throw new SyncInProgressError(
       `Sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
-    ) as any;
-    error.code = "SYNC_IN_PROGRESS";
-    error.details = {
-      processId: currentProcess.id,
-      currentBlock: currentProcess.currentBlock,
-      currentTxIndex: currentProcess.currentTxIndex,
-      syncFrom: currentProcess.syncFrom,
-      syncTo: currentProcess.syncTo,
-      isContinuous: currentProcess.isContinuous || false,
-    };
-    throw error;
+      {
+        processId: currentProcess.id,
+        currentBlock: currentProcess.currentBlock,
+        currentTxIndex: currentProcess.currentTxIndex,
+        syncFrom: currentProcess.syncFrom,
+        syncTo: currentProcess.syncTo,
+        isContinuous: currentProcess.isContinuous || false,
+      },
+    );
   }
 
-  let targetBlock = get_target_block(end_block);
+  const targetBlock = getTargetBlock(endBlock);
 
-  // 🆕 Detect continuous sync mode
+  // Detect continuous sync mode
   const isContinuous =
-    end_block === BlockTag.LATEST ||
-    end_block === "latest" ||
-    end_block === null;
+    endBlock === BlockTag.LATEST || endBlock === "latest" || endBlock === null;
 
-  // Get sync bounds using pending block analysis
-  const bounds = await find_syncing_bounds(targetBlock);
+  // Get sync bounds
+  const bounds = await findSyncingBounds(targetBlock);
 
-  // Check if sync is already complete
+  // Check if already complete
   if (bounds.alreadyComplete) {
     logger.info(`✅ ${bounds.message}`);
     return {
@@ -342,18 +254,17 @@ export async function start_sync(end_block: BlockIdentifier) {
   // Create new process
   const processId = uuidv4();
 
-  // Save to Redis (with continuous flag)
   await persistence.saveSyncProcess(
     processId,
     bounds.syncFrom,
     bounds.syncTo,
     isContinuous,
-    isContinuous ? bounds.syncTo : undefined, // Store original target
+    isContinuous ? bounds.syncTo : undefined,
   );
 
   const newProcess: SyncProcess = {
     id: processId,
-    status: "running",
+    status: ProcessStatus.RUNNING,
     syncFrom: bounds.syncFrom,
     syncTo: bounds.syncTo,
     currentBlock: bounds.syncFrom,
@@ -366,8 +277,8 @@ export async function start_sync(end_block: BlockIdentifier) {
     originalTarget: isContinuous ? bounds.syncTo : undefined,
   };
 
-  // Add to in-memory registry for cancellation and status tracking
-  currentProcess = newProcess;
+  // Register with state manager
+  syncStateManager.setSequentialProcess(newProcess);
 
   const syncMode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
   logger.info(`🚀 Starting sync process ${processId} [${syncMode}]`);
@@ -380,32 +291,29 @@ export async function start_sync(end_block: BlockIdentifier) {
     logger.info(`📍 Initial target: block ${bounds.syncTo}`);
   }
 
-  // 🆕 Start probe loop for continuous sync
+  // Start probe loop for continuous sync
   if (isContinuous) {
-    startProbeLoop(newProcess);
+    const probeInterval = probeManager.createProbeInterval(newProcess);
+    syncStateManager.setSequentialProbeInterval(probeInterval);
   }
 
   // Start sync process asynchronously
   syncBlocksAsync(newProcess).catch(async (error) => {
     logger.error(`❌ Sync process ${processId} failed:`, error);
 
-    // Stop probe loop on failure
     if (newProcess.isContinuous) {
-      stopProbeLoop();
+      syncStateManager.stopSequentialProbe();
     }
 
-    // Remove from in-memory registry
-    currentProcess = null;
+    syncStateManager.clearSequentialProcess();
 
-    // Update Redis status to failed
     try {
-      await persistence.updateStatus(processId, "failed");
+      await persistence.updateStatus(processId, ProcessStatus.FAILED);
     } catch (err) {
       logger.error(`Failed to update Redis status: ${err}`);
     }
   });
 
-  // Return success response
   return {
     success: true,
     processId,
@@ -418,40 +326,10 @@ export async function start_sync(end_block: BlockIdentifier) {
   };
 }
 
-// Helper function to get current process from Redis
-export async function getCurrentProcess(): Promise<SyncProcess | null> {
-  const activeProcess = await persistence.getMostRecentActiveProcess();
-
-  if (!activeProcess) {
-    return null;
-  }
-
-  // Convert stored process to SyncProcess format
-  const isContinuous = activeProcess.isContinuous === "true";
-  const originalTarget = activeProcess.originalTarget
-    ? parseInt(activeProcess.originalTarget)
-    : undefined;
-
-  return {
-    id: activeProcess.processId,
-    status: activeProcess.status as any,
-    syncFrom: activeProcess.syncFrom,
-    syncTo: activeProcess.syncTo,
-    currentBlock: activeProcess.syncFrom, // We don't track this anymore
-    currentTxIndex: 0, // We don't track this anymore
-    totalBlocks: isContinuous
-      ? null
-      : activeProcess.syncTo - activeProcess.syncFrom + 1,
-    processedBlocks: 0, // We don't track this anymore
-    startTime: new Date(activeProcess.createdAt),
-    cancelRequested: false,
-    isContinuous,
-    originalTarget,
-  };
-}
-
-// Async sync function with cancellation support, continuous sync, and Madara recovery
-export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
+/**
+ * Async function to sync blocks
+ */
+async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
@@ -463,9 +341,9 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
-        await persistence.updateStatus(process.id, "cancelled");
-        stopProbeLoop();
-        currentProcess = null;
+        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        syncStateManager.stopSequentialProbe();
+        syncStateManager.clearSequentialProcess();
         logger.info(
           `Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`,
         );
@@ -477,9 +355,9 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.completeCurrentBlock &&
         currentBlock > process.currentBlock
       ) {
-        await persistence.updateStatus(process.id, "cancelled");
-        stopProbeLoop();
-        currentProcess = null;
+        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        syncStateManager.stopSequentialProbe();
+        syncStateManager.clearSequentialProcess();
         logger.info(
           `Sync process ${process.id} cancelled after completing block ${process.currentBlock}`,
         );
@@ -498,129 +376,44 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`Syncing block ${currentBlock}`);
+      logger.info(`\nSyncing block ${currentBlock}`);
 
       try {
-        // Validate block with Madara recovery
-        try {
-          await validateBlock(currentBlock);
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            const recovered = await handleMadaraRecoveryBlockLevel(
-              process,
-              currentBlock,
-              "validate",
-            );
-            if (!recovered) {
-              throw new Error(
-                `Madara recovery failed during block validation at block ${currentBlock}`,
-              );
-            }
-            // Retry validation after recovery
-            await validateBlock(currentBlock);
-          } else {
-            throw error;
-          }
-        }
-
-        // Set custom headers with Madara recovery
-        try {
-          await setCustomHeader(currentBlock);
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            const recovered = await handleMadaraRecoveryBlockLevel(
-              process,
-              currentBlock,
-              "setHeaders",
-            );
-            if (!recovered) {
-              throw new Error(
-                `Madara recovery failed during set headers at block ${currentBlock}`,
-              );
-            }
-
-            // After recovery, check if we need to restart the block
-            const preConfirmedBlock =
-              await getPreConfirmedBlock(syncingProvider_v9);
-            if (preConfirmedBlock.transactions.length === 0) {
-              logger.info(
-                `🔄 Restarting block ${currentBlock} - PRE_CONFIRMED is empty after recovery`,
-              );
-              // Retry setting headers
-              await setCustomHeader(currentBlock);
-            } else {
-              logger.info(
-                `▶️  Continuing block ${currentBlock} - PRE_CONFIRMED has ${preConfirmedBlock.transactions.length} txs`,
-              );
-              process.currentTxIndex = preConfirmedBlock.transactions.length;
-            }
-          } else {
-            throw error;
-          }
-        }
-
-        // Sync block with Madara recovery (handled inside syncBlock)
+        // Process the block using the refactored syncBlock
         const syncResult = await syncBlock(currentBlock, process);
 
-        // Handle the result
         if (!syncResult.completed) {
           if (syncResult.needsRestart) {
             logger.info(
               `🔄 Block ${currentBlock} needs restart - retrying from beginning`,
             );
-            continue; // Retry the same block
+            continue;
           }
 
-          // This is an actual cancellation
+          // Cancellation
           logger.info(
             `Block ${currentBlock} partially processed - cancellation requested`,
           );
-          stopProbeLoop();
+          syncStateManager.stopSequentialProbe();
           return;
         }
 
-        // Close block with Madara recovery
-        try {
-          await closeBlock();
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            const recovered = await handleMadaraRecoveryBlockLevel(
-              process,
-              currentBlock,
-              "closeBlock",
-            );
-            if (!recovered) {
-              throw new Error(
-                `Madara recovery failed during close block at block ${currentBlock}`,
-              );
-            }
-            // Retry closing block
-            await closeBlock();
-          } else {
-            throw error;
-          }
+        // Close block
+        const closeResult = await blockProcessor.closeCurrentBlock(
+          currentBlock,
+          process,
+        );
+        if (!closeResult.success) {
+          throw closeResult.error!;
         }
 
-        // Match block hash with Madara recovery
-        try {
-          await matchBlockHash(currentBlock);
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            const recovered = await handleMadaraRecoveryBlockLevel(
-              process,
-              currentBlock,
-              "matchHash",
-            );
-            if (!recovered) {
-              throw new Error(
-                `Madara recovery failed during hash match at block ${currentBlock}`,
-              );
-            }
-            // Retry hash match
-            await matchBlockHash(currentBlock);
-          } else {
-            throw error;
-          }
+        // Match block hash
+        const verifyResult = await blockProcessor.verifyBlockHash(
+          currentBlock,
+          process,
+        );
+        if (!verifyResult.success) {
+          throw verifyResult.error!;
         }
 
         process.processedBlocks++;
@@ -628,12 +421,12 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         await persistence.updateLastChecked(process.id);
 
-        logger.info(`Block ${currentBlock} completed successfully`);
+        logger.info(`✅ Block ${currentBlock} completed successfully`);
 
         if (process.cancelRequested && process.completeCurrentBlock) {
-          await persistence.updateStatus(process.id, "cancelled");
-          stopProbeLoop();
-          currentProcess = null;
+          await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+          syncStateManager.stopSequentialProbe();
+          syncStateManager.clearSequentialProcess();
           logger.info(
             `Sync process ${process.id} cancelled after completing current block ${currentBlock}`,
           );
@@ -642,8 +435,8 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
-        await persistence.updateStatus(process.id, "failed");
-        stopProbeLoop();
+        await persistence.updateStatus(process.id, ProcessStatus.FAILED);
+        syncStateManager.stopSequentialProbe();
         logger.error(
           `Failed to process block ${currentBlock} in process ${process.id}:`,
           error,
@@ -653,48 +446,28 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     }
 
     if (!process.isContinuous) {
-      await persistence.updateStatus(process.id, "completed");
-      stopProbeLoop();
-      currentProcess = null;
+      await persistence.updateStatus(process.id, ProcessStatus.COMPLETED);
+      syncStateManager.stopSequentialProbe();
+      syncStateManager.clearSequentialProcess();
       logger.info(
         `✅ Sync process ${process.id} completed successfully (${process.syncFrom} → ${process.syncTo})`,
       );
     }
   } catch (error) {
-    await persistence.updateStatus(process.id, "failed");
-    stopProbeLoop();
-    currentProcess = null;
+    await persistence.updateStatus(process.id, ProcessStatus.FAILED);
+    syncStateManager.stopSequentialProbe();
+    syncStateManager.clearSequentialProcess();
     logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }
 }
 
 /**
- * Handle Madara recovery for operations at block level
+ * Get current process from state manager
  */
-async function handleMadaraRecoveryBlockLevel(
-  process: SyncProcess,
-  currentBlock: number,
-  operation: "validate" | "setHeaders" | "closeBlock" | "matchHash",
-): Promise<boolean> {
-  logger.warn(
-    `🚨 Madara down detected during ${operation} at block ${currentBlock}`,
-  );
-
-  process.status = "recovering";
-
-  const recovered = await waitForMadaraRecovery();
-
-  if (!recovered) {
-    logger.error(
-      `❌ Madara recovery failed during ${operation} - timeout exceeded (24 hours) at block ${currentBlock}`,
-    );
-    process.status = "failed";
-    process.error = `Madara recovery timeout during ${operation} - exceeded 24 hour wait period`;
-    return false;
-  }
-
-  logger.info(`✅ Madara recovered after ${operation} - resuming...`);
-  process.status = "running";
-  return true;
+export async function getCurrentProcess(): Promise<SyncProcess | null> {
+  return syncStateManager.getSequentialProcess();
 }
+
+// Export for backwards compatibility
+export { syncStateManager as currentProcess };

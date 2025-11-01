@@ -1,8 +1,11 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
 import { originalProvider_v9, originalProvider_v8 } from "../providers.js";
+import { config } from "../config.js";
 
-// https://www.quicknode.com/docs/starknet/starknet_addDeclareTransaction
+/**
+ * General declare transaction handler
+ */
 export async function generalDeclare(
   tx: starknet.TransactionWithHash,
   syncingProvider: starknet.RpcProvider,
@@ -31,7 +34,6 @@ export async function generalDeclare(
   }
 }
 
-// Declare V0 - Legacy declare transaction
 async function declareV0(
   tx: starknet.TransactionWithHash,
   syncingProvider: starknet.RpcProvider,
@@ -47,7 +49,7 @@ async function declareV0(
 
   let txn = tx as unknown as DECLARE_TXN_V0;
 
-  const result = await postWithRetry(process.env.RPC_URL_SYNCING_NODE!, {
+  const result = await postWithRetry(config.rpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeclareTransaction",
@@ -85,7 +87,6 @@ async function declareV1(
   let contractClass = await originalProvider_v9.getClassByHash(txn.class_hash);
 
   contractClass.entry_points_by_type.EXTERNAL.forEach((entry) => {
-    originalProvider_v9;
     let typedEntry = entry as starknet.ContractEntryPointFields;
     if (typeof typedEntry.offset === "number") {
       typedEntry.offset = "0x" + typedEntry.offset.toString(16);
