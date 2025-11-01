@@ -17,6 +17,96 @@ import { GasPrices } from "./types.js";
 import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
 const nonce_tracker: Record<string, number> = {};
 
+// Custom error for Madara downtime
+export class MadaraDownError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MadaraDownError";
+  }
+}
+
+/**
+ * Check if error indicates Madara is down
+ */
+export function isMadaraDownError(error: any): boolean {
+  const errorMessage = error?.message?.toLowerCase() || "";
+  const errorCode = error?.code?.toLowerCase() || "";
+  const errorCause = error?.cause?.code?.toLowerCase() || "";
+
+  return (
+    errorMessage.includes("econnrefused") ||
+    errorMessage.includes("could not reach") ||
+    errorMessage.includes("couldn't reach") ||
+    errorMessage.includes("network error") ||
+    errorMessage.includes("connect econnrefused") ||
+    errorMessage.includes("fetch failed") ||
+    errorMessage.includes("enotfound") ||
+    errorMessage.includes("socket hang up") ||
+    errorMessage.includes("econnreset") ||
+    errorCode === "econnrefused" ||
+    errorCode === "enotfound" ||
+    errorCode === "econnreset" ||
+    errorCause === "econnrefused" ||
+    errorCause === "enotfound" ||
+    errorCause === "econnreset"
+  );
+}
+
+/**
+ * Check Madara health endpoint
+ */
+export async function checkMadaraHealth(): Promise<boolean> {
+  try {
+    const healthUrl = `${process.env.RPC_URL_SYNCING_NODE}/health`;
+    const response = await axios.get(healthUrl, { timeout: 5000 });
+    return response.status === 200 && response.data === "OK";
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Wait for Madara to recover (max 1 day)
+ * Returns true if recovered, false if timeout
+ */
+export async function waitForMadaraRecovery(): Promise<boolean> {
+  const MAX_WAIT_TIME = 24 * 60 * 60 * 1000; // 1 day in milliseconds
+  const startTime = Date.now();
+  let attempt = 0;
+
+  logger.warn("🚨 Madara node is down - starting recovery wait...");
+  logger.info("⏳ Maximum wait time: 24 hours");
+
+  while (Date.now() - startTime < MAX_WAIT_TIME) {
+    attempt++;
+    const elapsedMinutes = Math.floor((Date.now() - startTime) / 60000);
+
+    logger.info(
+      `🔍 Recovery attempt ${attempt} (elapsed: ${elapsedMinutes}m)...`,
+    );
+
+    const isHealthy = await checkMadaraHealth();
+
+    if (isHealthy) {
+      const recoveryTime = Date.now() - startTime;
+      const recoveryMinutes = Math.floor(recoveryTime / 60000);
+      logger.info(
+        `✅ Madara recovered! (downtime: ${recoveryMinutes}m ${Math.floor((recoveryTime % 60000) / 1000)}s)`,
+      );
+      return true;
+    }
+
+    // Exponential backoff capped at 5 minutes
+    const delay = Math.min(Math.pow(2, Math.min(attempt, 8)) * 1000, 300000);
+    logger.debug(`⏸️  Madara still down, retrying in ${delay / 1000}s...`);
+
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  logger.error("❌ Madara recovery timeout - exceeded 24 hour wait period");
+  return false;
+}
+
 /**
  * Returns the nonce for an address.
  * Special handling for address "0x1" with local nonce tracker.
@@ -30,47 +120,27 @@ export async function getNonce(
     return nonce;
   }
 
-  if (nonce_tracker[address] === undefined) {
-    nonce_tracker[address] = Number(await provider.getNonceForAddress(address));
+  try {
+    if (nonce_tracker[address] === undefined) {
+      nonce_tracker[address] = Number(
+        await provider.getNonceForAddress(address),
+      );
+    }
+
+    const address_nonce = nonce_tracker[address];
+    nonce_tracker[address] += 1;
+
+    return `0x${address_nonce.toString(16)}`;
+  } catch (error) {
+    // Check if this is a Madara down error
+    if (isMadaraDownError(error)) {
+      throw new MadaraDownError(
+        `Madara down while getting nonce for ${address}: ${error}`,
+      );
+    }
+    throw error;
   }
-
-  const address_nonce = nonce_tracker[address];
-  nonce_tracker[address] += 1;
-
-  return `0x${address_nonce.toString(16)}`;
 }
-
-// export async function setDisableFee(value: boolean): Promise<void> {
-//   logger.info(`Setting disable fees to - ${value}`);
-//   const api = await ApiPromise.create({ provider: polkadotProvider });
-//   const extrinsic = api.tx.starknet.setDisableFee(value);
-//   await extrinsic.send();
-
-//   // Sleep for 7 seconds
-//   await new Promise((resolve) => setTimeout(resolve, 7000));
-// }
-
-/**
- * Create or update syncing_db row.
- */
-// export async function syncDbCreateOrUpdate(
-//   attribute: string,
-//   // FIX: The 'value' parameter is changed from 'string' to 'number' to match
-//   // the model definition (DataTypes.INTEGER) and how it's being called.
-//   value: number
-// ): Promise<void> {
-//   // FIX: Use the initialized model from the db object.
-//   const row = await db.syncing_db.findOne({ where: { attribute } });
-
-//   if (row != null) {
-//     row.dataValues.value = value;
-//     await row.save();
-//     return;
-//   }
-
-//   // FIX: Use the initialized model from the db object.
-//   await db.syncing_db.create({ attribute, value });
-// }
 
 /**
  * Get latest block number from provider.
@@ -315,9 +385,26 @@ export async function getTransactionReceipt(
   provider: RpcProvider,
   transaction_hash: string,
 ): Promise<GetTransactionReceiptResponse> {
-  const transactionReceipt =
-    await provider.getTransactionReceipt(transaction_hash);
-  return transactionReceipt;
+  try {
+    const transactionReceipt =
+      await provider.getTransactionReceipt(transaction_hash);
+    return transactionReceipt;
+  } catch (error) {
+    // Check if this is a Madara down error at the provider level
+    // Provider errors might not be wrapped yet
+    if (
+      isMadaraDownError(error) ||
+      (error instanceof Error &&
+        (error.message.includes("ECONNREFUSED") ||
+          error.message.includes("fetch failed") ||
+          error.message.includes("network")))
+    ) {
+      throw new MadaraDownError(
+        `Madara down while getting receipt for ${transaction_hash}: ${error}`,
+      );
+    }
+    throw error;
+  }
 }
 
 export async function closeBlock(): Promise<void> {
@@ -345,6 +432,10 @@ export async function closeBlock(): Promise<void> {
 
     logger.info("Block closed successfully");
   } catch (error) {
+    // Check if this is a Madara down error
+    if (isMadaraDownError(error)) {
+      throw new MadaraDownError(`Madara down while closing block: ${error}`);
+    }
     logger.info("Error closing block:", error);
     throw error;
   }
@@ -419,7 +510,13 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
 
     logger.info("Custom headers set for block");
   } catch (error) {
-    logger.info("Error closing block:", error);
+    // Check if this is a Madara down error
+    if (isMadaraDownError(error)) {
+      throw new MadaraDownError(
+        `Madara down while setting custom headers: ${error}`,
+      );
+    }
+    logger.info("Error setting custom headers:", error);
     throw error;
   }
 }
@@ -432,13 +529,25 @@ export async function postWithRetry(
   const SLEEP = 30000;
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const result = await axios.post(url, data);
-    if (result.data.error && result.data.error.code === 55) {
-      console.log(`Account validation failed, retrying in 30 seconds, result:`);
-      console.log(result.data);
-      await new Promise((resolve) => setTimeout(resolve, SLEEP));
-    } else {
-      return result;
+    try {
+      const result = await axios.post(url, data);
+      if (result.data.error && result.data.error.code === 55) {
+        console.log(
+          `Account validation failed, retrying in 30 seconds, result:`,
+        );
+        console.log(result.data);
+        await new Promise((resolve) => setTimeout(resolve, SLEEP));
+      } else {
+        return result;
+      }
+    } catch (error) {
+      // Check if this is a Madara down error
+      if (isMadaraDownError(error)) {
+        throw new MadaraDownError(
+          `Madara down while posting to ${url}: ${error}`,
+        );
+      }
+      throw error;
     }
   }
   throw new Error("Max retries exceeded for transaction");
@@ -461,6 +570,8 @@ export async function validateTransactionReceipt(
   } = options;
 
   let retryCount = 0;
+  let consecutiveConnectionErrors = 0;
+  const MAX_CONNECTION_ERRORS = 3; // Fail fast after 3 consecutive connection errors
 
   while (retryCount <= maxRetries) {
     try {
@@ -470,26 +581,43 @@ export async function validateTransactionReceipt(
 
       const transactionReceipt = await getTransactionReceipt(provider, tx_hash);
 
-      // console.log('Getting receipt for transaction', transactionReceipt.statusReceipt);
       // Validate if the transaction was a success or not !
       if (!transactionReceipt.isSuccess() && !transactionReceipt.isReverted()) {
         throw new Error(`Transaction in unexpected state ${tx_hash}`);
       }
 
-      // Validate that the transaction was successful and in the correct block
-      // if (txn_receipt.block_number !== expectedBlockNumber) {
-      //   throw new Error(
-      //     `Transaction ${tx_hash} receipt block number ${txn_receipt.block_number} does not match expected block ${expectedBlockNumber}`
-      //   );
-      // }
-
-      // console.log(`Successfully validated receipt for transaction - ${tx_hash}`);
-
       // Success - exit the retry loop
       return;
     } catch (error) {
+      // Check if this is a Madara down error - fail fast
+      if (error instanceof MadaraDownError) {
+        logger.warn(
+          `🚨 Madara connection error detected while validating receipt for ${tx_hash}`,
+        );
+        throw error; // Propagate immediately
+      }
+
+      // Check if the underlying error is a connection error
+      if (isMadaraDownError(error)) {
+        consecutiveConnectionErrors++;
+        logger.warn(
+          `⚠️  Connection error ${consecutiveConnectionErrors}/${MAX_CONNECTION_ERRORS} while validating receipt for ${tx_hash}`,
+        );
+
+        if (consecutiveConnectionErrors >= MAX_CONNECTION_ERRORS) {
+          logger.error(
+            `❌ Too many consecutive connection errors (${consecutiveConnectionErrors}) - Madara likely down`,
+          );
+          throw new MadaraDownError(
+            `Madara down while validating receipt for ${tx_hash} after ${consecutiveConnectionErrors} connection errors`,
+          );
+        }
+      } else {
+        // Reset connection error counter on non-connection errors
+        consecutiveConnectionErrors = 0;
+      }
+
       retryCount++;
-      // console.warn(`Receipt validation attempt ${retryCount} failed for transaction ${tx_hash}:`);
 
       if (retryCount > maxRetries) {
         const errorMsg = `Failed to validate receipt for transaction ${tx_hash} after ${maxRetries} attempts. Latest error: ${error}`;
@@ -502,7 +630,6 @@ export async function validateTransactionReceipt(
         ? Math.pow(2, retryCount) * 1000 // Exponential backoff: 2s, 4s, 8s, 16s, 32s, etc.
         : fixedDelay; // Fixed delay
 
-      // console.log(`Retrying receipt validation for transaction ${tx_hash} in ${delay}ms...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -532,33 +659,51 @@ export async function matchBlockHash(block_number: number): Promise<void> {
       const madaraBlock = await getBlockHash(syncingProvider_v9, block_number);
       logger.info(`Madara block hash : ${madaraBlock}`);
 
+      // Check if we failed to fetch either hash (null means block not finalized yet)
       if (!paradexBlock || !madaraBlock) {
-        const errorMsg = `Failed to fetch block hash for block number ${block_number}`;
-        logger.error(errorMsg);
+        const errorMsg = `Failed to fetch block hash for block number ${block_number} (paradex: ${paradexBlock}, madara: ${madaraBlock})`;
+        logger.warn(errorMsg);
+        // This is a retriable error - block might not be finalized yet
         throw new Error(errorMsg);
       }
 
-      // check if block hashes match
+      // Both hashes retrieved successfully - now check if they match
       if (paradexBlock !== madaraBlock) {
-        const errorMsg = `Block hashes do not match for block number ${block_number}`;
-        logger.error(errorMsg);
-        return;
+        // This is NOT a retriable error - the hashes are different!
+        const errorMsg = `❌ BLOCK HASH MISMATCH for block ${block_number}:\n  Paradex: ${paradexBlock}\n  Madara:  ${madaraBlock}`;
+        // logger.error(errorMsg);
+        logger.error(`🛑 This is a critical error - stopping sync immediately`);
+        throw new Error(errorMsg);
       }
 
-      // Success - exit the retry loop
+      // Success - hashes match
+      logger.info(`✅ Block hash verified for block ${block_number}`);
       return;
     } catch (error) {
+      // Check if this is a hash mismatch error (non-retriable)
+      if (
+        error instanceof Error &&
+        error.message.includes("BLOCK HASH MISMATCH")
+      ) {
+        // Don't retry on hash mismatch - fail immediately
+        logger.error(`❌ Hash mismatch detected - failing without retry`);
+        throw error;
+      }
+
+      // This is a retriable error (failed to fetch hash)
       logger.warn(
-        `Attempt ${attempt}/${maxAttempts} failed for block ${block_number}:`,
+        `Attempt ${attempt}/${maxAttempts} failed for block ${block_number}: ${error}`,
       );
 
       // If this was the last attempt, throw the error
       if (attempt === maxAttempts) {
         logger.error(
-          `All ${maxAttempts} attempts failed for block ${block_number}`,
+          `❌ All ${maxAttempts} attempts failed for block ${block_number}`,
         );
         throw error;
       }
+
+      // Otherwise continue to next retry attempt
     }
   }
 }

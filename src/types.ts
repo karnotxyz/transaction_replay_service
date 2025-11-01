@@ -13,7 +13,7 @@ export interface SyncBounds {
 // Process state management
 export interface SyncProcess {
   id: string;
-  status: "running" | "completed" | "cancelled" | "failed";
+  status: "running" | "completed" | "cancelled" | "failed" | "recovering";
   syncFrom: number;
   syncTo: number;
   currentBlock: number;
@@ -33,7 +33,7 @@ export interface StoredSyncProcess {
   processId: string;
   syncFrom: number;
   syncTo: number;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "completed" | "failed" | "cancelled" | "recovering";
   createdAt: string;
   lastChecked: string;
   isContinuous?: string; // stored as string in Redis ("true" or "false")

@@ -9,6 +9,9 @@ import {
   matchBlockHash,
   setCustomHeader,
   getBlockWithTxsWithRetry,
+  MadaraDownError,
+  waitForMadaraRecovery,
+  getPreConfirmedBlock,
 } from "./utils.js";
 import { BlockIdentifier, TransactionWithHash, TXN_HASH } from "starknet";
 import { start_sync, currentProcess } from "./startSyncing.js";
@@ -224,85 +227,194 @@ export const cancelCurrentSync = async (req: Request, res: Response) => {
   }
 };
 
-// Enhanced sync block with transaction index support
+/**
+ * Handle Madara recovery and resume from correct point
+ */
+async function handleMadaraRecovery(
+  process: SyncProcess,
+  currentBlock: number,
+): Promise<{ recovered: boolean; needsRestart: boolean }> {
+  logger.warn(`🚨 Madara down detected at block ${currentBlock}`);
+
+  // Update process status
+  process.status = "recovering";
+
+  // Wait for Madara to recover (max 1 day)
+  const recovered = await waitForMadaraRecovery();
+
+  if (!recovered) {
+    logger.error(
+      `❌ Madara recovery failed - timeout exceeded (24 hours) at block ${currentBlock}`,
+    );
+    process.status = "failed";
+    process.error = "Madara recovery timeout - exceeded 24 hour wait period";
+    return { recovered: false, needsRestart: false };
+  }
+
+  // Madara recovered - check PRE_CONFIRMED block state
+  logger.info(`✅ Madara recovered - checking PRE_CONFIRMED block state...`);
+
+  try {
+    const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+    const preConfirmedBlockNumber = preConfirmedBlock.block_number!;
+    const preConfirmedTxCount = preConfirmedBlock.transactions.length;
+
+    logger.info(
+      `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxCount}`,
+    );
+
+    // The PRE_CONFIRMED block should always be the current block we're syncing
+    if (preConfirmedBlockNumber !== currentBlock) {
+      logger.error(
+        `❌ PRE_CONFIRMED block ${preConfirmedBlockNumber} doesn't match current block ${currentBlock}`,
+      );
+      process.status = "failed";
+      process.error = `PRE_CONFIRMED block mismatch after recovery`;
+      return { recovered: false, needsRestart: false };
+    }
+
+    if (preConfirmedTxCount === 0) {
+      // Empty block - need to restart from beginning (set headers + send txs)
+      logger.info(
+        `📭 PRE_CONFIRMED block ${currentBlock} is EMPTY - restarting block from beginning`,
+      );
+      process.currentTxIndex = 0;
+      process.status = "running";
+      return { recovered: true, needsRestart: true };
+    } else {
+      // Has transactions - continue from next transaction
+      logger.info(
+        `📦 PRE_CONFIRMED block ${currentBlock} has ${preConfirmedTxCount} transactions - resuming from tx ${preConfirmedTxCount}`,
+      );
+      process.currentTxIndex = preConfirmedTxCount;
+      process.status = "running";
+      return { recovered: true, needsRestart: false };
+    }
+  } catch (error) {
+    logger.error(`❌ Failed to check PRE_CONFIRMED block state:`, error);
+    process.status = "failed";
+    process.error = `Failed to check PRE_CONFIRMED block state after recovery: ${error}`;
+    return { recovered: false, needsRestart: false };
+  }
+}
+
+// Enhanced sync block with transaction index support and Madara recovery
 export async function syncBlock(
   block_no: number,
   process: SyncProcess,
-): Promise<boolean> {
-  const blockWithTxs = await getBlockWithTxsWithRetry(
-    originalProvider_v9,
-    block_no,
-  );
-
-  logger.info(
-    `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no}`,
-  );
-
-  // if (blockWithTxs.transactions.length === 0) {
-  //   const errorMsg = `No transactions to process in block ${block_no}`;
-  //   logger.error(errorMsg);
-  //   throw new Error("No transactions to process in block");
-  // }
-
-  const transactionHashes: string[] = [];
-  const startIndex = block_no === process.syncFrom ? process.currentTxIndex : 0;
-
-  for (let i = startIndex; i < blockWithTxs.transactions.length; i++) {
-    // Check for cancellation before each transaction
-    if (process.cancelRequested && !process.completeCurrentBlock) {
-      process.currentTxIndex = i;
-      process.status = "cancelled";
-      process.endTime = new Date();
-      logger.info(
-        `Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${
-          i - 1
-        }`,
-      );
-      return false; // Block not completed
-    }
-
-    const tx: TransactionWithHash = blockWithTxs.transactions[i];
-    process.currentTxIndex = i;
-
-    logger.info(
-      `Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${
-        tx.transaction_hash
-      }`,
+): Promise<{ completed: boolean; needsRestart: boolean }> {
+  try {
+    const blockWithTxs = await getBlockWithTxsWithRetry(
+      originalProvider_v9,
+      block_no,
     );
 
-    try {
-      const tx_hash = await processTx(tx, block_no);
+    logger.info(
+      `Found ${blockWithTxs.transactions.length} transactions to process in block ${block_no}`,
+    );
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    const transactionHashes: string[] = [];
+    const startIndex =
+      block_no === process.syncFrom ? process.currentTxIndex : 0;
 
-      if (i === startIndex) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        await validateTransactionReceipt(syncingProvider_v9, tx_hash, {
-          useExponentialBackoff: true,
-        });
-      } else {
-        await validateTransactionReceipt(syncingProvider_v9, tx_hash, {
-          maxRetries: 2000, // 150 * 100ms = 15 seconds
-        });
+    for (let i = startIndex; i < blockWithTxs.transactions.length; i++) {
+      // Check for cancellation before each transaction
+      if (process.cancelRequested && !process.completeCurrentBlock) {
+        process.currentTxIndex = i;
+        process.status = "cancelled";
+        process.endTime = new Date();
+        logger.info(
+          `Immediate cancellation detected at block ${block_no}, transaction ${i}. Last processed tx index: ${
+            i - 1
+          }`,
+        );
+        return { completed: false, needsRestart: false };
       }
 
-      transactionHashes.push(tx_hash);
-
-      // Update the last processed transaction index
+      const tx: TransactionWithHash = blockWithTxs.transactions[i];
       process.currentTxIndex = i;
-    } catch (err) {
-      // logger.error(`Error processing transaction ${tx.transaction_hash}:`, err);
-      // await sendAlert(
-      //   "[SYNCING_SERVICE] Error processing transaction",
-      //   `Error processing transaction ${tx.transaction_hash}, error: ${err}`
-      // );
-      throw err;
-    }
-  }
 
-  // If we reach here, the block was completed successfully
-  logger.info(`All transactions processed successfully for block ${block_no}`);
-  return true; // Block completed
+      logger.info(
+        `Processing transaction ${i}/${blockWithTxs.transactions.length - 1} - ${
+          tx.transaction_hash
+        }`,
+      );
+
+      try {
+        const tx_hash = await processTx(tx, block_no);
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        if (i === startIndex) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await validateTransactionReceipt(syncingProvider_v9, tx_hash, {
+            useExponentialBackoff: true,
+          });
+        } else {
+          await validateTransactionReceipt(syncingProvider_v9, tx_hash, {
+            maxRetries: 2000,
+          });
+        }
+
+        transactionHashes.push(tx_hash);
+        process.currentTxIndex = i;
+      } catch (err) {
+        // Check if this is a Madara down error
+        if (err instanceof MadaraDownError) {
+          logger.warn(
+            `🚨 Madara down detected during transaction processing at block ${block_no}, tx ${i}`,
+          );
+
+          const recoveryResult = await handleMadaraRecovery(process, block_no);
+
+          if (!recoveryResult.recovered) {
+            throw new Error(
+              `Madara recovery failed at block ${block_no}, tx ${i}`,
+            );
+          }
+
+          // Return appropriate signal based on recovery decision
+          if (recoveryResult.needsRestart) {
+            logger.info(
+              `🔄 Block ${block_no} needs restart from beginning after Madara recovery`,
+            );
+            return { completed: false, needsRestart: true };
+          } else {
+            logger.info(
+              `▶️  Continuing block ${block_no} from tx ${process.currentTxIndex} after Madara recovery`,
+            );
+            return { completed: false, needsRestart: true }; // Still need to restart the loop
+          }
+        }
+
+        throw err;
+      }
+    }
+
+    // If we reach here, the block was completed successfully
+    logger.info(
+      `All transactions processed successfully for block ${block_no}`,
+    );
+    return { completed: true, needsRestart: false };
+  } catch (error) {
+    // Check if this is a Madara down error at block level
+    if (error instanceof MadaraDownError) {
+      logger.warn(
+        `🚨 Madara down detected at block level for block ${block_no}`,
+      );
+
+      const recoveryResult = await handleMadaraRecovery(process, block_no);
+
+      if (!recoveryResult.recovered) {
+        throw new Error(`Madara recovery failed at block ${block_no}`);
+      }
+
+      // Return signal to restart block
+      return { completed: false, needsRestart: true };
+    }
+
+    throw error;
+  }
 }
 
 // Block validation (unchanged)
@@ -342,201 +454,3 @@ export async function validateBlock(currentBlock: number): Promise<void> {
     }
   }
 }
-
-// // Graceful shutdown handler
-// export const gracefulShutdown = async (signal: string): Promise<void> => {
-//   console.log(`\nReceived ${signal}. Starting graceful shutdown...`);
-
-//   if (currentProcess && currentProcess.status === "running") {
-//     logger.info(`Gracefully shutting down sync process ${currentProcess.id}`);
-//     currentProcess.cancelRequested = true;
-
-//     // Wait a bit for the current transaction to complete, but not too long
-//     console.log("Waiting for current transaction to complete...");
-//     await Promise.race([
-//       new Promise((resolve) => setTimeout(resolve, 3000)), // Max 3 seconds wait
-//       new Promise((resolve) => {
-//         const checkInterval = setInterval(() => {
-//           if (!currentProcess || currentProcess.status !== "running") {
-//             clearInterval(checkInterval);
-//             resolve(undefined);
-//           }
-//         }, 100);
-//       }),
-//     ]);
-//   }
-
-//   console.log("Shutting down...");
-//   process.exit(0);
-// };
-
-// // Process cleanup on application exit
-// let shutdownInProgress = false;
-
-// process.on("SIGINT", async () => {
-//   if (shutdownInProgress) {
-//     console.log("\nForce exiting...");
-//     process.exit(1);
-//   }
-//   shutdownInProgress = true;
-//   await gracefulShutdown("SIGINT");
-// });
-
-// process.on("SIGTERM", async () => {
-//   if (shutdownInProgress) {
-//     process.exit(1);
-//   }
-//   shutdownInProgress = true;
-//   await gracefulShutdown("SIGTERM");
-// });
-
-// // Get sync status endpoint
-// export const getSyncStatus = async (req: Request, res: Response) => {
-//   try {
-//     const processId = req.params.processId || (req.query.processId as string);
-
-//     if (processId) {
-//       const process = processHistory.get(processId);
-//       if (!process) {
-//         return res.status(404).json({
-//           error: "Process not found",
-//         });
-//       }
-
-//       return res.json({
-//         processId: process.id,
-//         status: process.status,
-//         progress: {
-//           currentBlock: process.currentBlock,
-//           currentTxIndex: process.currentTxIndex,
-//           processedBlocks: process.processedBlocks,
-//           totalBlocks: process.totalBlocks,
-//           percentage: process.totalBlocks
-//             ? Math.round((process.processedBlocks / process.totalBlocks) * 100)
-//             : null, // No percentage for continuous sync
-//           syncMode: process.isContinuousSync ? "continuous" : "fixed_range",
-//         },
-//         timing: {
-//           startTime: process.startTime,
-//           endTime: process.endTime,
-//           duration: process.endTime
-//             ? process.endTime.getTime() - process.startTime.getTime()
-//             : Date.now() - process.startTime.getTime(),
-//         },
-//         error: process.error,
-//       });
-//     }
-
-//     // Return current process if no specific ID requested
-//     if (currentProcess) {
-//       return res.json({
-//         processId: currentProcess.id,
-//         status: currentProcess.status,
-//         syncMode: currentProcess.isContinuousSync
-//           ? "continuous"
-//           : "fixed_range",
-//         progress: {
-//           currentBlock: currentProcess.currentBlock,
-//           currentTxIndex: currentProcess.currentTxIndex,
-//           processedBlocks: currentProcess.processedBlocks,
-//           totalBlocks: currentProcess.totalBlocks,
-//           percentage: currentProcess.totalBlocks
-//             ? Math.round(
-//                 (currentProcess.processedBlocks / currentProcess.totalBlocks) *
-//                   100,
-//               )
-//             : null,
-//         },
-//       });
-//     }
-
-//     res.json({
-//       message: "No sync process currently running",
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       error: `Failed to get status: ${error}`,
-//     });
-//   }
-// };
-
-// // Cancel sync endpoint
-// export const cancelSync = async (req: Request, res: Response) => {
-//   try {
-//     const processId = req.params.processId || req.body.processId;
-//     const completeCurrentBlock = req.body.complete_current_block || false;
-
-//     if (processId && processId !== currentProcess?.id) {
-//       return res.status(404).json({
-//         error: "Process not found or not currently running",
-//       });
-//     }
-
-//     if (!currentProcess || currentProcess.status !== "running") {
-//       return res.status(400).json({
-//         error: "No sync process currently running",
-//       });
-//     }
-
-//     // Mark for cancellation
-//     currentProcess.cancelRequested = true;
-//     currentProcess.completeCurrentBlock = completeCurrentBlock;
-
-//     res.json({
-//       message: completeCurrentBlock
-//         ? "Cancellation requested - will complete current block and stop"
-//         : "Cancellation requested - will stop immediately after current transaction",
-//       processId: currentProcess.id,
-//       cancellationMode: completeCurrentBlock
-//         ? "complete_current_block"
-//         : "immediate",
-//       currentBlock: currentProcess.currentBlock,
-//       currentTxIndex: currentProcess.currentTxIndex,
-//       note: completeCurrentBlock
-//         ? "Process will complete all transactions in current block before stopping"
-//         : "Process will stop after completing current transaction",
-//       resumeInfo: {
-//         message:
-//           "To resume from this point, use these parameters in your next sync request:",
-//         syncFrom: currentProcess.currentBlock,
-//         startTxIndex: completeCurrentBlock ? 0 : currentProcess.currentTxIndex,
-//       },
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       error: `Failed to cancel sync: ${error}`,
-//     });
-//   }
-// };
-
-// // Get process history
-// export const getProcessHistory = async (req: Request, res: Response) => {
-//   try {
-//     const limit = parseInt(req.query.limit as string) || 10;
-//     const processes = Array.from(processHistory.values())
-//       .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
-//       .slice(0, limit);
-
-//     res.json({
-//       processes: processes.map((p) => ({
-//         processId: p.id,
-//         status: p.status,
-//         syncFrom: p.syncFrom,
-//         syncTo: p.syncTo,
-//         currentBlock: p.currentBlock,
-//         currentTxIndex: p.currentTxIndex,
-//         progress: `${p.processedBlocks}/${p.totalBlocks} blocks`,
-//         startTime: p.startTime,
-//         endTime: p.endTime,
-//         duration: p.endTime
-//           ? p.endTime.getTime() - p.startTime.getTime()
-//           : null,
-//         error: p.error,
-//       })),
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       error: `Failed to get process history: ${error}`,
-//     });
-//   }
-// };

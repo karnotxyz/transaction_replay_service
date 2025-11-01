@@ -17,8 +17,10 @@ import {
   getBlock,
   getLatestBlockNumber,
   getPreConfirmedBlock,
+  MadaraDownError,
   matchBlockHash,
   setCustomHeader,
+  waitForMadaraRecovery,
 } from "./utils.js";
 import { BlockTag, BlockIdentifier, BlockWithTxHashes } from "starknet";
 import { persistence } from "./persistence.js";
@@ -448,7 +450,7 @@ export async function getCurrentProcess(): Promise<SyncProcess | null> {
   };
 }
 
-// Async sync function with cancellation support and continuous sync
+// Async sync function with cancellation support, continuous sync, and Madara recovery
 export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
@@ -456,9 +458,8 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       `Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo} [${mode}]`,
     );
 
-    let currentBlock = process.currentBlock; // Start from where we left off (or syncFrom)
+    let currentBlock = process.currentBlock;
 
-    // 🆕 Continuous sync loop - never exits naturally
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
@@ -471,7 +472,6 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         return;
       }
 
-      // If completing current block, check if we should stop after this block
       if (
         process.cancelRequested &&
         process.completeCurrentBlock &&
@@ -486,28 +486,92 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         return;
       }
 
-      // 🆕 For continuous sync: if caught up, wait for new blocks
+      // For continuous sync: if caught up, wait for new blocks
       if (process.isContinuous && currentBlock > process.syncTo) {
         logger.info(
           `⏸️  Caught up to target block ${process.syncTo}, waiting for new blocks...`,
         );
         logger.info(`🔍 Probe will check for new blocks every 60 seconds`);
 
-        // Wait for 5 seconds, then check again
         await new Promise((resolve) => setTimeout(resolve, 5000));
-        continue; // Go back to loop start and check again
+        continue;
       }
 
       process.currentBlock = currentBlock;
       logger.info(`Syncing block ${currentBlock}`);
 
       try {
-        await validateBlock(currentBlock);
-        await setCustomHeader(currentBlock);
-        const blockCompleted = await syncBlock(currentBlock, process);
+        // Validate block with Madara recovery
+        try {
+          await validateBlock(currentBlock);
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            const recovered = await handleMadaraRecoveryBlockLevel(
+              process,
+              currentBlock,
+              "validate",
+            );
+            if (!recovered) {
+              throw new Error(
+                `Madara recovery failed during block validation at block ${currentBlock}`,
+              );
+            }
+            // Retry validation after recovery
+            await validateBlock(currentBlock);
+          } else {
+            throw error;
+          }
+        }
 
-        // If block was cancelled mid-way, don't close it
-        if (!blockCompleted) {
+        // Set custom headers with Madara recovery
+        try {
+          await setCustomHeader(currentBlock);
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            const recovered = await handleMadaraRecoveryBlockLevel(
+              process,
+              currentBlock,
+              "setHeaders",
+            );
+            if (!recovered) {
+              throw new Error(
+                `Madara recovery failed during set headers at block ${currentBlock}`,
+              );
+            }
+
+            // After recovery, check if we need to restart the block
+            const preConfirmedBlock =
+              await getPreConfirmedBlock(syncingProvider_v9);
+            if (preConfirmedBlock.transactions.length === 0) {
+              logger.info(
+                `🔄 Restarting block ${currentBlock} - PRE_CONFIRMED is empty after recovery`,
+              );
+              // Retry setting headers
+              await setCustomHeader(currentBlock);
+            } else {
+              logger.info(
+                `▶️  Continuing block ${currentBlock} - PRE_CONFIRMED has ${preConfirmedBlock.transactions.length} txs`,
+              );
+              process.currentTxIndex = preConfirmedBlock.transactions.length;
+            }
+          } else {
+            throw error;
+          }
+        }
+
+        // Sync block with Madara recovery (handled inside syncBlock)
+        const syncResult = await syncBlock(currentBlock, process);
+
+        // Handle the result
+        if (!syncResult.completed) {
+          if (syncResult.needsRestart) {
+            logger.info(
+              `🔄 Block ${currentBlock} needs restart - retrying from beginning`,
+            );
+            continue; // Retry the same block
+          }
+
+          // This is an actual cancellation
           logger.info(
             `Block ${currentBlock} partially processed - cancellation requested`,
           );
@@ -515,19 +579,57 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           return;
         }
 
-        // Only close block if it was fully processed
-        await closeBlock();
-        await matchBlockHash(currentBlock);
+        // Close block with Madara recovery
+        try {
+          await closeBlock();
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            const recovered = await handleMadaraRecoveryBlockLevel(
+              process,
+              currentBlock,
+              "closeBlock",
+            );
+            if (!recovered) {
+              throw new Error(
+                `Madara recovery failed during close block at block ${currentBlock}`,
+              );
+            }
+            // Retry closing block
+            await closeBlock();
+          } else {
+            throw error;
+          }
+        }
+
+        // Match block hash with Madara recovery
+        try {
+          await matchBlockHash(currentBlock);
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            const recovered = await handleMadaraRecoveryBlockLevel(
+              process,
+              currentBlock,
+              "matchHash",
+            );
+            if (!recovered) {
+              throw new Error(
+                `Madara recovery failed during hash match at block ${currentBlock}`,
+              );
+            }
+            // Retry hash match
+            await matchBlockHash(currentBlock);
+          } else {
+            throw error;
+          }
+        }
 
         process.processedBlocks++;
-        process.currentTxIndex = 0; // Reset for next block
+        process.currentTxIndex = 0;
 
-        // Update Redis timestamp periodically (every block)
         await persistence.updateLastChecked(process.id);
 
         logger.info(`Block ${currentBlock} completed successfully`);
 
-        // If we completed current block due to cancellation, stop here
         if (process.cancelRequested && process.completeCurrentBlock) {
           await persistence.updateStatus(process.id, "cancelled");
           stopProbeLoop();
@@ -538,7 +640,6 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           return;
         }
 
-        // Move to next block
         currentBlock++;
       } catch (error) {
         await persistence.updateStatus(process.id, "failed");
@@ -551,7 +652,6 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
     }
 
-    // 🆕 This only executes for non-continuous sync (fixed range completed)
     if (!process.isContinuous) {
       await persistence.updateStatus(process.id, "completed");
       stopProbeLoop();
@@ -567,4 +667,34 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }
+}
+
+/**
+ * Handle Madara recovery for operations at block level
+ */
+async function handleMadaraRecoveryBlockLevel(
+  process: SyncProcess,
+  currentBlock: number,
+  operation: "validate" | "setHeaders" | "closeBlock" | "matchHash",
+): Promise<boolean> {
+  logger.warn(
+    `🚨 Madara down detected during ${operation} at block ${currentBlock}`,
+  );
+
+  process.status = "recovering";
+
+  const recovered = await waitForMadaraRecovery();
+
+  if (!recovered) {
+    logger.error(
+      `❌ Madara recovery failed during ${operation} - timeout exceeded (24 hours) at block ${currentBlock}`,
+    );
+    process.status = "failed";
+    process.error = `Madara recovery timeout during ${operation} - exceeded 24 hour wait period`;
+    return false;
+  }
+
+  logger.info(`✅ Madara recovered after ${operation} - resuming...`);
+  process.status = "running";
+  return true;
 }
