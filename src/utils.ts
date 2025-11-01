@@ -8,7 +8,7 @@ import {
   BlockTag,
   TransactionReceipt,
 } from "starknet";
-import ERC20 from "./contracts/ERC20.json" with { type: "json" };
+import ERC20 from "../artifacts/ERC20.json" with { type: "json" };
 import logger from "./logger.js";
 import axios, { AxiosResponse } from "axios";
 // import db from "./models/index.js";
