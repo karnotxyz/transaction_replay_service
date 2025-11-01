@@ -25,6 +25,8 @@ export interface SyncProcess {
   error?: string;
   cancelRequested: boolean;
   completeCurrentBlock?: boolean;
+  isContinuous?: boolean; // true for continuous sync (endBlock: "latest")
+  originalTarget?: number; // the first target block when continuous sync started
 }
 
 export interface StoredSyncProcess {
@@ -34,6 +36,8 @@ export interface StoredSyncProcess {
   status: "running" | "completed" | "failed" | "cancelled";
   createdAt: string;
   lastChecked: string;
+  isContinuous?: string; // stored as string in Redis ("true" or "false")
+  originalTarget?: string; // stored as string in Redis
 }
 
 export interface SyncRequest {

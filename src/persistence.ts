@@ -67,22 +67,35 @@ class PersistenceLayer {
     }
   }
 
-  // Save sync process metadata (only metadata, no progress tracking)
+  // Save sync process metadata (with continuous sync support)
   async saveSyncProcess(
     processId: string,
     syncFrom: number,
     syncTo: number,
+    isContinuous: boolean = false,
+    originalTarget?: number,
   ): Promise<void> {
     const key = `sync:${processId}`;
-    await this.redis.hmset(key, {
+    const data: Record<string, string> = {
       processId,
       syncFrom: syncFrom.toString(),
       syncTo: syncTo.toString(),
       status: "running",
       createdAt: new Date().toISOString(),
       lastChecked: new Date().toISOString(),
-    });
-    logger.info(`💾 Saved sync process ${processId} (${syncFrom} → ${syncTo})`);
+      isContinuous: isContinuous.toString(),
+    };
+
+    if (originalTarget !== undefined) {
+      data.originalTarget = originalTarget.toString();
+    }
+
+    await this.redis.hmset(key, data);
+
+    const mode = isContinuous ? "CONTINUOUS" : "FIXED";
+    logger.info(
+      `💾 Saved sync process ${processId} (${syncFrom} → ${syncTo}) [${mode}]`,
+    );
   }
 
   // Get sync process metadata
@@ -102,7 +115,17 @@ class PersistenceLayer {
       createdAt: data.createdAt || new Date().toISOString(),
       lastChecked:
         data.lastChecked || data.lastUpdated || new Date().toISOString(),
+      isContinuous: data.isContinuous,
+      originalTarget: data.originalTarget,
     };
+  }
+
+  // Update sync target (for continuous sync when new blocks are detected)
+  async updateSyncTarget(processId: string, newTarget: number): Promise<void> {
+    const key = `sync:${processId}`;
+    await this.redis.hset(key, "syncTo", newTarget.toString());
+    await this.redis.hset(key, "lastChecked", new Date().toISOString());
+    logger.info(`📈 Updated process ${processId} target to block ${newTarget}`);
   }
 
   // Update last checked timestamp

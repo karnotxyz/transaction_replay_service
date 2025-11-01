@@ -88,7 +88,7 @@ async function handleCleanSlate(): Promise<void> {
   }
 }
 
-// Auto-resume function
+// 🆕 ENHANCED Auto-resume function with continuous sync support
 async function autoResumeOnStartup(): Promise<void> {
   try {
     // Wait for Redis to be connected
@@ -109,22 +109,48 @@ async function autoResumeOnStartup(): Promise<void> {
       return;
     }
 
-    logger.info(`📋 Found incomplete process: ${activeProcess.processId}`);
+    // 🆕 Check if this is a continuous sync process
+    const isContinuous = activeProcess.isContinuous === "true";
+    const originalTarget = activeProcess.originalTarget
+      ? parseInt(activeProcess.originalTarget)
+      : undefined;
+
+    const mode = isContinuous ? "CONTINUOUS" : "FIXED";
+    logger.info(
+      `📋 Found incomplete process: ${activeProcess.processId} [${mode}]`,
+    );
     logger.info(
       `📊 Process details: ${activeProcess.syncFrom} → ${activeProcess.syncTo}`,
     );
     logger.info(`📅 Last checked: ${activeProcess.lastChecked}`);
 
+    if (isContinuous) {
+      logger.info(
+        `🔄 This is a CONTINUOUS sync process (original target: ${originalTarget})`,
+      );
+      logger.info(
+        `📍 Current target has been dynamically updated to: ${activeProcess.syncTo}`,
+      );
+    }
+
     // Calculate endBlock from stored syncTo
-    const endBlock = activeProcess.syncTo;
+    // 🆕 For continuous sync, we use "latest" to restart the continuous mode
+    const endBlock = isContinuous ? "latest" : activeProcess.syncTo;
 
     logger.info(
       `\n🔄 Auto-resuming sync process ${activeProcess.processId}...`,
     );
 
+    if (isContinuous) {
+      logger.info(
+        `🔄 Restarting in CONTINUOUS mode - will fetch latest target and continue tracking`,
+      );
+    }
+
     try {
-      // Call start_sync with the stored endBlock
-      // start_sync will use pending block to figure out where to actually resume from
+      // Call start_sync with the appropriate endBlock
+      // For continuous: "latest" will restart continuous mode
+      // For fixed: syncTo will resume from where it left off
       const result = await start_sync(endBlock);
 
       if (result.alreadyComplete) {
@@ -139,6 +165,12 @@ async function autoResumeOnStartup(): Promise<void> {
         logger.info(
           `📊 Resuming from block ${result.syncFrom}, tx ${result.startTxIndex}`,
         );
+
+        if (isContinuous) {
+          logger.info(
+            `🔄 Continuous sync mode reactivated - probe loop will track new blocks`,
+          );
+        }
       }
     } catch (error: any) {
       if (error.code === "SYNC_IN_PROGRESS") {
@@ -162,6 +194,9 @@ async function main() {
   console.log(
     "⚡ SNAP SYNC mode available - use /snap_sync for parallel processing",
   );
+  console.log(
+    "🔄 CONTINUOUS SYNC supported - use endBlock: 'latest' to follow new blocks",
+  );
 
   try {
     app.listen(PORT, async () => {
@@ -174,6 +209,7 @@ async function main() {
       await handleCleanSlate();
 
       // Auto-resume any incomplete processes (unless clean slate was performed)
+      // 🆕 Now supports continuous sync auto-resume
       await autoResumeOnStartup();
 
       logger.info("✅ Service fully initialized and ready");
@@ -183,6 +219,10 @@ async function main() {
       logger.info("  • POST /sync/cancel - Cancel sequential sync");
       logger.info("  • POST /snap_sync/cancel - Cancel snap sync");
       logger.info("  • GET /snap_sync/status - Get snap sync status");
+      logger.info("📌 Continuous sync:");
+      logger.info("  • Use endBlock: 'latest' in any sync request");
+      logger.info("  • System will automatically follow new blocks");
+      logger.info("  • Auto-resume works for continuous sync processes");
     });
 
     process.on("SIGINT", async () => {

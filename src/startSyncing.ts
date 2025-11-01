@@ -24,6 +24,98 @@ import { BlockTag, BlockIdentifier, BlockWithTxHashes } from "starknet";
 import { persistence } from "./persistence.js";
 import { syncBlock, validateBlock } from "./syncing.js";
 
+// 🆕 Probe state management
+let probeInterval: NodeJS.Timeout | null = null;
+const PROBE_INTERVAL_MS = 60 * 1000; // 1 minute
+const PROBE_MAX_RETRIES = 5;
+
+// 🆕 Start the probe loop for continuous sync
+function startProbeLoop(process: SyncProcess): void {
+  if (probeInterval) {
+    logger.warn("⚠️  Probe loop already running, skipping start");
+    return;
+  }
+
+  logger.info("🔍 Starting probe loop for continuous sync (checks every 60s)");
+
+  probeInterval = setInterval(async () => {
+    try {
+      await probeForNewBlocks(process);
+    } catch (error) {
+      logger.error("❌ Probe loop error:", error);
+    }
+  }, PROBE_INTERVAL_MS);
+}
+
+// 🆕 Stop the probe loop
+function stopProbeLoop(): void {
+  if (probeInterval) {
+    clearInterval(probeInterval);
+    probeInterval = null;
+    logger.info("🛑 Probe loop stopped");
+  }
+}
+
+// 🆕 Probe function to check for new blocks with exponential backoff retry
+async function probeForNewBlocks(process: SyncProcess): Promise<void> {
+  if (!process.isContinuous) {
+    logger.debug("Skipping probe - not a continuous sync");
+    return;
+  }
+
+  let retryCount = 0;
+  let lastError: any = null;
+
+  while (retryCount < PROBE_MAX_RETRIES) {
+    try {
+      const latestBlock = await getLatestBlockNumber(originalProvider_v9);
+
+      if (latestBlock > process.syncTo) {
+        const oldTarget = process.syncTo;
+        const newBlocks = latestBlock - oldTarget;
+
+        // Update in-memory process
+        process.syncTo = latestBlock;
+
+        // Update Redis
+        await persistence.updateSyncTarget(process.id, latestBlock);
+
+        logger.info(
+          `📈 Target updated: ${oldTarget} → ${latestBlock} (${newBlocks} new blocks detected)`,
+        );
+      } else {
+        logger.debug(
+          `🔍 Probe: No new blocks (latest: ${latestBlock}, target: ${process.syncTo})`,
+        );
+      }
+
+      // Success - exit retry loop
+      return;
+    } catch (error) {
+      lastError = error;
+      retryCount++;
+
+      if (retryCount < PROBE_MAX_RETRIES) {
+        // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+        const delay = Math.pow(2, retryCount) * 1000;
+        logger.warn(
+          `⚠️  Probe failed (attempt ${retryCount}/${PROBE_MAX_RETRIES}), retrying in ${delay}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  // All retries failed
+  logger.error(
+    `❌ Probe failed after ${PROBE_MAX_RETRIES} attempts. Last error:`,
+    lastError,
+  );
+  logger.warn(
+    "⚠️  Continuing with current target, will retry on next probe cycle",
+  );
+}
+
 export async function find_syncing_bounds(
   end_block: BlockTag | number,
 ): Promise<SyncBounds> {
@@ -217,11 +309,18 @@ export async function start_sync(end_block: BlockIdentifier) {
       currentTxIndex: currentProcess.currentTxIndex,
       syncFrom: currentProcess.syncFrom,
       syncTo: currentProcess.syncTo,
+      isContinuous: currentProcess.isContinuous || false,
     };
     throw error;
   }
 
   let targetBlock = get_target_block(end_block);
+
+  // 🆕 Detect continuous sync mode
+  const isContinuous =
+    end_block === BlockTag.LATEST ||
+    end_block === "latest" ||
+    end_block === null;
 
   // Get sync bounds using pending block analysis
   const bounds = await find_syncing_bounds(targetBlock);
@@ -241,8 +340,14 @@ export async function start_sync(end_block: BlockIdentifier) {
   // Create new process
   const processId = uuidv4();
 
-  // Save to Redis (this marks the process as active)
-  await persistence.saveSyncProcess(processId, bounds.syncFrom, bounds.syncTo);
+  // Save to Redis (with continuous flag)
+  await persistence.saveSyncProcess(
+    processId,
+    bounds.syncFrom,
+    bounds.syncTo,
+    isContinuous,
+    isContinuous ? bounds.syncTo : undefined, // Store original target
+  );
 
   const newProcess: SyncProcess = {
     id: processId,
@@ -251,21 +356,41 @@ export async function start_sync(end_block: BlockIdentifier) {
     syncTo: bounds.syncTo,
     currentBlock: bounds.syncFrom,
     currentTxIndex: bounds.startTxIndex,
-    totalBlocks: bounds.syncTo - bounds.syncFrom + 1,
+    totalBlocks: isContinuous ? null : bounds.syncTo - bounds.syncFrom + 1,
     processedBlocks: 0,
     startTime: new Date(),
     cancelRequested: false,
+    isContinuous,
+    originalTarget: isContinuous ? bounds.syncTo : undefined,
   };
 
   // Add to in-memory registry for cancellation and status tracking
   currentProcess = newProcess;
 
-  logger.info(`🚀 Starting sync process ${processId}`);
+  const syncMode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
+  logger.info(`🚀 Starting sync process ${processId} [${syncMode}]`);
   logger.info(`📊 ${bounds.message}`);
+
+  if (isContinuous) {
+    logger.info(
+      `🔄 Continuous sync enabled - will track new blocks as they arrive`,
+    );
+    logger.info(`📍 Initial target: block ${bounds.syncTo}`);
+  }
+
+  // 🆕 Start probe loop for continuous sync
+  if (isContinuous) {
+    startProbeLoop(newProcess);
+  }
 
   // Start sync process asynchronously
   syncBlocksAsync(newProcess).catch(async (error) => {
     logger.error(`❌ Sync process ${processId} failed:`, error);
+
+    // Stop probe loop on failure
+    if (newProcess.isContinuous) {
+      stopProbeLoop();
+    }
 
     // Remove from in-memory registry
     currentProcess = null;
@@ -287,6 +412,7 @@ export async function start_sync(end_block: BlockIdentifier) {
     syncTo: bounds.syncTo,
     startTxIndex: bounds.startTxIndex,
     estimatedBlocks: newProcess.totalBlocks,
+    isContinuous,
   };
 }
 
@@ -299,6 +425,11 @@ export async function getCurrentProcess(): Promise<SyncProcess | null> {
   }
 
   // Convert stored process to SyncProcess format
+  const isContinuous = activeProcess.isContinuous === "true";
+  const originalTarget = activeProcess.originalTarget
+    ? parseInt(activeProcess.originalTarget)
+    : undefined;
+
   return {
     id: activeProcess.processId,
     status: activeProcess.status as any,
@@ -306,26 +437,33 @@ export async function getCurrentProcess(): Promise<SyncProcess | null> {
     syncTo: activeProcess.syncTo,
     currentBlock: activeProcess.syncFrom, // We don't track this anymore
     currentTxIndex: 0, // We don't track this anymore
-    totalBlocks: activeProcess.syncTo - activeProcess.syncFrom + 1,
+    totalBlocks: isContinuous
+      ? null
+      : activeProcess.syncTo - activeProcess.syncFrom + 1,
     processedBlocks: 0, // We don't track this anymore
     startTime: new Date(activeProcess.createdAt),
     cancelRequested: false,
+    isContinuous,
+    originalTarget,
   };
 }
 
-// Async sync function with cancellation support
+// Async sync function with cancellation support and continuous sync
 export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
+    const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
-      `Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo}`,
+      `Starting async sync process ${process.id} from block ${process.syncFrom} to ${process.syncTo} [${mode}]`,
     );
 
     let currentBlock = process.currentBlock; // Start from where we left off (or syncFrom)
 
-    while (currentBlock <= process.syncTo) {
+    // 🆕 Continuous sync loop - never exits naturally
+    while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
         await persistence.updateStatus(process.id, "cancelled");
+        stopProbeLoop();
         currentProcess = null;
         logger.info(
           `Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`,
@@ -340,11 +478,24 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         currentBlock > process.currentBlock
       ) {
         await persistence.updateStatus(process.id, "cancelled");
+        stopProbeLoop();
         currentProcess = null;
         logger.info(
           `Sync process ${process.id} cancelled after completing block ${process.currentBlock}`,
         );
         return;
+      }
+
+      // 🆕 For continuous sync: if caught up, wait for new blocks
+      if (process.isContinuous && currentBlock > process.syncTo) {
+        logger.info(
+          `⏸️  Caught up to target block ${process.syncTo}, waiting for new blocks...`,
+        );
+        logger.info(`🔍 Probe will check for new blocks every 60 seconds`);
+
+        // Wait for 5 seconds, then check again
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        continue; // Go back to loop start and check again
       }
 
       process.currentBlock = currentBlock;
@@ -360,6 +511,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           logger.info(
             `Block ${currentBlock} partially processed - cancellation requested`,
           );
+          stopProbeLoop();
           return;
         }
 
@@ -373,13 +525,12 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Update Redis timestamp periodically (every block)
         await persistence.updateLastChecked(process.id);
 
-        logger.info(
-          `Block ${currentBlock} completed successfully`,
-        );
+        logger.info(`Block ${currentBlock} completed successfully`);
 
         // If we completed current block due to cancellation, stop here
         if (process.cancelRequested && process.completeCurrentBlock) {
           await persistence.updateStatus(process.id, "cancelled");
+          stopProbeLoop();
           currentProcess = null;
           logger.info(
             `Sync process ${process.id} cancelled after completing current block ${currentBlock}`,
@@ -391,6 +542,7 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         currentBlock++;
       } catch (error) {
         await persistence.updateStatus(process.id, "failed");
+        stopProbeLoop();
         logger.error(
           `Failed to process block ${currentBlock} in process ${process.id}:`,
           error,
@@ -399,14 +551,18 @@ export async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
     }
 
-    // Sync completed successfully
-    await persistence.updateStatus(process.id, "completed");
-    currentProcess = null;
-    logger.info(
-      `✅ Sync process ${process.id} completed successfully (${process.syncFrom} → ${process.syncTo})`,
-    );
+    // 🆕 This only executes for non-continuous sync (fixed range completed)
+    if (!process.isContinuous) {
+      await persistence.updateStatus(process.id, "completed");
+      stopProbeLoop();
+      currentProcess = null;
+      logger.info(
+        `✅ Sync process ${process.id} completed successfully (${process.syncFrom} → ${process.syncTo})`,
+      );
+    }
   } catch (error) {
     await persistence.updateStatus(process.id, "failed");
+    stopProbeLoop();
     currentProcess = null;
     logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
