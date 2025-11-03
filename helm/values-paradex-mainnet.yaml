@@ -1,0 +1,11 @@
+instance:
+  name: paradex-mainnet
+
+transaction_syncing_service:
+  environment:
+    RPC_URL_ORIGINAL_NODE: "https://pathfinder.api.prod.paradex.trade"
+    RPC_URL_SYNCING_NODE: "http://paradex-mainnet-madara-service.madara-full-node.svc.cluster.local:9944"
+    ADMIN_RPC_URL_SYNCING_NODE: "http://paradex-mainnet-madara-service.madara-full-node.svc.cluster.local:9943"
+    CLEAN_STATE: "false"
+# Deploy paradex-mainnet instance
+# helm install paradex-mainnet-replay ./helm -f values-paradex-mainnet.yaml

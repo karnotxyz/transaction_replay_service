@@ -18,7 +18,7 @@ export class SyncStateManager {
   private currentSequentialProcess: SyncProcess | null = null;
   private sequentialProbeInterval: NodeJS.Timeout | null = null;
 
-  // Snap sync state
+  // sync state
   private currentSnapSyncProcess: SyncProcess | null = null;
   private snapProbeInterval: NodeJS.Timeout | null = null;
 
@@ -123,33 +123,33 @@ export class SyncStateManager {
   }
 
   // ========================================
-  // Snap Sync Methods
+  // Sync Methods
   // ========================================
 
   /**
-   * Get current snap sync process
+   * Get current sync process
    */
   public getSnapSyncProcess(): SyncProcess | null {
     return this.currentSnapSyncProcess;
   }
 
   /**
-   * Set current snap sync process
+   * Set current sync process
    */
   public setSnapSyncProcess(process: SyncProcess | null): void {
     this.currentSnapSyncProcess = process;
 
     if (process) {
       logger.info(
-        `📝 Snap sync process registered: ${process.id} (${process.syncFrom} → ${process.syncTo})`,
+        `📝 sync process registered: ${process.id} (${process.syncFrom} → ${process.syncTo})`,
       );
     } else {
-      logger.info("📝 Snap sync process cleared");
+      logger.info("📝 sync process cleared");
     }
   }
 
   /**
-   * Check if snap sync is running
+   * Check if sync is running
    */
   public isSnapSyncRunning(): boolean {
     return (
@@ -159,13 +159,13 @@ export class SyncStateManager {
   }
 
   /**
-   * Update snap sync process status
+   * Update sync process status
    */
   public async updateSnapSyncStatus(
     status: (typeof ProcessStatus)[keyof typeof ProcessStatus],
   ): Promise<void> {
     if (!this.currentSnapSyncProcess) {
-      throw new ProcessNotFoundError("No snap sync process active");
+      throw new ProcessNotFoundError("No sync process active");
     }
 
     this.currentSnapSyncProcess.status = status;
@@ -173,7 +173,7 @@ export class SyncStateManager {
   }
 
   /**
-   * Clear snap sync process
+   * Clear sync process
    */
   public clearSnapSyncProcess(): void {
     this.currentSnapSyncProcess = null;

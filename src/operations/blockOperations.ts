@@ -315,8 +315,6 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
         throw new BlockHashMismatchError(blockNumber, paradexHash, madaraHash);
       }
 
-      // Success
-      logger.info(`✅ Block hash verified for block ${blockNumber}`);
       return;
     } catch (error) {
       // If it's a hash mismatch error, don't retry

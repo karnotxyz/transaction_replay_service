@@ -1,18 +1,21 @@
+# redis-service.yaml
 {{- if .Values.redis.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.redis.name }}-service
+  name: redis-{{ .Values.instance.name }}-service
   namespace: {{ .Values.namespace.name }}
   labels:
-    app: {{ .Values.redis.name }}
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 spec:
   type: ClusterIP
   clusterIP: None  # Headless service for StatefulSet
   selector:
-    app: {{ .Values.redis.name }}
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   ports:
     - protocol: TCP
       port: {{ .Values.redis.port }}
@@ -22,16 +25,18 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.redis.name }}
+  name: redis-{{ .Values.instance.name }}
   namespace: {{ .Values.namespace.name }}
   labels:
-    app: {{ .Values.redis.name }}
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 spec:
   type: ClusterIP
   selector:
-    app: {{ .Values.redis.name }}
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   ports:
     - protocol: TCP
       port: {{ .Values.redis.port }}

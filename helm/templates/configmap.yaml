@@ -1,12 +1,20 @@
+# configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: transaction-syncing-service-config
+  name: {{ .Values.instance.name }}-replay-service-config
   namespace: {{ .Values.namespace.name }}
+  labels:
+    app: {{ .Values.instance.name }}-replay-service
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 data:
+  {{- if or (not .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE) (eq .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE "REPLACE_ME_WITH_ACTUAL_API_ENDPOINT") }}
+  {{- fail "ERROR: RPC_URL_ORIGINAL_NODE must be set to a valid endpoint. Use --set or a secrets file." }}
+  {{- end }}
   RPC_URL_ORIGINAL_NODE: {{ .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE | quote }}
   RPC_URL_SYNCING_NODE: {{ .Values.transaction_syncing_service.environment.RPC_URL_SYNCING_NODE | quote }}
   ADMIN_RPC_URL_SYNCING_NODE: {{ .Values.transaction_syncing_service.environment.ADMIN_RPC_URL_SYNCING_NODE | quote }}
-  REDIS_URL: {{ .Values.transaction_syncing_service.environment.REDIS_URL | quote }}
+  REDIS_URL: {{ printf "redis://redis-%s.%s.svc.cluster.local:%v" .Values.instance.name .Values.namespace.name (.Values.redis.port | int) | quote }}
+  CLEAN_STATE: {{ .Values.transaction_syncing_service.environment.CLEAN_STATE | quote }}

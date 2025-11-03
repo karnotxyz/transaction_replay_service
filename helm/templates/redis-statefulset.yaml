@@ -1,23 +1,27 @@
+# redis-statefulset.yaml
 {{- if .Values.redis.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ .Values.redis.name }}
+  name: redis-{{ .Values.instance.name }}
   namespace: {{ .Values.namespace.name }}
   labels:
-    app: {{ .Values.redis.name }}
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 spec:
-  serviceName: {{ .Values.redis.name }}-service
+  serviceName: redis-{{ .Values.instance.name }}-service
   replicas: {{ .Values.redis.replicas }}
   selector:
     matchLabels:
-      app: {{ .Values.redis.name }}
+      app: redis-{{ .Values.instance.name }}
+      instance: {{ .Values.instance.name }}
   template:
     metadata:
       labels:
-        app: {{ .Values.redis.name }}
+        app: redis-{{ .Values.instance.name }}
+        instance: {{ .Values.instance.name }}
     spec:
       containers:
       - name: redis
@@ -62,9 +66,9 @@ spec:
       {{- if .Values.redis.persistence.enabled }}
       - name: redis-data
         persistentVolumeClaim:
-          claimName: {{ .Values.redis.name }}-pvc
+          claimName: redis-{{ .Values.instance.name }}-pvc
       {{- end }}
       - name: redis-config
         configMap:
-          name: {{ .Values.redis.name }}-config
+          name: redis-{{ .Values.instance.name }}-config
 {{- end }}

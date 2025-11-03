@@ -37,7 +37,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     if (syncStateManager.isSnapSyncRunning()) {
       const currentProcess = syncStateManager.getSnapSyncProcess()!;
       const response: any = {
-        error: "Snap sync already in progress",
+        error: "sync already in progress",
         processId: currentProcess.id,
         currentBlock: currentProcess.currentBlock,
         endBlock: currentProcess.syncTo,
@@ -46,7 +46,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
       if (currentProcess.isContinuous) {
         response.mode = "continuous";
         response.note =
-          "This is a continuous snap sync following the latest blocks";
+          "This is a continuous sync following the latest blocks";
       }
 
       return res.status(HttpStatus.CONFLICT).json(response);
@@ -99,7 +99,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     );
 
     const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
-    logger.info(`🚀 Starting SNAP SYNC process ${processId} [${mode}]`);
+    logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
     logger.info(
       `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
     );
@@ -107,7 +107,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
 
     if (isContinuous) {
       logger.info(
-        `🔄 Continuous snap sync enabled - will track new blocks as they arrive`,
+        `🔄 Continuous sync enabled - will track new blocks as they arrive`,
       );
       logger.info(`📍 Initial target: block ${targetBlock}`);
       const probeInterval = probeManager.createProbeInterval(newProcess);
@@ -115,7 +115,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     }
 
     snapSyncBlocksAsync(newProcess).catch(async (error) => {
-      logger.error(`❌ Snap sync process ${processId} failed:`, error);
+      logger.error(`❌ sync process ${processId} failed:`, error);
       if (newProcess.isContinuous) {
         syncStateManager.stopSnapProbe();
       }
@@ -128,7 +128,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     });
 
     const response: any = {
-      message: "Snap sync process started successfully",
+      message: "sync process started successfully",
       processId,
       mode: isContinuous
         ? "continuous-parallel"
@@ -143,13 +143,13 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
 
     if (isContinuous) {
       response.continuousSyncNote =
-        "Continuous snap sync enabled - will automatically follow new blocks as they arrive";
+        "Continuous sync enabled - will automatically follow new blocks as they arrive";
       response.status.initialTarget = targetBlock;
     }
 
     return res.status(HttpStatus.ACCEPTED).json(response);
   } catch (error: any) {
-    logger.error("Error starting snap sync process:", error);
+    logger.error("Error starting sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       error: `Failed to start snap sync: ${error.message || error}`,
     });
@@ -224,7 +224,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
-      `Starting snap sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
+      `Starting sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
     );
 
     let currentBlock = process.currentBlock;
@@ -236,7 +236,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         syncStateManager.stopSnapProbe();
         syncStateManager.clearSnapSyncProcess();
         logger.info(
-          `🛑 Snap sync process ${process.id} cancelled at block ${currentBlock}`,
+          `🛑 Sync process ${process.id} cancelled at block ${currentBlock}`,
         );
         return;
       }
@@ -289,7 +289,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
           } else if (error instanceof MadaraDownError) {
             // Handle Madara recovery
             logger.warn(
-              `🚨 Madara down detected during snap sync at block ${currentBlock}`,
+              `🚨 Madara down detected during sync at block ${currentBlock}`,
             );
 
             const recoveryResult = await blockProcessor.handleBlockRecovery(
@@ -369,7 +369,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       const duration = process.endTime.getTime() - process.startTime.getTime();
       const durationSeconds = (duration / 1000).toFixed(2);
 
-      logger.info(`\n🎉 SNAP SYNC COMPLETED!`);
+      logger.info(`\n🎉SYNC COMPLETED!`);
       logger.info(`✅ Process ${process.id} finished successfully`);
       logger.info(
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
@@ -384,13 +384,13 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
 
     syncStateManager.stopSnapProbe();
     syncStateManager.clearSnapSyncProcess();
-    logger.error(`❌ Snap sync process ${process.id} failed:`, error);
+    logger.error(`❌ sync process ${process.id} failed:`, error);
     throw error;
   }
 }
 
 /**
- * Cancel the current snap sync process
+ * Cancel the current  sync process
  */
 export const cancelSnapSync = async (req: Request, res: Response) => {
   try {
@@ -398,13 +398,13 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
 
     if (!currentProcess) {
       return res.status(HttpStatus.NOT_FOUND).json({
-        error: "No snap sync process currently running",
+        error: "No sync process currently running",
       });
     }
 
     if (currentProcess.status !== ProcessStatus.RUNNING) {
       return res.status(HttpStatus.BAD_REQUEST).json({
-        error: `Snap sync process is not running (current status: ${currentProcess.status})`,
+        error: `Sync process is not running (current status: ${currentProcess.status})`,
         processId: currentProcess.id,
         status: currentProcess.status,
       });
@@ -414,12 +414,12 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
 
     const mode = currentProcess.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
-      `🛑 Cancellation requested for snap sync process ${currentProcess.id} [${mode}]`,
+      `🛑 Cancellation requested for sync process ${currentProcess.id} [${mode}]`,
     );
 
     const response: any = {
       message:
-        "Snap sync cancellation requested - will stop after current block completes",
+        "Sync cancellation requested - will stop after current block completes",
       processId: currentProcess.id,
       currentBlock: currentProcess.currentBlock,
       note: "Current block will complete all transactions before stopping",
@@ -428,14 +428,14 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
     if (currentProcess.isContinuous) {
       response.mode = "continuous";
       response.continuousSyncNote =
-        "This was a continuous snap sync process. Probe loop will be stopped.";
+        "This was a continuous sync process. Probe loop will be stopped.";
       response.currentTarget = currentProcess.syncTo;
       response.originalTarget = currentProcess.originalTarget;
     }
 
     return res.json(response);
   } catch (error: any) {
-    logger.error("Error cancelling snap sync process:", error);
+    logger.error("Error cancelling sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       error: `Failed to cancel snap sync: ${error.message || error}`,
     });
@@ -443,7 +443,7 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
 };
 
 /**
- * Get snap sync status
+ * Get sync status
  */
 export const getSnapSyncStatus = async (req: Request, res: Response) => {
   try {
@@ -451,7 +451,7 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
 
     if (!currentProcess) {
       return res.json({
-        message: "No snap sync process currently running",
+        message: "No sync process currently running",
       });
     }
 
@@ -503,9 +503,9 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
 
     return res.json(response);
   } catch (error: any) {
-    logger.error("Error getting snap sync status:", error);
+    logger.error("Error getting sync status:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-      error: `Failed to get snap sync status: ${error.message || error}`,
+      error: `Failed to get sync status: ${error.message || error}`,
     });
   }
 };

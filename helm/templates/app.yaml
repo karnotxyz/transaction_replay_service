@@ -1,21 +1,25 @@
+# app.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Values.transaction_syncing_service.name }}
+  name: {{ .Values.instance.name }}-replay-service
   namespace: {{ .Values.namespace.name }}
   labels:
-    app: {{ .Values.transaction_syncing_service.name }}
+    app: {{ .Values.instance.name }}-replay-service
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 spec:
   replicas: {{ .Values.transaction_syncing_service.replicas }}
   selector:
     matchLabels:
-      app: {{ .Values.transaction_syncing_service.name }}
+      app: {{ .Values.instance.name }}-replay-service
+      instance: {{ .Values.instance.name }}
   template:
     metadata:
       labels:
-        app: {{ .Values.transaction_syncing_service.name }}
+        app: {{ .Values.instance.name }}-replay-service
+        instance: {{ .Values.instance.name }}
     spec:
       containers:
         - name: transaction-syncing-service
@@ -31,4 +35,4 @@ spec:
             - containerPort: 3000
           envFrom:
             - configMapRef:
-                name: transaction-syncing-service-config
+                name: {{ .Values.instance.name }}-replay-service-config

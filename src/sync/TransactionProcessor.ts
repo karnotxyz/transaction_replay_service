@@ -50,7 +50,7 @@ export class SequentialTransactionProcessor {
 }
 
 /**
- * Process transactions in parallel (snap sync mode)
+ * Process transactions in parallel (sync mode)
  */
 export class ParallelTransactionProcessor {
   /**

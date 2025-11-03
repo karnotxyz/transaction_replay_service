@@ -1,9 +1,13 @@
+# redis-pvc.yaml
 {{- if and .Values.redis.enabled .Values.redis.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.redis.name }}-pvc
+  name: redis-{{ .Values.instance.name }}-pvc
   namespace: {{ .Values.namespace.name }}
+  labels:
+    app: redis-{{ .Values.instance.name }}
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:

@@ -32,18 +32,11 @@ app.get("/health", (req, res) => {
 });
 
 // ========================================
-// Sequential Sync Endpoints
+// Sync Endpoints (Parallel)
 // ========================================
-app.post("/sync", syncEndpoint);
-app.post("/sync/cancel/:processId", cancelSync);
-app.post("/sync/cancel", cancelCurrentSync);
-
-// ========================================
-// Snap Sync Endpoints (Parallel)
-// ========================================
-app.post("/snap_sync", snapSyncEndpoint);
-app.post("/snap_sync/cancel", cancelSnapSync);
-app.get("/snap_sync/status", getSnapSyncStatus);
+app.post("/sync", snapSyncEndpoint);
+app.post("/sync/cancel", cancelSnapSync);
+app.get("/snap/status", getSnapSyncStatus);
 
 // ========================================
 // Clean Slate Handler
@@ -198,14 +191,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
 // Main Function
 // ========================================
 async function main() {
-  console.log("🚀 Starting Transaction Replay Service");
-  console.log(
-    "⚡ SNAP SYNC mode available - use /snap_sync for parallel processing",
-  );
-  console.log(
-    "🔄 CONTINUOUS SYNC supported - use endBlock: 'latest' to follow new blocks",
-  );
-
   try {
     app.listen(config.port, async () => {
       logger.info(`🌐 Syncing service listening on port ${config.port}`);
@@ -216,17 +201,19 @@ async function main() {
       // Handle clean slate if enabled
       await handleCleanSlate();
 
+      logger.info("🚀 Starting Transaction Replay Service");
+
       // Auto-resume any incomplete processes
       await autoResumeOnStartup();
 
       logger.info("✅ Service fully initialized and ready");
       logger.info("📌 Available endpoints:");
       logger.info("  • GET  /health - Health check");
-      logger.info("  • POST /sync - Sequential transaction processing");
-      logger.info("  • POST /snap_sync - Parallel transaction processing");
-      logger.info("  • POST /sync/cancel - Cancel sequential sync");
-      logger.info("  • POST /snap_sync/cancel - Cancel snap sync");
-      logger.info("  • GET  /snap_sync/status - Get snap sync status");
+      logger.info(
+        "  • POST /sync - Sequential transaction processing, Parallel receipt waiting",
+      );
+      logger.info("  • POST /sync/cancel - Cancel sync");
+      logger.info("  • GET  /sync/status - Get sync status");
       logger.info("📌 Continuous sync:");
       logger.info("  • Use endBlock: 'latest' in any sync request");
       logger.info("  • System will automatically follow new blocks");

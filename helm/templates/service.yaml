@@ -1,16 +1,19 @@
+# service.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: transaction-syncing-service-svc
+  name: {{ .Values.instance.name }}-replay-service-svc
   namespace: {{ .Values.namespace.name }}
   labels:
-    app: transaction-syncing-service-svc
+    app: {{ .Values.instance.name }}-replay-service
+    instance: {{ .Values.instance.name }}
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 spec:
   type: ClusterIP
   selector:
-    app: {{ .Values.transaction_syncing_service.name }}
+    app: {{ .Values.instance.name }}-replay-service
+    instance: {{ .Values.instance.name }}
   ports:
     - protocol: TCP
       port: 80
