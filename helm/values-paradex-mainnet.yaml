@@ -8,4 +8,5 @@ transaction_syncing_service:
     ADMIN_RPC_URL_SYNCING_NODE: "http://paradex-mainnet-madara-service.madara-full-node.svc.cluster.local:9943"
     CLEAN_STATE: "false"
 # Deploy paradex-mainnet instance
-# helm install paradex-mainnet-replay ./helm -f values-paradex-mainnet.yaml
+# helm install paradex-mainnet-replay ./helm -f ./helm/values-paradex-mainnet.yaml
+# helm uninstall paradex-testnet-replay

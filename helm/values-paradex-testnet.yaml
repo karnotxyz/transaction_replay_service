@@ -8,4 +8,5 @@ transaction_syncing_service:
     ADMIN_RPC_URL_SYNCING_NODE: "http://paradex-testnet-madara-service-dev.madara-full-node.svc.cluster.local:9943"
     CLEAN_STATE: "false"
 # Deploy paradex-testnet instance
-# helm install paradex-testnet-replay ./helm -f values-paradex-testnet.yaml
+# helm install paradex-testnet-replay ./helm -f ./helm/values-paradex-testnet.yaml
+# helm uninstall paradex-testnet-replay
