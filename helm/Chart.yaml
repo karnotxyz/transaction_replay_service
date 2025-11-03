@@ -1,6 +1,6 @@
 apiVersion: v2
-name: transaction-syncing-service
-description: A Helm chart for Transaction Syncing Service
+name: transaction-replay-service
+description: A Helm chart for Transaction Replay Service
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

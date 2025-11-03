@@ -1,12 +1,15 @@
+namespace:
+  name: default
+
 instance:
   name: paradex-mock-testnet
 
 transaction_syncing_service:
   environment:
-    RPC_URL_ORIGINAL_NODE: "REPLACE_ME_WITH_ACTUAL_API_ENDPOINT"
+    RPC_URL_ORIGINAL_NODE: "REPLACE_WITH_ACTUAL_API_ENDPOINT"
     RPC_URL_SYNCING_NODE: "http://paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9944"
     ADMIN_RPC_URL_SYNCING_NODE: "http://paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9943"
     CLEAN_STATE: "false"
 # Deploy paradex-mock-testnet instance
 # helm install paradex-mock-testnet-replay ./helm -f ./helm/values-paradex-mock-testnet.yaml
-# helm uninstall paradex-testnet-replay
+# helm uninstall paradex-mock-testnet-replay

@@ -1,3 +1,6 @@
+namespace:
+  name: default
+
 instance:
   name: paradex-mainnet
 
@@ -9,4 +12,4 @@ transaction_syncing_service:
     CLEAN_STATE: "false"
 # Deploy paradex-mainnet instance
 # helm install paradex-mainnet-replay ./helm -f ./helm/values-paradex-mainnet.yaml
-# helm uninstall paradex-testnet-replay
+# helm uninstall paradex-mainnet-replay

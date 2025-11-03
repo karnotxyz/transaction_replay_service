@@ -1,14 +1,13 @@
 # values.yaml
 # Namespace configuration
 namespace:
-  name: madara-full-node
+  name: default
 
 nodePool:
-  label: default # Change this to your actual node label
+  label: default
 
-# Instance identifier - this will be used to make each deployment unique
 instance:
-  name: replay-service # Change this for each instance: paradex-testnet, paradex-mock-testnet, paradex-mainnet
+  name: default
 
 # Redis configuration
 redis:

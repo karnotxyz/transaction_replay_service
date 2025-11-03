@@ -10,7 +10,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 data:
-  {{- if or (not .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE) (eq .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE "REPLACE_ME_WITH_ACTUAL_API_ENDPOINT") }}
+  {{- if or (not .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE) (eq .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE "REPLACE_WITH_ACTUAL_API_ENDPOINT") }}
   {{- fail "ERROR: RPC_URL_ORIGINAL_NODE must be set to a valid endpoint. Use --set or a secrets file." }}
   {{- end }}
   RPC_URL_ORIGINAL_NODE: {{ .Values.transaction_syncing_service.environment.RPC_URL_ORIGINAL_NODE | quote }}

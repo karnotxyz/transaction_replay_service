@@ -22,7 +22,7 @@ spec:
         instance: {{ .Values.instance.name }}
     spec:
       containers:
-        - name: transaction-syncing-service
+        - name: transaction-replay-service
           image: {{ .Values.transaction_syncing_service.image.repository }}:{{ .Values.transaction_syncing_service.image.tag }}
           resources:
             limits:
