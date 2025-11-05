@@ -9,6 +9,7 @@ import { RetryConfig } from "../constants.js";
 import { RetryOptions } from "../types.js";
 import axios, { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
+import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
 
 // Nonce tracker for special address
 const nonceTracker: Record<string, number> = {};
@@ -121,6 +122,9 @@ export async function validateTransactionReceipt(
       }
 
       retryCount++;
+
+      // Record retry metric
+      incrementTransactionReceiptRetries("unknown");
 
       if (retryCount > maxRetries) {
         const errorMsg = `Failed to validate receipt for ${txHash} after ${maxRetries} attempts`;

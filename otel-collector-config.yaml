@@ -1,0 +1,90 @@
+# OpenTelemetry Collector Configuration
+# For Transaction Replay Service
+
+receivers:
+  # OTLP receiver for metrics from the service
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Batch processor to reduce network overhead
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: transaction-replay-service
+        action: upsert
+      - key: deployment.environment
+        from_attribute: deployment.environment
+        action: upsert
+
+  # Filter specific metrics if needed (optional)
+  # filter:
+  #   metrics:
+  #     include:
+  #       match_type: regexp
+  #       metric_names:
+  #         - replay\..*
+
+exporters:
+  # Prometheus exporter - exposes metrics on :8889/metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "transaction_replay"
+    const_labels:
+      service: "replay"
+
+  # Logging exporter for debugging
+  logging:
+    loglevel: info
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+  # Optional: Export to Grafana Cloud
+  # Uncomment and configure if using Grafana Cloud
+  # otlp/grafana:
+  #   endpoint: "otlp-gateway-prod-us-east-0.grafana.net:443"
+  #   headers:
+  #     authorization: "Basic <base64-encoded-instance-id:api-key>"
+
+  # Optional: Export to other backends
+  # otlphttp:
+  #   endpoint: "https://your-backend.com/v1/metrics"
+  #   headers:
+  #     api-key: "your-api-key"
+
+service:
+  # Configure the telemetry for the collector itself
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888
+
+  # Define data pipelines
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheus, logging]
+
+      # If using Grafana Cloud, add it to exporters
+      # exporters: [prometheus, logging, otlp/grafana]
+
+  # Extensions (health check, pprof, zpages)
+  extensions: []

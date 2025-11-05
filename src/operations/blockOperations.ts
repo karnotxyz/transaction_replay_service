@@ -12,6 +12,14 @@ import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
 import { originalProvider_v9, syncingProvider_v9 } from "../providers.js";
+import {
+  recordBlockProcessingDuration,
+  startTimer,
+  updateOriginalNodeBlockNumber,
+  updateSyncingNodeBlockNumber,
+  recordBlockStatus,
+  incrementErrors,
+} from "../telemetry/metrics.js";
 
 /**
  * Get latest block number from provider
@@ -22,7 +30,16 @@ export async function getLatestBlockNumber(
   return blockFetchRetry.execute(async () => {
     try {
       const latestBlock: any = await provider.getBlockLatestAccepted();
-      return latestBlock.block_number;
+      const blockNumber = latestBlock.block_number;
+
+      // Update metrics based on which provider this is
+      if (provider === originalProvider_v9) {
+        updateOriginalNodeBlockNumber(blockNumber);
+      } else if (provider === syncingProvider_v9) {
+        updateSyncingNodeBlockNumber(blockNumber);
+      }
+
+      return blockNumber;
     } catch (error) {
       throw wrapMadaraError(error, "getLatestBlockNumber");
     }
@@ -171,6 +188,7 @@ export async function getBlockHash(
  * Set custom block header (Madara-specific)
  */
 export async function setCustomHeader(currentBlock: number): Promise<void> {
+  const endTimer = startTimer();
   try {
     const timestamp = await getBlockTimestamp(
       originalProvider_v9,
@@ -236,7 +254,9 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     }
 
     logger.info(`✅ Custom headers set for block ${currentBlock}`);
+    recordBlockProcessingDuration("set_header", endTimer());
   } catch (error) {
+    incrementErrors("set_custom_header_error", "setCustomHeader");
     throw wrapMadaraError(error, `setCustomHeader(${currentBlock})`);
   }
 }
@@ -245,6 +265,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
  * Close block (Madara-specific)
  */
 export async function closeBlock(): Promise<void> {
+  const endTimer = startTimer();
   try {
     const response = await axios.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
@@ -267,7 +288,9 @@ export async function closeBlock(): Promise<void> {
     }
 
     logger.info("✅ Block closed successfully");
+    recordBlockProcessingDuration("close_block", endTimer());
   } catch (error) {
+    incrementErrors("close_block_error", "closeBlock");
     throw wrapMadaraError(error, "closeBlock");
   }
 }
@@ -276,6 +299,7 @@ export async function closeBlock(): Promise<void> {
  * Match block hashes between original and syncing nodes
  */
 export async function matchBlockHash(blockNumber: number): Promise<void> {
+  const endTimer = startTimer();
   const originalProvider = originalProvider_v9;
   const syncingProvider = syncingProvider_v9;
 
@@ -312,9 +336,12 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
       // Both hashes retrieved - check if they match
       if (paradexHash !== madaraHash) {
         // Hash mismatch is NOT retriable - fail immediately
+        recordBlockStatus("hash_mismatch");
+        incrementErrors("block_hash_mismatch", "matchBlockHash");
         throw new BlockHashMismatchError(blockNumber, paradexHash, madaraHash);
       }
 
+      recordBlockProcessingDuration("verify_hash", endTimer());
       return;
     } catch (error) {
       // If it's a hash mismatch error, don't retry
@@ -330,6 +357,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
         logger.error(
           `❌ All ${maxAttempts} attempts failed for block ${blockNumber}`,
         );
+        incrementErrors("block_hash_match_failed", "matchBlockHash");
         throw error;
       }
 
@@ -340,6 +368,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
     }
   }
 
+  incrementErrors("block_hash_match_timeout", "matchBlockHash");
   throw new Error(
     `Failed to match block hash for block ${blockNumber} after ${maxAttempts} attempts`,
   );

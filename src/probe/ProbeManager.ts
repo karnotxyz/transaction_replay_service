@@ -4,6 +4,10 @@ import { persistence } from "../persistence.js";
 import { getLatestBlockNumber } from "../operations/blockOperations.js";
 import { originalProvider_v9 } from "../providers.js";
 import { ProbeConfig } from "../constants.js";
+import {
+  incrementProbeChecks,
+  incrementProbeNewBlocks,
+} from "../telemetry/metrics.js";
 
 /**
  * Probe manager for continuous sync
@@ -56,10 +60,17 @@ export class ProbeManager {
           logger.info(
             `📈 Sync target updated: ${oldTarget} → ${latestBlock} (${newBlocks} new blocks detected)`,
           );
+
+          // Record metrics
+          incrementProbeChecks("new_blocks");
+          incrementProbeNewBlocks(newBlocks);
         } else {
           logger.debug(
             `🔍 Probe: No new blocks (latest: ${latestBlock}, target: ${process.syncTo})`,
           );
+
+          // Record metrics
+          incrementProbeChecks("no_change");
         }
 
         return; // Success
@@ -84,6 +95,9 @@ export class ProbeManager {
     logger.warn(
       "⚠️  Continuing with current target, will retry on next probe cycle",
     );
+
+    // Record error metric
+    incrementProbeChecks("error");
   }
 
   /**
