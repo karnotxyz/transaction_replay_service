@@ -3,12 +3,11 @@ import logger from "./logger.js";
 import { config } from "./config.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
-import { start_sync } from "./startSyncing.js";
-import { syncEndpoint, cancelSync, cancelCurrentSync } from "./syncing.js";
 import {
   snapSyncEndpoint,
   cancelSnapSync,
   getSnapSyncStatus,
+  start_snap_sync,
 } from "./snapSync.js";
 
 const app = express();
@@ -129,7 +128,7 @@ async function autoResumeOnStartup(): Promise<void> {
     }
 
     try {
-      const result = await start_sync(endBlock);
+      const result = await start_snap_sync(endBlock);
 
       if (result.alreadyComplete) {
         logger.info(
@@ -138,11 +137,9 @@ async function autoResumeOnStartup(): Promise<void> {
         await persistence.updateStatus(activeProcess.processId, "completed");
       } else {
         logger.info(
-          `✅ Successfully auto-resumed process ${activeProcess.processId}`,
+          `✅ Successfully auto-resumed snap sync process ${activeProcess.processId}`,
         );
-        logger.info(
-          `📊 Resuming from block ${result.syncFrom}, tx ${result.startTxIndex}`,
-        );
+        logger.info(`📊 Resuming from block ${result.syncFrom}`);
 
         if (isContinuous) {
           logger.info(
@@ -152,10 +149,10 @@ async function autoResumeOnStartup(): Promise<void> {
       }
     } catch (error: any) {
       if (error.code === "SYNC_IN_PROGRESS") {
-        logger.info(`ℹ️  Sync already in progress - ${error.message}`);
+        logger.info(`ℹ️  Snap sync already in progress - ${error.message}`);
       } else {
         logger.error(
-          `❌ Failed to auto-resume process ${activeProcess.processId}:`,
+          `❌ Failed to auto-resume snap sync process ${activeProcess.processId}:`,
           error,
         );
         await persistence.updateStatus(activeProcess.processId, "failed");

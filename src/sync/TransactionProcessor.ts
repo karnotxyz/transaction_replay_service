@@ -131,11 +131,9 @@ export class ParallelTransactionProcessor {
           `  ❌ Receipt validation failed for ${result.txHash}:`,
           error.message,
         );
-        return {
-          txHash: result.txHash,
-          success: false,
-          error: error.message,
-        };
+        // Throw the error instead of returning failure object
+        // This ensures Promise.allSettled marks it as rejected
+        throw error;
       }
     });
 
