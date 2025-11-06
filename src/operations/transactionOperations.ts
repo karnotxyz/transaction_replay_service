@@ -139,29 +139,97 @@ export async function validateTransactionReceipt(
 }
 
 /**
- * Post data to RPC endpoint with retry logic
+ * Post data to RPC endpoint with retry logic and Madara health detection
+ *
+ * This function handles transient errors with retries, but throws MadaraDownError
+ * when Madara is detected as down. The caller is responsible for handling Madara
+ * recovery and checking PRE_CONFIRMED block state.
  */
 export async function postWithRetry(
   url: string,
   data: Record<string, any>,
 ): Promise<AxiosResponse<any>> {
-  return transactionPostRetry.execute(async () => {
+  const { checkMadaraHealth } = await import("../madara/index.js");
+
+  let attempt = 0;
+  const maxAttempts = RetryConfig.MAX_RETRIES_TRANSACTION_POST;
+
+  while (attempt <= maxAttempts) {
     try {
       const result = await axios.post(url, data);
 
-      // Check for account validation error (code 55)
+      // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
+        if (attempt >= maxAttempts) {
+          throw new Error(
+            `Account validation failed after ${maxAttempts + 1} attempts: ${result.data.error.message}`,
+          );
+        }
+
         logger.warn(
-          `Account validation failed, will retry: ${JSON.stringify(result.data)}`,
+          `⚠️  Account validation failed (attempt ${attempt + 1}/${maxAttempts + 1}), retrying: ${JSON.stringify(result.data)}`,
         );
-        throw new Error(
-          `Account validation failed: ${result.data.error.message}`,
-        );
+        attempt++;
+        await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay for account validation
+        continue;
       }
 
+      // Success
+      if (attempt > 0) {
+        logger.info(`✅ POST ${url} succeeded on attempt ${attempt + 1}`);
+      }
       return result;
     } catch (error) {
-      throw wrapMadaraError(error, `postWithRetry(${url})`);
+      const wrappedError = wrapMadaraError(error, `postWithRetry(${url})`);
+
+      // Check if this is a connection error (potential Madara down)
+      if (
+        wrappedError instanceof MadaraDownError ||
+        isMadaraDownError(wrappedError)
+      ) {
+        logger.warn(
+          `⚠️  POST ${url} failed (attempt ${attempt + 1}/${maxAttempts + 1}): ${wrappedError.message}`,
+        );
+
+        // Check Madara health immediately to distinguish between:
+        // - Madara being down (throw MadaraDownError for block-level recovery)
+        // - Transient connection error (retry with short delay)
+        logger.info(`🔍 Checking Madara health status...`);
+        const isHealthy = await checkMadaraHealth();
+
+        if (!isHealthy) {
+          logger.warn(
+            `🚨 Madara is DOWN - propagating MadaraDownError for block-level recovery`,
+          );
+          // Throw MadaraDownError to trigger block-level recovery
+          // which will check PRE_CONFIRMED state and restart the block if needed
+          throw new MadaraDownError(
+            `Madara down detected while posting transaction`,
+          );
+        } else {
+          logger.info(
+            `✅ Madara is healthy - treating as transient connection error`,
+          );
+
+          if (attempt >= maxAttempts) {
+            throw new Error(
+              `POST ${url} failed after ${maxAttempts + 1} attempts: ${wrappedError.message}`,
+            );
+          }
+
+          // Transient error, retry with short delay
+          attempt++;
+          const delay = 1000; // 1 second for transient errors
+          logger.info(`⏸️  Retrying in ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+
+      // Non-connection error - throw immediately
+      throw wrappedError;
     }
-  }, `POST ${url}`);
+  }
+
+  throw new Error(`POST ${url} failed after ${maxAttempts + 1} attempts`);
 }

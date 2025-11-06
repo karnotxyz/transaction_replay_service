@@ -261,11 +261,15 @@ export class SyncStateManager {
 
     this.stopAllProbes();
 
-    // Update statuses in Redis for any running processes
+    // Keep processes in RUNNING status in Redis so they can be auto-resumed
+    // Just update the lastChecked timestamp to indicate clean shutdown
     const processes = this.getAllActiveProcesses();
     for (const process of processes) {
       if (process.status === ProcessStatus.RUNNING) {
-        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        await persistence.updateLastChecked(process.id);
+        logger.info(
+          `💾 Process ${process.id} left in RUNNING state for auto-resume`,
+        );
       }
     }
 

@@ -22,6 +22,110 @@ import {
 } from "./errors/index.js";
 
 /**
+ * Start a snap sync process (for auto-resume and API)
+ */
+export async function start_snap_sync(endBlock: BlockIdentifier) {
+  if (syncStateManager.isSnapSyncRunning()) {
+    const currentProcess = syncStateManager.getSnapSyncProcess()!;
+    throw new SyncInProgressError(
+      `Snap sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
+      {
+        processId: currentProcess.id,
+        currentBlock: currentProcess.currentBlock,
+        currentTxIndex: 0,
+        syncFrom: currentProcess.syncFrom,
+        syncTo: currentProcess.syncTo,
+        isContinuous: currentProcess.isContinuous || false,
+      },
+    );
+  }
+
+  const isContinuous =
+    endBlock === BlockTag.LATEST || endBlock === "latest" || endBlock === null;
+
+  const targetBlock = await getTargetBlock(endBlock);
+
+  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider_v9);
+  const startBlock = syncingNodeLatestBlock + 1;
+
+  if (startBlock > targetBlock) {
+    return {
+      success: true,
+      alreadyComplete: true,
+      message: "Syncing node is already at or beyond target block",
+      currentBlock: syncingNodeLatestBlock,
+      targetBlock: targetBlock,
+      syncFrom: targetBlock,
+      syncTo: targetBlock,
+    };
+  }
+
+  const processId = uuidv4();
+  const newProcess: SyncProcess = {
+    id: processId,
+    status: ProcessStatus.RUNNING,
+    syncFrom: startBlock,
+    syncTo: targetBlock,
+    currentBlock: startBlock,
+    currentTxIndex: 0,
+    totalBlocks: targetBlock - startBlock + 1,
+    processedBlocks: 0,
+    startTime: new Date(),
+    cancelRequested: false,
+    isContinuous,
+    originalTarget: isContinuous ? targetBlock : undefined,
+  };
+
+  syncStateManager.setSnapSyncProcess(newProcess);
+
+  await persistence.saveSyncProcess(
+    processId,
+    startBlock,
+    targetBlock,
+    isContinuous,
+    isContinuous ? targetBlock : undefined,
+  );
+
+  const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
+  logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
+  logger.info(
+    `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
+  );
+  logger.info(`⚡ Mode: SEQUENTIAL sending, PARALLEL receipt validation`);
+
+  if (isContinuous) {
+    logger.info(
+      `🔄 Continuous sync enabled - will track new blocks as they arrive`,
+    );
+    logger.info(`📍 Initial target: block ${targetBlock}`);
+    const probeInterval = probeManager.createProbeInterval(newProcess);
+    syncStateManager.setSnapProbeInterval(probeInterval);
+  }
+
+  snapSyncBlocksAsync(newProcess).catch(async (error) => {
+    logger.error(`❌ sync process ${processId} failed:`, error);
+    if (newProcess.isContinuous) {
+      syncStateManager.stopSnapProbe();
+    }
+    syncStateManager.clearSnapSyncProcess();
+    try {
+      await persistence.updateStatus(processId, ProcessStatus.FAILED);
+    } catch (err) {
+      logger.error(`Failed to update Redis status: ${err}`);
+    }
+  });
+
+  return {
+    success: true,
+    processId,
+    syncFrom: startBlock,
+    syncTo: targetBlock,
+    estimatedBlocks: newProcess.totalBlocks,
+    isContinuous,
+  };
+}
+
+/**
  * Snap Sync Endpoint Handler
  */
 export const snapSyncEndpoint = async (req: Request, res: Response) => {
@@ -34,122 +138,46 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
       });
     }
 
-    if (syncStateManager.isSnapSyncRunning()) {
-      const currentProcess = syncStateManager.getSnapSyncProcess()!;
-      const response: any = {
-        error: "sync already in progress",
-        processId: currentProcess.id,
-        currentBlock: currentProcess.currentBlock,
-        endBlock: currentProcess.syncTo,
-      };
+    const result = await start_snap_sync(endBlock);
 
-      if (currentProcess.isContinuous) {
-        response.mode = "continuous";
-        response.note =
-          "This is a continuous sync following the latest blocks";
-      }
-
-      return res.status(HttpStatus.CONFLICT).json(response);
-    }
-
-    const isContinuous =
-      endBlock === BlockTag.LATEST ||
-      endBlock === "latest" ||
-      endBlock === null;
-
-    const targetBlock = await getTargetBlock(endBlock);
-
-    const syncingNodeLatestBlock =
-      await getLatestBlockNumber(syncingProvider_v9);
-    const startBlock = syncingNodeLatestBlock + 1;
-
-    if (startBlock > targetBlock) {
+    if (result.alreadyComplete) {
       return res.status(HttpStatus.OK).json({
-        message: "Syncing node is already at or beyond target block",
+        message: result.message,
         alreadyComplete: true,
-        currentBlock: syncingNodeLatestBlock,
-        targetBlock: targetBlock,
+        currentBlock: result.currentBlock,
+        targetBlock: result.targetBlock,
       });
     }
 
-    const processId = uuidv4();
-    const newProcess: SyncProcess = {
-      id: processId,
-      status: ProcessStatus.RUNNING,
-      syncFrom: startBlock,
-      syncTo: targetBlock,
-      currentBlock: startBlock,
-      currentTxIndex: 0,
-      totalBlocks: targetBlock - startBlock + 1,
-      processedBlocks: 0,
-      startTime: new Date(),
-      cancelRequested: false,
-      isContinuous,
-      originalTarget: isContinuous ? targetBlock : undefined,
-    };
-
-    syncStateManager.setSnapSyncProcess(newProcess);
-
-    await persistence.saveSyncProcess(
-      processId,
-      startBlock,
-      targetBlock,
-      isContinuous,
-      isContinuous ? targetBlock : undefined,
-    );
-
-    const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
-    logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
-    logger.info(
-      `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
-    );
-    logger.info(`⚡ Mode: SEQUENTIAL sending, PARALLEL receipt validation`);
-
-    if (isContinuous) {
-      logger.info(
-        `🔄 Continuous sync enabled - will track new blocks as they arrive`,
-      );
-      logger.info(`📍 Initial target: block ${targetBlock}`);
-      const probeInterval = probeManager.createProbeInterval(newProcess);
-      syncStateManager.setSnapProbeInterval(probeInterval);
-    }
-
-    snapSyncBlocksAsync(newProcess).catch(async (error) => {
-      logger.error(`❌ sync process ${processId} failed:`, error);
-      if (newProcess.isContinuous) {
-        syncStateManager.stopSnapProbe();
-      }
-      syncStateManager.clearSnapSyncProcess();
-      try {
-        await persistence.updateStatus(processId, ProcessStatus.FAILED);
-      } catch (err) {
-        logger.error(`Failed to update Redis status: ${err}`);
-      }
-    });
-
     const response: any = {
-      message: "sync process started successfully",
-      processId,
-      mode: isContinuous
+      message: "snap sync process started successfully",
+      processId: result.processId,
+      mode: result.isContinuous
         ? "continuous-parallel"
         : "sequential-send-parallel-receipt",
       status: {
-        startBlock,
-        endBlock: targetBlock,
-        totalBlocks: newProcess.totalBlocks,
+        startBlock: result.syncFrom,
+        endBlock: result.syncTo,
+        totalBlocks: result.estimatedBlocks,
       },
       note: "Transactions will be sent sequentially, then all receipts validated in parallel before closing block",
     };
 
-    if (isContinuous) {
+    if (result.isContinuous) {
       response.continuousSyncNote =
         "Continuous sync enabled - will automatically follow new blocks as they arrive";
-      response.status.initialTarget = targetBlock;
+      response.status.initialTarget = result.syncTo;
     }
 
     return res.status(HttpStatus.ACCEPTED).json(response);
   } catch (error: any) {
-    logger.error("Error starting sync process:", error);
+    if (error.code === "SYNC_IN_PROGRESS") {
+      return res.status(HttpStatus.CONFLICT).json({
+        error: error.message,
+        details: error.details,
+      });
+    }
+    logger.error("Error starting snap sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       error: `Failed to start snap sync: ${error.message || error}`,
     });
