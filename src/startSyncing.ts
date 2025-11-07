@@ -376,7 +376,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`\nSyncing block ${currentBlock}`);
+      logger.info(`Syncing block ${currentBlock}`);
 
       try {
         // Process the block using the refactored syncBlock

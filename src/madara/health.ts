@@ -3,6 +3,11 @@ import logger from "../logger.js";
 import { config } from "../config.js";
 import { TimeoutConfig } from "../constants.js";
 import { MadaraDownError } from "../errors/index.js";
+import {
+  updateMadaraHealthStatus,
+  incrementMadaraRecoveryEvents,
+  recordMadaraDowntime,
+} from "../telemetry/metrics.js";
 
 /**
  * Check if Madara node is healthy
@@ -13,8 +18,11 @@ export async function checkMadaraHealth(): Promise<boolean> {
     const response = await axios.get(healthUrl, {
       timeout: TimeoutConfig.MADARA_HEALTH_CHECK_TIMEOUT,
     });
-    return response.status === 200 && response.data === "OK";
+    const isHealthy = response.status === 200 && response.data === "OK";
+    updateMadaraHealthStatus(isHealthy);
+    return isHealthy;
   } catch (error) {
+    updateMadaraHealthStatus(false);
     return false;
   }
 }
@@ -50,6 +58,11 @@ export async function waitForMadaraRecovery(): Promise<boolean> {
       logger.info(
         `✅ Madara recovered! (downtime: ${recoveryMinutes}m ${recoverySeconds}s)`,
       );
+
+      // Record recovery metrics
+      incrementMadaraRecoveryEvents();
+      recordMadaraDowntime(recoveryTime / 1000); // Convert to seconds
+
       return true;
     }
 

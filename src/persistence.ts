@@ -8,6 +8,7 @@ import {
   ProcessStatus,
   ProcessStatusType,
 } from "./constants.js";
+import { updateRedisConnectionStatus } from "./telemetry/metrics.js";
 
 class PersistenceLayer {
   private redis: Redis.Redis;
@@ -31,16 +32,19 @@ class PersistenceLayer {
     this.redis.on("connect", () => {
       logger.info("✅ Redis connected successfully");
       this.connected = true;
+      updateRedisConnectionStatus(true);
     });
 
     this.redis.on("error", (err) => {
       logger.error(`❌ Redis error: ${err.message}`);
       this.connected = false;
+      updateRedisConnectionStatus(false);
     });
 
     this.redis.on("close", () => {
       logger.warn("⚠️  Redis connection closed");
       this.connected = false;
+      updateRedisConnectionStatus(false);
     });
 
     this.redis.on("reconnecting", () => {

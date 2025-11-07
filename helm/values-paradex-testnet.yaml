@@ -1,5 +1,5 @@
 namespace:
-  name: default
+  name: madara-full-node
 
 instance:
   name: paradex-testnet

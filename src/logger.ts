@@ -24,7 +24,7 @@ const customFormat = winston.format.printf((info) => {
   const message = removeEmojis(info.message as string);
   const timestamp = info.timestamp;
   const level = info.level;
-  const stack = info.stack ? `\n${info.stack}` : "";
+  const stack = info.stack ? `${info.stack}` : "";
 
   if (LogConfig.STRUCTURED_LOGGING) {
     // Structured JSON logging for production

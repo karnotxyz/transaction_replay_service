@@ -6,6 +6,10 @@ import { syncingProvider_v9 } from "../providers.js";
 import { MadaraDownError } from "../errors/index.js";
 import { BlockProcessing } from "../constants.js";
 import { TransactionResult } from "../types.js";
+import {
+  recordBlockProcessingDuration,
+  startTimer,
+} from "../telemetry/metrics.js";
 
 /**
  * Process transactions sequentially
@@ -69,6 +73,7 @@ export class ParallelTransactionProcessor {
     );
 
     const startTime = Date.now();
+    const endTimer = startTimer();
     const txResults: TransactionResult[] = [];
 
     // SEQUENTIAL SENDING
@@ -169,6 +174,9 @@ export class ParallelTransactionProcessor {
     logger.info(
       `⚡ Block ${blockNumber} completed in ${totalDuration}ms (${transactions.length} txs sent sequentially, receipts validated in parallel)`,
     );
+
+    // Record total transaction processing duration for this block
+    recordBlockProcessingDuration("process_txs", endTimer());
 
     return txResults;
   }

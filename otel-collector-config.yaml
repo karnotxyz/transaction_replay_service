@@ -1,0 +1,73 @@
+# OpenTelemetry Collector Configuration
+# For Transaction Replay Service
+
+receivers:
+  # OTLP receiver for metrics from the service
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Batch processor to reduce network overhead
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: transaction-replay-service
+        action: upsert
+      - key: deployment.environment
+        from_attribute: deployment.environment
+        action: upsert
+
+exporters:
+  # Prometheus exporter - exposes metrics on :8889/metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "transaction_replay"
+    const_labels:
+      service: "replay"
+
+  # Debug exporter (replaces deprecated logging exporter)
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  # Configure the telemetry for the collector itself
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      # Removed 'address' as it's deprecated - metrics now available on 8888 by default
+
+  # Define data pipelines
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheus, debug]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

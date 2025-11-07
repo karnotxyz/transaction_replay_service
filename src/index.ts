@@ -1,3 +1,7 @@
+// Initialize OpenTelemetry FIRST, before any other imports
+import { initializeTelemetry, shutdownTelemetry } from "./telemetry/config.js";
+initializeTelemetry();
+
 import express from "express";
 import logger from "./logger.js";
 import { config } from "./config.js";
@@ -9,9 +13,11 @@ import {
   getSnapSyncStatus,
   start_snap_sync,
 } from "./snapSync.js";
+import { metricsMiddleware } from "./telemetry/middleware.js";
 
 const app = express();
 app.use(express.json());
+app.use(metricsMiddleware);
 
 // ========================================
 // Health Check Endpoint
@@ -118,7 +124,7 @@ async function autoResumeOnStartup(): Promise<void> {
     const endBlock = isContinuous ? "latest" : activeProcess.syncTo;
 
     logger.info(
-      `\n🔄 Auto-resuming sync process ${activeProcess.processId}...`,
+      `🔄 Auto-resuming sync process ${activeProcess.processId}...`,
     );
 
     if (isContinuous) {
@@ -167,11 +173,14 @@ async function autoResumeOnStartup(): Promise<void> {
 // Graceful Shutdown Handler
 // ========================================
 async function gracefulShutdown(signal: string): Promise<void> {
-  logger.info(`\n👋 Received ${signal} - shutting down gracefully...`);
+  logger.info(`👋 Received ${signal} - shutting down gracefully...`);
 
   try {
     // Stop all probes
     await syncStateManager.shutdown();
+
+    // Shutdown OpenTelemetry
+    await shutdownTelemetry();
 
     // Close persistence layer
     await persistence.close();

@@ -283,7 +283,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
-      logger.info(`\n⚡ SNAP SYNCING Block ${currentBlock}`);
+      logger.info(`⚡ SNAP SYNCING Block ${currentBlock}`);
 
       try {
         // Validate block
@@ -397,7 +397,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       const duration = process.endTime.getTime() - process.startTime.getTime();
       const durationSeconds = (duration / 1000).toFixed(2);
 
-      logger.info(`\n🎉SYNC COMPLETED!`);
+      logger.info(`🎉SYNC COMPLETED!`);
       logger.info(`✅ Process ${process.id} finished successfully`);
       logger.info(
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
