@@ -32,14 +32,6 @@ processors:
         from_attribute: deployment.environment
         action: upsert
 
-  # Filter specific metrics if needed (optional)
-  # filter:
-  #   metrics:
-  #     include:
-  #       match_type: regexp
-  #       metric_names:
-  #         - replay\..*
-
 exporters:
   # Prometheus exporter - exposes metrics on :8889/metrics
   prometheus:
@@ -48,24 +40,11 @@ exporters:
     const_labels:
       service: "replay"
 
-  # Logging exporter for debugging
-  logging:
-    loglevel: info
+  # Debug exporter (replaces deprecated logging exporter)
+  debug:
+    verbosity: detailed
     sampling_initial: 5
     sampling_thereafter: 200
-
-  # Optional: Export to Grafana Cloud
-  # Uncomment and configure if using Grafana Cloud
-  # otlp/grafana:
-  #   endpoint: "otlp-gateway-prod-us-east-0.grafana.net:443"
-  #   headers:
-  #     authorization: "Basic <base64-encoded-instance-id:api-key>"
-
-  # Optional: Export to other backends
-  # otlphttp:
-  #   endpoint: "https://your-backend.com/v1/metrics"
-  #   headers:
-  #     api-key: "your-api-key"
 
 service:
   # Configure the telemetry for the collector itself
@@ -74,17 +53,21 @@ service:
       level: info
     metrics:
       level: detailed
-      address: 0.0.0.0:8888
+      # Removed 'address' as it's deprecated - metrics now available on 8888 by default
 
   # Define data pipelines
   pipelines:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch, resource]
-      exporters: [prometheus, logging]
+      exporters: [prometheus, debug]
 
-      # If using Grafana Cloud, add it to exporters
-      # exporters: [prometheus, logging, otlp/grafana]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [debug]
 
-  # Extensions (health check, pprof, zpages)
-  extensions: []
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

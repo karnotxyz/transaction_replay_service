@@ -125,7 +125,7 @@ async function autoResumeOnStartup(): Promise<void> {
     const endBlock = isContinuous ? "latest" : activeProcess.syncTo;
 
     logger.info(
-      `\n🔄 Auto-resuming sync process ${activeProcess.processId}...`,
+      `🔄 Auto-resuming sync process ${activeProcess.processId}...`,
     );
 
     if (isContinuous) {
@@ -176,7 +176,7 @@ async function autoResumeOnStartup(): Promise<void> {
 // Graceful Shutdown Handler
 // ========================================
 async function gracefulShutdown(signal: string): Promise<void> {
-  logger.info(`\n👋 Received ${signal} - shutting down gracefully...`);
+  logger.info(`👋 Received ${signal} - shutting down gracefully...`);
 
   try {
     // Stop all probes
