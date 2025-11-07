@@ -13,9 +13,6 @@ import { executeWithMadaraRecovery } from "../madara/index.js";
 import { ProcessStatus } from "../constants.js";
 import { MadaraDownError } from "../errors/index.js";
 import {
-  incrementBlocksProcessed,
-  recordBlockStatus,
-  updateCurrentBlock,
   recordBlockProcessingDuration,
   startTimer,
 } from "../telemetry/metrics.js";
@@ -161,59 +158,8 @@ export class BlockProcessor {
     }
   }
 
-  /**
-   * Complete sequence of operations to process a block
-   * (validate, set headers, process transactions, close, verify)
-   */
-  async processBlockLifecycle(
-    blockNumber: number,
-    process: SyncProcess,
-    transactionProcessor: () => Promise<BlockProcessResult>,
-  ): Promise<BlockProcessResult> {
-    // Update current block metric
-    updateCurrentBlock(blockNumber);
-
-    // 1. Validate block is ready
-    const validateResult = await this.validateBlockReady(blockNumber, process);
-    if (!validateResult.success) {
-      recordBlockStatus("failed");
-      return validateResult;
-    }
-
-    // 2. Set custom headers
-    const headersResult = await this.setBlockHeaders(blockNumber, process);
-    if (!headersResult.success) {
-      recordBlockStatus("failed");
-      return headersResult;
-    }
-
-    // 3. Process transactions (delegated to caller)
-    const txResult = await transactionProcessor();
-    if (!txResult.success) {
-      recordBlockStatus("failed");
-      return txResult;
-    }
-
-    // 4. Close the block
-    const closeResult = await this.closeCurrentBlock(blockNumber, process);
-    if (!closeResult.success) {
-      recordBlockStatus("failed");
-      return closeResult;
-    }
-
-    // 5. Verify block hash
-    const verifyResult = await this.verifyBlockHash(blockNumber, process);
-    if (!verifyResult.success) {
-      recordBlockStatus("failed");
-      return verifyResult;
-    }
-
-    // Block successfully processed
-    incrementBlocksProcessed();
-    recordBlockStatus("success");
-
-    return { success: true };
-  }
+  // NOTE: processBlockLifecycle() method removed - it was never called.
+  // Block processing metrics are now tracked directly in snapSync.ts where blocks are actually processed.
 
   /**
    * Handle Madara recovery for a block

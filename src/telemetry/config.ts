@@ -96,15 +96,6 @@ class LoggingMetricExporter implements PushMetricExporter {
             metricNames.push(metric.descriptor.name);
           }
         }
-
-        logger.info("✅ Metrics exported successfully to OTLP", {
-          endpoint: telemetryConfig.otlpEndpoint,
-          metricCount,
-          metricNames: metricNames.join(", "),
-          durationMs: exportDuration,
-          totalSuccesses: exportSuccessCount,
-          totalFailures: exportFailureCount,
-        });
       } else {
         exportFailureCount++;
         logger.error("❌ Failed to export metrics to OTLP", {

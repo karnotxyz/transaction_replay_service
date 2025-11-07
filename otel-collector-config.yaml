@@ -36,7 +36,7 @@ exporters:
   # Prometheus exporter - exposes metrics on :8889/metrics
   prometheus:
     endpoint: "0.0.0.0:8889"
-    namespace: "transaction_replay"
+    # namespace: "transaction_replay"  # Removed to avoid double prefix (replay_ already in metric names)
     const_labels:
       service: "replay"
 

@@ -246,7 +246,10 @@ export function recordBlockProcessingDuration(
 
 export function incrementBlocksProcessed(): void {
   initializeMetrics();
-  _blocksProcessedCounter.add(1);
+  _blocksProcessedCounter.add(1, { status: "processed" });
+  logger.info(
+    "📊 METRIC: incrementBlocksProcessed() called - blocks counter incremented",
+  );
 }
 
 export function recordBlockStatus(
@@ -258,17 +261,17 @@ export function recordBlockStatus(
 
 export function updateCurrentBlock(blockNumber: number): void {
   initializeMetrics();
-  _currentBlockGauge.record(blockNumber);
+  _currentBlockGauge.record(blockNumber, { node: "processing" });
 }
 
 export function updateOriginalNodeBlockNumber(blockNumber: number): void {
   initializeMetrics();
-  _originalNodeBlockNumberGauge.record(blockNumber);
+  _originalNodeBlockNumberGauge.record(blockNumber, { node: "original" });
 }
 
 export function updateSyncingNodeBlockNumber(blockNumber: number): void {
   initializeMetrics();
-  _syncingNodeBlockNumberGauge.record(blockNumber);
+  _syncingNodeBlockNumberGauge.record(blockNumber, { node: "syncing" });
 }
 
 export function incrementTransactionsProcessed(
@@ -280,6 +283,9 @@ export function incrementTransactionsProcessed(
     tx_type: txType,
     tx_version: txVersion,
   });
+  logger.info(
+    `📊 METRIC: incrementTransactionsProcessed() called - tx_type=${txType}, tx_version=${txVersion}`,
+  );
 }
 
 export function recordTransactionStatus(
@@ -330,7 +336,7 @@ export function updateSyncProgress(
 
 export function updateSyncBacklog(blocks: number): void {
   initializeMetrics();
-  _syncBacklogGauge.record(blocks);
+  _syncBacklogGauge.record(blocks, { metric: "backlog" });
 }
 
 export function updateThroughput(
@@ -338,23 +344,23 @@ export function updateThroughput(
   txsPerSecond: number,
 ): void {
   initializeMetrics();
-  _blocksPerSecondGauge.record(blocksPerSecond);
-  _transactionsPerSecondGauge.record(txsPerSecond);
+  _blocksPerSecondGauge.record(blocksPerSecond, { metric: "blocks_rate" });
+  _transactionsPerSecondGauge.record(txsPerSecond, { metric: "txs_rate" });
 }
 
 export function updateMadaraHealthStatus(isHealthy: boolean): void {
   initializeMetrics();
-  _madaraHealthStatusGauge.record(isHealthy ? 1 : 0);
+  _madaraHealthStatusGauge.record(isHealthy ? 1 : 0, { service: "madara" });
 }
 
 export function incrementMadaraRecoveryEvents(): void {
   initializeMetrics();
-  _madaraRecoveryCounter.add(1);
+  _madaraRecoveryCounter.add(1, { event: "recovery" });
 }
 
 export function recordMadaraDowntime(durationSeconds: number): void {
   initializeMetrics();
-  _madaraDowntimeHistogram.record(durationSeconds);
+  _madaraDowntimeHistogram.record(durationSeconds, { event: "downtime" });
 }
 
 export function incrementErrors(errorType: string, operation: string): void {
@@ -364,7 +370,7 @@ export function incrementErrors(errorType: string, operation: string): void {
 
 export function updateRedisConnectionStatus(isConnected: boolean): void {
   initializeMetrics();
-  _redisConnectionStatusGauge.record(isConnected ? 1 : 0);
+  _redisConnectionStatusGauge.record(isConnected ? 1 : 0, { service: "redis" });
 }
 
 export function recordHttpRequest(

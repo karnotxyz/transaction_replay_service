@@ -16,6 +16,16 @@ import {
 import { validateBlock } from "./validation/index.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import {
+  incrementBlocksProcessed,
+  recordBlockStatus,
+  updateCurrentBlock,
+} from "./telemetry/metrics.js";
+import {
+  throughputTracker,
+  updateSyncMetrics,
+  updateActiveSyncProcessCount,
+} from "./telemetry/throughput.js";
+import {
   SyncInProgressError,
   InvalidBlockError,
   MadaraDownError,
@@ -102,12 +112,16 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     syncStateManager.setSnapProbeInterval(probeInterval);
   }
 
+  // Mark snap sync as active
+  updateActiveSyncProcessCount("snap_sync", true);
+
   snapSyncBlocksAsync(newProcess).catch(async (error) => {
     logger.error(`❌ sync process ${processId} failed:`, error);
     if (newProcess.isContinuous) {
       syncStateManager.stopSnapProbe();
     }
     syncStateManager.clearSnapSyncProcess();
+    updateActiveSyncProcessCount("snap_sync", false);
     try {
       await persistence.updateStatus(processId, ProcessStatus.FAILED);
     } catch (err) {
@@ -213,11 +227,12 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 
 /**
  * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
+ * Returns the number of transactions processed
  */
 async function snapSyncBlock(
   blockNumber: number,
   process: SyncProcess,
-): Promise<void> {
+): Promise<number> {
   const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
 
   const transactions = blockWithTxs.transactions;
@@ -227,7 +242,7 @@ async function snapSyncBlock(
 
   if (transactions.length === 0) {
     logger.info(`⏭️  Block ${blockNumber} has no transactions, skipping...`);
-    return;
+    return 0;
   }
 
   try {
@@ -243,6 +258,8 @@ async function snapSyncBlock(
     }
     throw error;
   }
+
+  return transactions.length;
 }
 
 /**
@@ -263,6 +280,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
         syncStateManager.stopSnapProbe();
         syncStateManager.clearSnapSyncProcess();
+        updateActiveSyncProcessCount("snap_sync", false);
         logger.info(
           `🛑 Sync process ${process.id} cancelled at block ${currentBlock}`,
         );
@@ -283,6 +301,10 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
+
+      // Update current block metric
+      updateCurrentBlock(currentBlock);
+
       logger.info(`⚡ SNAP SYNCING Block ${currentBlock}`);
 
       try {
@@ -306,8 +328,9 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
 
         // Process block with parallel transaction processing
         let blockNeedsRestart = false;
+        let txCount = 0;
         try {
-          await snapSyncBlock(currentBlock, process);
+          txCount = await snapSyncBlock(currentBlock, process);
         } catch (error) {
           if (
             error instanceof Error &&
@@ -362,9 +385,23 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
           throw verifyResult.error;
         }
 
+        // Record successful block processing metrics
+        incrementBlocksProcessed();
+        recordBlockStatus("success");
+
+        // Update throughput metrics (txCount already obtained from snapSyncBlock)
+        throughputTracker.recordBlock(txCount);
+
         process.processedBlocks++;
 
         await persistence.updateLastChecked(process.id);
+
+        // Update sync progress metrics
+        const originalNodeLatest =
+          await getLatestBlockNumber(originalProvider_v9);
+        const syncingNodeLatest =
+          await getLatestBlockNumber(syncingProvider_v9);
+        updateSyncMetrics(process, originalNodeLatest, syncingNodeLatest);
 
         const percentComplete = process.isContinuous
           ? "N/A (continuous)"
@@ -378,6 +415,9 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
+        // Record failed block processing metric
+        recordBlockStatus("failed");
+
         if (process.status !== ProcessStatus.FAILED) {
           await persistence.updateStatus(process.id, ProcessStatus.FAILED);
         }
@@ -393,6 +433,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       await persistence.updateStatus(process.id, ProcessStatus.COMPLETED);
       syncStateManager.stopSnapProbe();
       syncStateManager.clearSnapSyncProcess();
+      updateActiveSyncProcessCount("snap_sync", false);
 
       const duration = process.endTime.getTime() - process.startTime.getTime();
       const durationSeconds = (duration / 1000).toFixed(2);
@@ -412,6 +453,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
 
     syncStateManager.stopSnapProbe();
     syncStateManager.clearSnapSyncProcess();
+    updateActiveSyncProcessCount("snap_sync", false);
     logger.error(`❌ sync process ${process.id} failed:`, error);
     throw error;
   }
