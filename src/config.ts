@@ -25,9 +25,6 @@ interface EnvironmentConfig {
 
   // Features
   cleanSlate: boolean;
-
-  // Network Configuration
-  networkEnabled: boolean;
 }
 
 class Config {
@@ -87,9 +84,6 @@ class Config {
 
       // Features
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
-
-      // Network
-      networkEnabled: process.env.NETWORK_ENABLED?.toLowerCase() !== "false",
     };
 
     this.logConfiguration(config);
@@ -132,9 +126,21 @@ class Config {
     logger.info(
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
     );
-    logger.info(
-      `  • Network: ${config.networkEnabled ? "enabled" : "disabled"}`,
-    );
+
+    // OpenTelemetry Configuration
+    const otelEnabled = process.env.OTEL_ENABLED !== "false";
+    const otelEndpoint =
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318";
+    const otelInterval = process.env.OTEL_EXPORT_INTERVAL_MS || "30000";
+    const otelServiceName =
+      process.env.OTEL_SERVICE_NAME || "transaction-replay-service";
+
+    logger.info(`  • OTEL Enabled: ${otelEnabled ? "YES" : "NO"}`);
+    if (otelEnabled) {
+      logger.info(`  • OTEL Service Name: ${otelServiceName}`);
+      logger.info(`  • OTEL Endpoint: ${otelEndpoint}`);
+      logger.info(`  • OTEL Export Interval: ${otelInterval}ms`);
+    }
   }
 
   private maskUrl(url: string): string {
@@ -176,10 +182,6 @@ class Config {
 
   public get cleanSlate(): boolean {
     return this.config.cleanSlate;
-  }
-
-  public get networkEnabled(): boolean {
-    return this.config.networkEnabled;
   }
 
   public get isDevelopment(): boolean {

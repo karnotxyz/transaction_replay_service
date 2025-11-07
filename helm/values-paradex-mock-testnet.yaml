@@ -1,15 +1,22 @@
 namespace:
-  name: default
+  name: madara-full-node
 
 instance:
   name: paradex-mock-testnet
 
 transaction_syncing_service:
   environment:
+    PORT: "3000"
+    CLEAN_SLATE: "false"
+    NODE_ENV: "production"
+    DEPLOYMENT_ENVIRONMENT: "production"
     RPC_URL_ORIGINAL_NODE: "REPLACE_WITH_ACTUAL_API_ENDPOINT"
     RPC_URL_SYNCING_NODE: "http://paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9944"
     ADMIN_RPC_URL_SYNCING_NODE: "http://paradex-mock-testnet-madara-service.madara-full-node.svc.cluster.local:9943"
-    CLEAN_STATE: "false"
+    OTEL_ENABLED: "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-collector.otel-stack.svc.cluster.local:4318"
+    OTEL_EXPORT_INTERVAL_MS: "3000"
+    OTEL_SERVICE_NAME: "paradex-mock-testnet-transaction-replay-service"
 # Deploy paradex-mock-testnet instance
-# helm install paradex-mock-testnet-replay ./helm -f ./helm/values-paradex-mock-testnet.yaml
+# helm install paradex-mock-testnet-replay ./helm -f ./helm/values-paradex-mock-testnet.yaml -n madara-full-node
 # helm uninstall paradex-mock-testnet-replay

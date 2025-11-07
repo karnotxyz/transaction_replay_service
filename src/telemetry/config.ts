@@ -155,8 +155,11 @@ export function initializeTelemetry(): NodeSDK | null {
 
   try {
     // Create resource with service information
+    const serviceName =
+      process.env.OTEL_SERVICE_NAME || "transaction-replay-service";
+
     const resource = resourceFromAttributes({
-      [SEMRESATTRS_SERVICE_NAME]: "transaction-replay-service",
+      [SEMRESATTRS_SERVICE_NAME]: serviceName,
       [SEMRESATTRS_SERVICE_VERSION]: serviceVersion,
       [SEMRESATTRS_DEPLOYMENT_ENVIRONMENT]: telemetryConfig.environment,
     });
@@ -181,10 +184,11 @@ export function initializeTelemetry(): NodeSDK | null {
     });
 
     // Configure Metric Reader with error handling
+    // exportTimeoutMillis must be <= exportIntervalMillis
     const metricReader = new PeriodicExportingMetricReader({
       exporter: metricExporter,
       exportIntervalMillis: telemetryConfig.exportIntervalMs,
-      exportTimeoutMillis: 30000,
+      exportTimeoutMillis: Math.min(telemetryConfig.exportIntervalMs, 10000),
     });
 
     // Initialize SDK
@@ -200,17 +204,6 @@ export function initializeTelemetry(): NodeSDK | null {
       environment: telemetryConfig.environment,
       exportInterval: telemetryConfig.exportIntervalMs,
       version: serviceVersion,
-    });
-
-    // Record a test metric on startup to verify export is working
-    logger.info("🧪 Recording test metric to verify OTLP export...");
-    const testMeter = metrics.getMeter("transaction-replay-service");
-    const testCounter = testMeter.createCounter("replay.test.startup_counter", {
-      description: "Test counter to verify metrics export on startup",
-    });
-    testCounter.add(1);
-    logger.info("✅ Test metric recorded - will be exported in next cycle", {
-      nextExportIn: `${telemetryConfig.exportIntervalMs}ms`,
     });
 
     return sdk;
