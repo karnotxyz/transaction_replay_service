@@ -98,15 +98,15 @@ class LoggingMetricExporter implements PushMetricExporter {
         }
       } else {
         exportFailureCount++;
-        logger.error("❌ Failed to export metrics to OTLP", {
-          endpoint: telemetryConfig.otlpEndpoint,
-          metricCount,
-          durationMs: exportDuration,
-          error: result.error?.message || "Unknown error",
-          resultCode: result.code,
-          totalSuccesses: exportSuccessCount,
-          totalFailures: exportFailureCount,
-        });
+        // Only log error if we've had some successes before, or if it's the first few attempts
+        // This prevents spam when OTLP endpoint is not available
+        if (exportSuccessCount > 0 || exportFailureCount <= 3) {
+          logger.warn("Failed to export metrics to OTLP", {
+            endpoint: telemetryConfig.otlpEndpoint,
+            error: result.error?.message || "Unknown error",
+            totalFailures: exportFailureCount,
+          });
+        }
       }
 
       resultCallback(result);

@@ -18,4 +18,4 @@ transaction_syncing_service:
     OTEL_SERVICE_NAME: "paradex-testnet-transaction-replay-service"
 # Deploy paradex-testnet instance
 # helm install paradex-testnet-replay ./helm -f ./helm/values-paradex-testnet.yaml -n madara-full-node
-# helm uninstall paradex-testnet-replay
+# helm uninstall paradex-testnet-replay -n madara-full-node

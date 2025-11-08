@@ -13,6 +13,7 @@ import { updateRedisConnectionStatus } from "./telemetry/metrics.js";
 class PersistenceLayer {
   private redis: Redis.Redis;
   private connected: boolean = false;
+  private reconnectionCallback: (() => Promise<void>) | null = null;
 
   constructor() {
     this.redis = new Redis.Redis(config.redisUrl, {
@@ -29,10 +30,21 @@ class PersistenceLayer {
   }
 
   private setupEventHandlers(): void {
-    this.redis.on("connect", () => {
+    this.redis.on("connect", async () => {
+      const wasDisconnected = !this.connected;
       logger.info("✅ Redis connected successfully");
       this.connected = true;
       updateRedisConnectionStatus(true);
+
+      // Trigger reconnection callback if Redis was previously disconnected
+      if (wasDisconnected && this.reconnectionCallback) {
+        logger.info("🔄 Triggering auto-resume after Redis reconnection...");
+        try {
+          await this.reconnectionCallback();
+        } catch (error) {
+          logger.error("❌ Error in reconnection callback:", error);
+        }
+      }
     });
 
     this.redis.on("error", (err) => {
@@ -50,6 +62,13 @@ class PersistenceLayer {
     this.redis.on("reconnecting", () => {
       logger.info("🔄 Redis reconnecting...");
     });
+  }
+
+  /**
+   * Register a callback to be invoked when Redis reconnects
+   */
+  public setReconnectionCallback(callback: () => Promise<void>): void {
+    this.reconnectionCallback = callback;
   }
 
   /**

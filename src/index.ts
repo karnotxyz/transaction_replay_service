@@ -89,6 +89,20 @@ async function autoResumeOnStartup(): Promise<void> {
       return;
     }
 
+    // Check if there's already a process running in-memory
+    // This prevents overriding a process that's currently active
+    if (syncStateManager.isSnapSyncRunning()) {
+      const currentProcess = syncStateManager.getSnapSyncProcess()!;
+      logger.info(
+        `ℹ️  Snap sync already running in-memory (Process ID: ${currentProcess.id})`,
+      );
+      logger.info(
+        `📊 Current state: Block ${currentProcess.currentBlock} → ${currentProcess.syncTo}`,
+      );
+      logger.info("✅ Skipping auto-resume - will not override active process");
+      return;
+    }
+
     logger.info("🔍 Checking Redis for incomplete sync processes...");
 
     const activeProcess = await persistence.getMostRecentActiveProcess();
@@ -123,9 +137,7 @@ async function autoResumeOnStartup(): Promise<void> {
 
     const endBlock = isContinuous ? "latest" : activeProcess.syncTo;
 
-    logger.info(
-      `🔄 Auto-resuming sync process ${activeProcess.processId}...`,
-    );
+    logger.info(`🔄 Auto-resuming sync process ${activeProcess.processId}...`);
 
     if (isContinuous) {
       logger.info(
@@ -200,6 +212,15 @@ async function main() {
   try {
     app.listen(config.port, async () => {
       logger.info(`🌐 Syncing service listening on port ${config.port}`);
+
+      // Register reconnection callback for Redis
+      // This ensures auto-resume runs when Redis reconnects after being down
+      persistence.setReconnectionCallback(async () => {
+        logger.info(
+          "🔄 Redis reconnected - checking for incomplete processes...",
+        );
+        await autoResumeOnStartup();
+      });
 
       // Wait for Redis to connect
       await new Promise((resolve) => setTimeout(resolve, 2000));

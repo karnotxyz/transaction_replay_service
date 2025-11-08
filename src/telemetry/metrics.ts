@@ -247,9 +247,6 @@ export function recordBlockProcessingDuration(
 export function incrementBlocksProcessed(): void {
   initializeMetrics();
   _blocksProcessedCounter.add(1, { status: "processed" });
-  logger.info(
-    "📊 METRIC: incrementBlocksProcessed() called - blocks counter incremented",
-  );
 }
 
 export function recordBlockStatus(
@@ -283,9 +280,6 @@ export function incrementTransactionsProcessed(
     tx_type: txType,
     tx_version: txVersion,
   });
-  logger.info(
-    `📊 METRIC: incrementTransactionsProcessed() called - tx_type=${txType}, tx_version=${txVersion}`,
-  );
 }
 
 export function recordTransactionStatus(
