@@ -305,7 +305,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       // Update current block metric
       updateCurrentBlock(currentBlock);
 
-      logger.info(`⚡ SNAP SYNCING Block ${currentBlock}`);
+      logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
         // Validate block

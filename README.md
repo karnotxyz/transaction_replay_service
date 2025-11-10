@@ -5,7 +5,6 @@ A robust service for synchronizing Starknet blocks between nodes with support fo
 ## Features
 
 - **Sequential Sync**: Transaction-by-transaction synchronization with transaction-level resumability
-- **Snap Sync**: Parallel transaction processing for faster block synchronization
 - **Continuous Sync**: Automatically follow new blocks as they arrive
 - **Auto-Resume**: Automatically resume interrupted sync processes on restart
 - **Madara Recovery**: Automatic detection and recovery from Madara node downtime

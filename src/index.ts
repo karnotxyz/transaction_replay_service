@@ -213,7 +213,14 @@ async function main() {
     app.listen(config.port, async () => {
       logger.info(`🌐 Syncing service listening on port ${config.port}`);
 
-      // Register reconnection callback for Redis
+      // Wait for Redis to connect
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Handle clean slate BEFORE setting up auto-resume callback
+      // This prevents race condition where auto-resume starts before clean slate
+      await handleCleanSlate();
+
+      // Register reconnection callback for Redis AFTER clean slate
       // This ensures auto-resume runs when Redis reconnects after being down
       persistence.setReconnectionCallback(async () => {
         logger.info(
@@ -221,12 +228,6 @@ async function main() {
         );
         await autoResumeOnStartup();
       });
-
-      // Wait for Redis to connect
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Handle clean slate if enabled
-      await handleCleanSlate();
 
       logger.info("🚀 Starting Transaction Replay Service");
 
