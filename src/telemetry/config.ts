@@ -40,7 +40,7 @@ export interface TelemetryConfig {
 }
 
 export const telemetryConfig: TelemetryConfig = {
-  enabled: process.env.OTEL_ENABLED !== "false", // Enabled by default
+  enabled: process.env.OTEL_ENABLED === "true", // Disabled by default
   otlpEndpoint:
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
   exportIntervalMs: parseInt(
