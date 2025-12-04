@@ -40,7 +40,7 @@ transaction_syncing_service:
   replicas: 1
   image:
     repository: "public.ecr.aws/o5q6k5w4/karnot-operator/txn_replay_service"
-    tag: "v1.0.4"
+    tag: "v1.0.5"
   resources:
     limits:
       cpu: 500m

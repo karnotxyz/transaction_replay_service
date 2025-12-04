@@ -6,6 +6,7 @@ instance:
 
 transaction_syncing_service:
   environment:
+    PORT: "3000"
     CLEAN_SLATE: "false"
     NODE_ENV: "production"
     DEPLOYMENT_ENVIRONMENT: "production"
