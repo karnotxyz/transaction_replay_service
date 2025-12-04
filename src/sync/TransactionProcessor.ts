@@ -79,10 +79,16 @@ export class ParallelTransactionProcessor {
     // SEQUENTIAL SENDING
     for (let index = 0; index < transactions.length; index++) {
       const tx = transactions[index];
+
+      // Add 1 second delay between transactions
+      // if (index > 0) {
+      //   await new Promise((resolve) => setTimeout(resolve, 2000));
+      // }
+
       try {
         const txHash = tx.transaction_hash;
 
-        logger.debug(
+        logger.info(
           `  📤 [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
         );
 
