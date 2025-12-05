@@ -3,8 +3,14 @@
 # Exit on error
 set -e
 
-# Get the first 7 characters of the last git commit hash
-COMMIT_TAG=$(git rev-parse --short=7 HEAD)
+# Get commit tag from CLI argument if provided, otherwise use git commit hash
+if [ -n "$1" ]; then
+    COMMIT_TAG="$1"
+    echo "Using provided commit tag: ${COMMIT_TAG}"
+else
+    COMMIT_TAG=$(git rev-parse --short=7 HEAD)
+    echo "No tag provided, using git commit hash: ${COMMIT_TAG}"
+fi
 
 # Docker image details
 IMAGE_REPO="public.ecr.aws/o5q6k5w4/karnot-operator/txn_replay_service"
@@ -15,9 +21,9 @@ echo "Building Docker image with tag: ${COMMIT_TAG}"
 echo "Full image name: ${IMAGE_TAG}"
 echo "=================================================="
 
-# Build the Docker image
+# Build the Docker image using buildx for cross-platform support
 echo "Building Docker image..."
-docker build --platform linux/amd64 -t "${IMAGE_TAG}" .
+docker buildx build --platform linux/amd64 -t "${IMAGE_TAG}" --load .
 
 echo "=================================================="
 echo "Build completed successfully!"
