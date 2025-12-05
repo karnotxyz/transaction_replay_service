@@ -1,7 +1,7 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
 import { config } from "../config.js";
-import { originalProvider_v9 } from "../providers.js";
+import { originalProvider_v9, originalProvider_v8 } from "../providers.js";
 import { writeFile } from "fs/promises";
 import * as path from "path";
 import * as fs from "fs";
@@ -52,10 +52,10 @@ async function declareV0(
 
   let txn = tx as unknown as DECLARE_TXN_V0;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
+  const result = await postWithRetry(config.rpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddDeclareTransaction",
+    method: "starknet_addDeclareTransaction",
     params: [
       {
         type: "DECLARE",
@@ -87,24 +87,33 @@ async function declareV1(
 
   let txn = tx as unknown as DECLARE_TXN_V1;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddDeclareTransaction",
-    params: [
-      {
-        type: "DECLARE",
-        sender_address: txn.sender_address,
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-        class_hash: txn.class_hash,
-      },
-    ],
+  let contractClass = await originalProvider_v9.getClassByHash(txn.class_hash);
+
+  contractClass.entry_points_by_type.EXTERNAL.forEach((entry) => {
+    let typedEntry = entry as starknet.ContractEntryPointFields;
+    if (typeof typedEntry.offset === "number") {
+      typedEntry.offset = "0x" + typedEntry.offset.toString(16);
+    }
   });
 
-  return result.data.result.transaction_hash;
+  let transaction = {
+    contract: contractClass as starknet.ContractClass,
+    senderAddress: txn.sender_address,
+    signature: txn.signature,
+  };
+
+  let invocationDetails = {
+    nonce: txn.nonce,
+    maxFee: txn.max_fee,
+    version: txn.version,
+  };
+
+  let declareTransactionResult = await syncingProvider.declareContract(
+    transaction,
+    invocationDetails,
+  );
+
+  return declareTransactionResult.transaction_hash;
 }
 
 async function declareV2(
@@ -124,25 +133,52 @@ async function declareV2(
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddDeclareTransaction",
-    params: [
-      {
-        type: "DECLARE",
-        sender_address: txn.sender_address,
-        compiled_class_hash: txn.compiled_class_hash,
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-        class_hash: txn.class_hash,
-      },
-    ],
+  let contract_class = await originalProvider_v8.getClassByHash(txn.class_hash);
+
+  let contract_class_parsed = starknet.provider.parseContract({
+    // @ts-ignore
+    sierra_program: (contract_class as starknet.SierraContractClass)
+      .sierra_program,
+    contract_class_version: (contract_class as starknet.SierraContractClass)
+      .contract_class_version,
+    entry_points_by_type: (contract_class as starknet.SierraContractClass)
+      .entry_points_by_type,
+    //@ts-ignore
+    abi: (contract_class as starknet.SierraContractClass).abi,
   });
 
-  return result.data.result.transaction_hash;
+  let x: starknet.SierraContractClass = {
+    sierra_program: (contract_class_parsed as starknet.SierraContractClass)
+      .sierra_program,
+    //@ts-ignore
+    abi: contract_class_parsed.abi,
+    contract_class_version: (
+      contract_class_parsed as starknet.SierraContractClass
+    ).contract_class_version,
+    entry_points_by_type: (
+      contract_class_parsed as starknet.SierraContractClass
+    ).entry_points_by_type,
+  };
+
+  let transaction = {
+    contract: x,
+    senderAddress: txn.sender_address,
+    signature: txn.signature,
+    compiledClassHash: txn.compiled_class_hash,
+  };
+
+  let invocationDetails = {
+    nonce: txn.nonce,
+    maxFee: txn.max_fee,
+    version: txn.version,
+  };
+
+  let declareTransactionResult = await syncingProvider.declareContract(
+    transaction,
+    invocationDetails,
+  );
+
+  return declareTransactionResult.transaction_hash;
 }
 
 async function declareV3(
