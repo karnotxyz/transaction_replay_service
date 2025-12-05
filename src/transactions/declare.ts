@@ -1,6 +1,10 @@
 import * as starknet from "starknet";
 import { postWithRetry, getNonce } from "../utils.js";
 import { config } from "../config.js";
+import { originalProvider_v9 } from "../providers.js";
+import { writeFile } from "fs/promises";
+import * as path from "path";
+import * as fs from "fs";
 
 /**
  * General declare transaction handler
@@ -163,29 +167,118 @@ async function declareV3(
 
   let txn = tx as unknown as DECLARE_TXN_V3;
 
+  let contract_class = await originalProvider_v9.getClassByHash(txn.class_hash);
+  // Ensure tip is a hex string (NumAsHex expects hex string)
+  let tipValue = txn.tip;
+  if (typeof tipValue !== "string") {
+    tipValue = String(tipValue);
+  }
+  if (!tipValue.startsWith("0x")) {
+    tipValue = "0x" + BigInt(tipValue).toString(16);
+  }
+
+  // Ensure enum fields are strings
+  const feeDataAvailabilityMode = String(txn.fee_data_availability_mode);
+  const nonceDataAvailabilityMode = String(txn.nonce_data_availability_mode);
+
+  const dummyAccount = new starknet.Account({
+    provider: syncingProvider,
+    address: txn.sender_address,
+    signer: '0x123',
+    transactionVersion: '0x3',
+  });
+
+  // Convert resource_bounds strings to bigint for ResourceBoundsBN
+  // Handle cases where fields might be undefined or already BigInt
+  const convertToBigInt = (value: any): bigint => {
+    if (value === undefined || value === null) {
+      return 0n;
+    }
+    if (typeof value === 'bigint') {
+      return value;
+    }
+    try {
+      return BigInt(value);
+    } catch (error) {
+      console.error("Error converting to BigInt:", value, error);
+      return 0n;
+    }
+  };
+
+  const resourceBoundsBN: starknet.ResourceBoundsBN = {
+    l1_gas: {
+      max_amount: convertToBigInt(txn.resource_bounds.l1_gas?.max_amount),
+      max_price_per_unit: convertToBigInt(txn.resource_bounds.l1_gas?.max_price_per_unit),
+    },
+    l2_gas: {
+      max_amount: convertToBigInt(txn.resource_bounds.l2_gas?.max_amount),
+      max_price_per_unit: convertToBigInt(txn.resource_bounds.l2_gas?.max_price_per_unit),
+    },
+    l1_data_gas: {
+      max_amount: convertToBigInt(txn.resource_bounds.l1_data_gas?.max_amount),
+      max_price_per_unit: convertToBigInt(txn.resource_bounds.l1_data_gas?.max_price_per_unit),
+    },
+  };
+
+  // Convert all V3TransactionDetails fields to BigInt as required
+  const nonceBigInt = convertToBigInt(txn.nonce);
+  const versionBigInt = convertToBigInt(txn.version);
+  const tipBigInt = tipValue && tipValue !== '' ? BigInt(tipValue) : 0n;
+  const paymasterDataBigInt = (txn.paymaster_data || []).map(item => convertToBigInt(item));
+  const accountDeploymentDataBigInt = (txn.account_deployment_data || []).map(item => convertToBigInt(item));
+
+  let payload;
+  try {
+    payload = await dummyAccount.buildDeclarePayload(
+        // @ts-ignore
+      { contract: contract_class, compiledClassHash: txn.compiled_class_hash },
+      {
+        nonce: nonceBigInt,
+        version: '0x3',
+        resourceBounds: resourceBoundsBN,
+        tip: tipBigInt,
+        paymasterData: paymasterDataBigInt,
+        accountDeploymentData: accountDeploymentDataBigInt,
+        nonceDataAvailabilityMode: nonceDataAvailabilityMode as starknet.EDataAvailabilityMode,
+        feeDataAvailabilityMode: feeDataAvailabilityMode as starknet.EDataAvailabilityMode,
+        walletAddress: txn.sender_address,
+        chainId: await syncingProvider.getChainId(),
+      }
+    );
+  } catch (error) {
+    console.error("Error in buildDeclarePayload:", error);
+    throw error;
+  }
+
   const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
     method: "madara_V0_1_0_bypassAddDeclareTransaction",
-    params: [
-      {
-        type: "DECLARE",
-        sender_address: txn.sender_address,
-        compiled_class_hash: txn.compiled_class_hash,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
-        class_hash: txn.class_hash,
-        resource_bounds: txn.resource_bounds,
-        tip: txn.tip,
-        paymaster_data: txn.paymaster_data,
-        account_deployment_data: txn.account_deployment_data,
-        nonce_data_availability_mode: txn.nonce_data_availability_mode,
-        fee_data_availability_mode: txn.fee_data_availability_mode,
-      },
-    ],
+    params: {
+        declare_transaction: {
+          type: "DECLARE",
+          sender_address: txn.sender_address,
+          compiled_class_hash: txn.compiled_class_hash,
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+          contract_class: {
+            // @ts-ignore
+            sierra_program: contract_class.sierra_program,
+            // @ts-ignore
+            contract_class_version: payload.contract.contract_class_version,
+            entry_points_by_type: payload.contract.entry_points_by_type,
+            abi: payload.contract.abi,
+          },
+          resource_bounds: txn.resource_bounds,
+          tip: tipValue,
+          paymaster_data: txn.paymaster_data,
+          account_deployment_data: txn.account_deployment_data,
+          nonce_data_availability_mode: nonceDataAvailabilityMode,
+          fee_data_availability_mode: feeDataAvailabilityMode
+        }
+      }
   });
-
-  console.log("result: ", result);
+  
   return result.data.result.transaction_hash;
 }
