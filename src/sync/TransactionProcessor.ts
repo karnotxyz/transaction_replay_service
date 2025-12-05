@@ -79,6 +79,7 @@ export class ParallelTransactionProcessor {
     // SEQUENTIAL SENDING
     for (let index = 0; index < transactions.length; index++) {
       const tx = transactions[index];
+
       try {
         const txHash = tx.transaction_hash;
 

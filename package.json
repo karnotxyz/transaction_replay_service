@@ -25,6 +25,7 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/auto-instrumentations-node": "^0.66.0",
+    "@opentelemetry/core": "^2.2.0",
     "@opentelemetry/exporter-metrics-otlp-proto": "^0.207.0",
     "@opentelemetry/resources": "^2.2.0",
     "@opentelemetry/sdk-metrics": "^2.2.0",
@@ -39,7 +40,7 @@
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7",
-    "starknet": "github:starknet-io/starknet.js#78b181c",
+    "starknet": "^8.9.1",
     "uuid": "^11.1.0",
     "winston": "^3.17.0"
   },
