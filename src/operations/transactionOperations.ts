@@ -10,6 +10,7 @@ import { RetryOptions } from "../types.js";
 import axios, { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
 import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
+import { getNodeName } from "../providers.js";
 
 // Nonce tracker for special address
 const nonceTracker: Record<string, number> = {};
@@ -22,6 +23,8 @@ export async function getNonce(
   provider: RpcProvider,
   nonce: string,
 ): Promise<string> {
+  const nodeName = getNodeName(provider);
+
   if (address !== "0x1") {
     return nonce;
   }
@@ -38,7 +41,7 @@ export async function getNonce(
 
     return `0x${addressNonce.toString(16)}`;
   } catch (error) {
-    throw wrapMadaraError(error, `getNonce(${address})`);
+    throw wrapMadaraError(error, `getNonce(${address}) [${nodeName}]`);
   }
 }
 
@@ -49,11 +52,13 @@ export async function getTransactionReceipt(
   provider: RpcProvider,
   transactionHash: string,
 ): Promise<GetTransactionReceiptResponse> {
+  const nodeName = getNodeName(provider);
+
   try {
     const receipt = await provider.getTransactionReceipt(transactionHash);
     return receipt;
   } catch (error) {
-    throw wrapMadaraError(error, `getTransactionReceipt(${transactionHash})`);
+    throw wrapMadaraError(error, `getTransactionReceipt(${transactionHash}) [${nodeName}]`);
   }
 }
 
@@ -65,6 +70,7 @@ export async function validateTransactionReceipt(
   txHash: string,
   options: RetryOptions = {},
 ): Promise<void> {
+  const nodeName = getNodeName(provider);
   const {
     maxRetries = RetryConfig.MAX_RETRIES_RECEIPT_VALIDATION,
     useExponentialBackoff = false,
@@ -77,14 +83,14 @@ export async function validateTransactionReceipt(
   while (retryCount <= maxRetries) {
     try {
       logger.debug(
-        `Validating receipt for ${txHash} (attempt ${retryCount + 1}/${maxRetries + 1})`,
+        `Validating receipt for ${txHash} [${nodeName}] (attempt ${retryCount + 1}/${maxRetries + 1})`,
       );
 
       const receipt = await getTransactionReceipt(provider, txHash);
 
       // Validate transaction status
       if (!receipt.isSuccess() && !receipt.isReverted()) {
-        throw new Error(`Transaction in unexpected state: ${txHash}`);
+        throw new Error(`Transaction in unexpected state: ${txHash} [${nodeName}]`);
       }
 
       // Success
@@ -93,7 +99,7 @@ export async function validateTransactionReceipt(
       // Check if this is a Madara down error - fail fast
       if (error instanceof MadaraDownError) {
         logger.warn(
-          `🚨 Madara connection error while validating receipt for ${txHash}`,
+          `Madara connection error while validating receipt for ${txHash} [${nodeName}]`,
         );
         throw error;
       }
@@ -102,7 +108,7 @@ export async function validateTransactionReceipt(
       if (isMadaraDownError(error)) {
         consecutiveConnectionErrors++;
         logger.warn(
-          `⚠️  Connection error ${consecutiveConnectionErrors}/${RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS} for ${txHash}`,
+          `Connection error ${consecutiveConnectionErrors}/${RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS} for ${txHash} [${nodeName}]`,
         );
 
         if (
@@ -110,10 +116,10 @@ export async function validateTransactionReceipt(
           RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS
         ) {
           logger.error(
-            `❌ Too many consecutive connection errors (${consecutiveConnectionErrors})`,
+            `Too many consecutive connection errors (${consecutiveConnectionErrors}) [${nodeName}]`,
           );
           throw new MadaraDownError(
-            `Madara down while validating receipt for ${txHash} after ${consecutiveConnectionErrors} connection errors`,
+            `Madara down while validating receipt for ${txHash} [${nodeName}] after ${consecutiveConnectionErrors} connection errors`,
           );
         }
       } else {
@@ -127,7 +133,7 @@ export async function validateTransactionReceipt(
       incrementTransactionReceiptRetries("unknown");
 
       if (retryCount > maxRetries) {
-        const errorMsg = `Failed to validate receipt for ${txHash} after ${maxRetries} attempts`;
+        const errorMsg = `Failed to validate receipt for ${txHash} [${nodeName}] after ${maxRetries} attempts`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
       }
