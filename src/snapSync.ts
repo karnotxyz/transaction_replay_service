@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 import { BlockIdentifier, TransactionWithHash, BlockTag } from "starknet";
 import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
-import { SyncProcess, TransactionResult } from "./types.js";
+import { SyncProcess } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
@@ -13,7 +13,6 @@ import {
   getLatestBlockNumber,
   getBlockWithTxs,
 } from "./operations/blockOperations.js";
-import { validateBlock } from "./validation/index.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import {
   incrementBlocksProcessed,
@@ -88,13 +87,8 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
 
   syncStateManager.setSnapSyncProcess(newProcess);
 
-  await persistence.saveSyncProcess(
-    processId,
-    startBlock,
-    targetBlock,
-    isContinuous,
-    isContinuous ? targetBlock : undefined,
-  );
+  // Save state to file
+  persistence.startSync(isContinuous ? "latest" : targetBlock, isContinuous);
 
   const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
   logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
@@ -122,11 +116,8 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     }
     syncStateManager.clearSnapSyncProcess();
     updateActiveSyncProcessCount("snap_sync", false);
-    try {
-      await persistence.updateStatus(processId, ProcessStatus.FAILED);
-    } catch (err) {
-      logger.error(`Failed to update Redis status: ${err}`);
-    }
+    // Mark sync as stopped on failure
+    persistence.stopSync();
   });
 
   return {
@@ -277,7 +268,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
       if (process.cancelRequested) {
-        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        persistence.stopSync();
         syncStateManager.stopSnapProbe();
         syncStateManager.clearSnapSyncProcess();
         updateActiveSyncProcessCount("snap_sync", false);
@@ -394,8 +385,6 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
 
         process.processedBlocks++;
 
-        await persistence.updateLastChecked(process.id);
-
         // Update sync progress metrics
         const originalNodeLatest =
           await getLatestBlockNumber(originalProvider_v9);
@@ -406,8 +395,8 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         const percentComplete = process.isContinuous
           ? "N/A (continuous)"
           : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-              2,
-            ) + "%";
+            2,
+          ) + "%";
 
         logger.info(
           `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
@@ -418,9 +407,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         // Record failed block processing metric
         recordBlockStatus("failed");
 
-        if (process.status !== ProcessStatus.FAILED) {
-          await persistence.updateStatus(process.id, ProcessStatus.FAILED);
-        }
+        process.status = ProcessStatus.FAILED;
         syncStateManager.stopSnapProbe();
         logger.error(`❌ Failed to process block ${currentBlock}:`, error);
         throw error;
@@ -430,7 +417,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
     if (!process.isContinuous) {
       process.status = ProcessStatus.COMPLETED;
       process.endTime = new Date();
-      await persistence.updateStatus(process.id, ProcessStatus.COMPLETED);
+      persistence.stopSync();
       syncStateManager.stopSnapProbe();
       syncStateManager.clearSnapSyncProcess();
       updateActiveSyncProcessCount("snap_sync", false);
@@ -529,9 +516,9 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
       ? "N/A (continuous sync)"
       : currentProcess.totalBlocks! > 0
         ? (
-            (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
-            100
-          ).toFixed(2) + "%"
+          (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
+          100
+        ).toFixed(2) + "%"
         : "0.00%";
 
     const runningFor = currentProcess.endTime

@@ -6,21 +6,16 @@ import {
   getLatestBlockNumber,
   getBlock,
   getBlockWithTxs,
-  closeBlock,
-  matchBlockHash,
-  setCustomHeader,
 } from "./operations/blockOperations.js";
 import { BlockTag, BlockIdentifier, BlockWithTxHashes } from "starknet";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
 import { blockProcessor } from "./sync/BlockProcessor.js";
-import { sequentialTransactionProcessor } from "./sync/TransactionProcessor.js";
 import { ProcessStatus } from "./constants.js";
 import {
   SyncInProgressError,
   InvalidBlockError,
-  MadaraDownError,
 } from "./errors/index.js";
 import { syncBlock } from "./syncing.js";
 
@@ -211,7 +206,8 @@ function getTargetBlock(endBlock: BlockIdentifier): BlockTag | number {
 }
 
 /**
- * Start a sync process
+ * Start a sync process (legacy sequential sync - not used in main app)
+ * @deprecated Use start_snap_sync from snapSync.ts instead
  */
 export async function start_sync(endBlock: BlockIdentifier) {
   // Check if sync is already in progress
@@ -254,13 +250,8 @@ export async function start_sync(endBlock: BlockIdentifier) {
   // Create new process
   const processId = uuidv4();
 
-  await persistence.saveSyncProcess(
-    processId,
-    bounds.syncFrom,
-    bounds.syncTo,
-    isContinuous,
-    isContinuous ? bounds.syncTo : undefined,
-  );
+  // Save state to file
+  persistence.startSync(isContinuous ? "latest" : bounds.syncTo, isContinuous);
 
   const newProcess: SyncProcess = {
     id: processId,
@@ -306,12 +297,7 @@ export async function start_sync(endBlock: BlockIdentifier) {
     }
 
     syncStateManager.clearSequentialProcess();
-
-    try {
-      await persistence.updateStatus(processId, ProcessStatus.FAILED);
-    } catch (err) {
-      logger.error(`Failed to update Redis status: ${err}`);
-    }
+    persistence.stopSync();
   });
 
   return {
@@ -341,9 +327,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation at block level
       if (process.cancelRequested && !process.completeCurrentBlock) {
-        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        process.status = ProcessStatus.CANCELLED;
         syncStateManager.stopSequentialProbe();
         syncStateManager.clearSequentialProcess();
+        persistence.stopSync();
         logger.info(
           `Sync process ${process.id} cancelled immediately at block ${currentBlock}, tx index ${process.currentTxIndex}`,
         );
@@ -355,9 +342,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.completeCurrentBlock &&
         currentBlock > process.currentBlock
       ) {
-        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+        process.status = ProcessStatus.CANCELLED;
         syncStateManager.stopSequentialProbe();
         syncStateManager.clearSequentialProcess();
+        persistence.stopSync();
         logger.info(
           `Sync process ${process.id} cancelled after completing block ${process.currentBlock}`,
         );
@@ -419,14 +407,13 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.processedBlocks++;
         process.currentTxIndex = 0;
 
-        await persistence.updateLastChecked(process.id);
-
         logger.info(`✅ Block ${currentBlock} completed successfully`);
 
         if (process.cancelRequested && process.completeCurrentBlock) {
-          await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
+          process.status = ProcessStatus.CANCELLED;
           syncStateManager.stopSequentialProbe();
           syncStateManager.clearSequentialProcess();
+          persistence.stopSync();
           logger.info(
             `Sync process ${process.id} cancelled after completing current block ${currentBlock}`,
           );
@@ -435,8 +422,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
-        await persistence.updateStatus(process.id, ProcessStatus.FAILED);
+        process.status = ProcessStatus.FAILED;
         syncStateManager.stopSequentialProbe();
+        persistence.stopSync();
         logger.error(
           `Failed to process block ${currentBlock} in process ${process.id}:`,
           error,
@@ -446,17 +434,19 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     }
 
     if (!process.isContinuous) {
-      await persistence.updateStatus(process.id, ProcessStatus.COMPLETED);
+      process.status = ProcessStatus.COMPLETED;
       syncStateManager.stopSequentialProbe();
       syncStateManager.clearSequentialProcess();
+      persistence.stopSync();
       logger.info(
         `✅ Sync process ${process.id} completed successfully (${process.syncFrom} → ${process.syncTo})`,
       );
     }
   } catch (error) {
-    await persistence.updateStatus(process.id, ProcessStatus.FAILED);
+    process.status = ProcessStatus.FAILED;
     syncStateManager.stopSequentialProbe();
     syncStateManager.clearSequentialProcess();
+    persistence.stopSync();
     logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }

@@ -1,14 +1,4 @@
 /**
- * Redis Keys
- */
-export const RedisKeys = {
-  LAST_SYNCED_BLOCK: "LAST_SYNCED_BLOCK",
-  LAST_VERIFIED_BLOCK: "LAST_VERIFIED_BLOCK",
-  LAST_SYNCED_TXN_INDEX: "LAST_SYNCED_TXN_INDEX",
-  SYNC_PROCESS_PREFIX: "sync:",
-} as const;
-
-/**
  * Retry Configuration
  */
 export const RetryConfig = {
@@ -41,11 +31,6 @@ export const TimeoutConfig = {
   // Madara recovery
   MADARA_RECOVERY_MAX_WAIT: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
   MADARA_HEALTH_CHECK_TIMEOUT: 5000, // 5 seconds
-
-  // General timeouts
-  REDIS_CONNECT_TIMEOUT: 2000, // 2 seconds
-  REDIS_RETRY_DELAY: 50, // 50ms base delay for Redis retries
-  REDIS_MAX_RETRIES: 3,
 } as const;
 
 /**

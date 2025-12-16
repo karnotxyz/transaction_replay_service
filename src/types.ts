@@ -35,17 +35,14 @@ export interface SyncProcess {
 }
 
 /**
- * Stored sync process (Redis format)
+ * Sync state stored in file (replaces Redis)
+ * Minimal state - recovery queries syncing node for current position
  */
-export interface StoredSyncProcess {
-  processId: string;
-  syncFrom: number;
-  syncTo: number;
-  status: ProcessStatusType;
-  createdAt: string;
-  lastChecked: string;
-  isContinuous?: string; // stored as string in Redis
-  originalTarget?: string; // stored as string in Redis
+export interface SyncState {
+  status: "running" | "idle";
+  syncTo: number | "latest" | null;
+  isContinuous: boolean;
+  updatedAt: string;
 }
 
 /**

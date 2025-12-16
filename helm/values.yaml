@@ -9,30 +9,10 @@ nodePool:
 instance:
   name: default
 
-# Redis configuration
-redis:
-  enabled: true
-  # Name will be: redis-{instance.name}
-  replicas: 1
-  image:
-    repository: "redis"
-    tag: "7-alpine"
-  resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
-  persistence:
-    enabled: true
-    storageClass: "gp3" # Change to your storage class
-    size: 5Gi
-  port: 6379
-  config:
-    appendonly: "yes"
-    appendfsync: "everysec"
-    save: "900 1 300 10 60 10000" # Save snapshots
+# State file configuration (replaces Redis)
+stateFile:
+  # Path where sync state file will be stored
+  path: "/data/sync-state.json"
 
 # Transaction Syncing Service configuration
 transaction_syncing_service:

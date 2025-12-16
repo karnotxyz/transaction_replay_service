@@ -1,15 +1,11 @@
 import { SyncProcess } from "../types.js";
-import { persistence } from "../persistence.js";
 import logger from "../logger.js";
 import { ProcessStatus } from "../constants.js";
-import {
-  ProcessNotFoundError,
-  InvalidProcessStatusError,
-} from "../errors/index.js";
+import { ProcessNotFoundError } from "../errors/index.js";
 
 /**
  * Singleton state manager for sync processes
- * Provides controlled access to sync process state
+ * Provides controlled access to sync process state (in-memory only)
  */
 export class SyncStateManager {
   private static instance: SyncStateManager;
@@ -72,15 +68,14 @@ export class SyncStateManager {
   /**
    * Update sequential process status
    */
-  public async updateSequentialStatus(
+  public updateSequentialStatus(
     status: (typeof ProcessStatus)[keyof typeof ProcessStatus],
-  ): Promise<void> {
+  ): void {
     if (!this.currentSequentialProcess) {
       throw new ProcessNotFoundError("No sequential process active");
     }
 
     this.currentSequentialProcess.status = status;
-    await persistence.updateStatus(this.currentSequentialProcess.id, status);
   }
 
   /**
@@ -161,15 +156,14 @@ export class SyncStateManager {
   /**
    * Update sync process status
    */
-  public async updateSnapSyncStatus(
+  public updateSnapSyncStatus(
     status: (typeof ProcessStatus)[keyof typeof ProcessStatus],
-  ): Promise<void> {
+  ): void {
     if (!this.currentSnapSyncProcess) {
       throw new ProcessNotFoundError("No sync process active");
     }
 
     this.currentSnapSyncProcess.status = status;
-    await persistence.updateStatus(this.currentSnapSyncProcess.id, status);
   }
 
   /**
@@ -261,14 +255,13 @@ export class SyncStateManager {
 
     this.stopAllProbes();
 
-    // Keep processes in RUNNING status in Redis so they can be auto-resumed
-    // Just update the lastChecked timestamp to indicate clean shutdown
+    // State file tracks intent, not position
+    // On restart, recovery will query syncing node for actual position
     const processes = this.getAllActiveProcesses();
     for (const process of processes) {
       if (process.status === ProcessStatus.RUNNING) {
-        await persistence.updateLastChecked(process.id);
         logger.info(
-          `💾 Process ${process.id} left in RUNNING state for auto-resume`,
+          `💾 Process ${process.id} state preserved for recovery on restart`,
         );
       }
     }

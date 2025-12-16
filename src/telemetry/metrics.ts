@@ -27,7 +27,6 @@ let _madaraHealthStatusGauge: Gauge;
 let _madaraRecoveryCounter: Counter;
 let _madaraDowntimeHistogram: Histogram;
 let _errorCounter: Counter;
-let _redisConnectionStatusGauge: Gauge;
 let _httpRequestsCounter: Counter;
 let _httpRequestDurationHistogram: Histogram;
 let _probeChecksCounter: Counter;
@@ -178,15 +177,6 @@ function initializeMetrics(): void {
     description: "Total number of errors by type and operation",
     unit: "1",
   });
-
-  // Redis metrics
-  _redisConnectionStatusGauge = meter.createGauge(
-    "replay.redis.connection_status",
-    {
-      description: "Redis connection status (1=connected, 0=disconnected)",
-      unit: "1",
-    },
-  );
 
   // HTTP metrics
   _httpRequestsCounter = meter.createCounter("replay.http.requests_total", {
@@ -360,11 +350,6 @@ export function recordMadaraDowntime(durationSeconds: number): void {
 export function incrementErrors(errorType: string, operation: string): void {
   initializeMetrics();
   _errorCounter.add(1, { error_type: errorType, operation });
-}
-
-export function updateRedisConnectionStatus(isConnected: boolean): void {
-  initializeMetrics();
-  _redisConnectionStatusGauge.record(isConnected ? 1 : 0, { service: "redis" });
 }
 
 export function recordHttpRequest(
