@@ -1,13 +1,10 @@
-import { RpcProvider } from "starknet";
-
-import * as starknet from "starknet";
-import { TransactionWithHash, TransactionType } from "starknet";
+import { TransactionWithHash } from "starknet";
 import { generalInvoke } from "./invoke.js";
 import { generalDeclare } from "./declare.js";
 import { generalDeployAccount } from "./deploy_account.js";
 import { l1_handler_message } from "./l1_handler.js";
-import { originalProvider_v9, syncingProvider_v9 } from "../providers.js";
-import { MadaraDownError, isMadaraDownError } from "../utils.js";
+import { syncingProvider_v9 } from "../providers.js";
+import { MadaraDownError, isMadaraDownError } from "../errors/index.js";
 import {
   incrementTransactionsProcessed,
   recordTransactionProcessingDuration,

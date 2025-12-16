@@ -1,37 +1,36 @@
 /**
- * Legacy utils file - most functionality has been moved to specialized modules
- * This file is kept for backwards compatibility during migration
+ * Re-exports for commonly used utilities
+ * Provides a convenient single import point
  */
 
-// Re-export from new modules
+// Block operations
 export {
   getLatestBlockNumber,
   getBlockWithTxHashes,
+  getBlockWithTxs,
+  getBlockWithReceipts,
   getPreConfirmedBlock,
-  getBlock,
-  getBlockTimestamp,
-  getGasPrices,
-  getBlockHash,
   setCustomHeader,
   closeBlock,
   matchBlockHash,
-  getBlockWithTxs as getBlockWithTxsWithRetry,
 } from "./operations/blockOperations.js";
 
+// Transaction operations
 export {
   getNonce,
   getTransactionReceipt,
-  validateTransactionReceipt,
   validateBlockReceipts,
   postWithRetry,
 } from "./operations/transactionOperations.js";
 
+// Madara utilities
 export {
   checkMadaraHealth,
   waitForMadaraRecovery,
   executeWithMadaraRecovery,
 } from "./madara/index.js";
 
+// Error types
 export {
   MadaraDownError,
   isMadaraDownError,
@@ -44,6 +43,3 @@ export {
   ProcessNotFoundError,
   InvalidProcessStatusError,
 } from "./errors/index.js";
-
-// Keep getLatestBlockNumberWithRetry for backwards compatibility
-export { getLatestBlockNumber as getLatestBlockNumberWithRetry } from "./operations/blockOperations.js";
