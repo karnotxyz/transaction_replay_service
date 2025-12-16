@@ -383,11 +383,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.processedBlocks++;
 
         // Update sync progress metrics
-        const originalNodeLatest =
-          await getLatestBlockNumber(originalProvider_v9);
-        const syncingNodeLatest =
-          await getLatestBlockNumber(syncingProvider_v9);
-        updateSyncMetrics(process, originalNodeLatest, syncingNodeLatest);
+        // Use known values instead of making redundant RPC calls:
+        // - originalNodeLatest: use process.syncTo (updated by probe for continuous sync)
+        // - syncingNodeLatest: we just synced this block, so it's currentBlock
+        updateSyncMetrics(process, process.syncTo, currentBlock);
 
         const percentComplete = process.isContinuous
           ? "N/A (continuous)"

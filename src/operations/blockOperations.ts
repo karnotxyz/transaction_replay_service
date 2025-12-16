@@ -220,19 +220,32 @@ export async function getBlockHash(
 
 /**
  * Set custom block header (Madara-specific)
+ * Optimized to fetch block data once instead of 3 separate calls
  */
 export async function setCustomHeader(currentBlock: number): Promise<void> {
   const endTimer = startTimer();
   try {
-    const timestamp = await getBlockTimestamp(
-      originalProvider_v9,
-      currentBlock,
-    );
-    const expectedBlockHash = await getBlockHash(
-      originalProvider_v9,
-      currentBlock,
-    );
-    const gasPrices = await getGasPrices(originalProvider_v9, currentBlock);
+    // Single fetch for all block data (was 3 separate calls before)
+    const block = await getBlockWithTxHashes(originalProvider_v9, currentBlock);
+
+    // Extract timestamp
+    const timestamp = "timestamp" in block ? block.timestamp : null;
+
+    // Extract block hash
+    const expectedBlockHash =
+      "block_hash" in block && block.block_hash ? block.block_hash : null;
+
+    // Extract gas prices
+    if (!("block_hash" in block && block.block_hash)) {
+      throw new Error(`Block ${currentBlock} is pending - cannot set headers`);
+    }
+
+    const gasPrices: GasPrices = {
+      l1_data_gas_price: block.l1_data_gas_price,
+      l1_gas_price: block.l1_gas_price,
+      // @ts-ignore - l2_gas_price exists in the block
+      l2_gas_price: block.l2_gas_price,
+    };
 
     const response = await axios.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,

@@ -31,6 +31,10 @@
  I think we are re-querying the nodes for data in places that we already have because of the previous call to them, can you find if this is still happening? 
  maybe we could optimise on the calls it's making to the nodes.
  
- 7->
+ 7-> 
+ rework on the fetch for transaction receipt, i think we overwhelm the syncing node with a lot of calls, let's rework it, since we are using json rpc can we ask for many transactions together ? let's ideate here
+ 
+ 
+ 8->
  hopefully by now the code is much cleaner and smaller than it was before.
  let's work on more optimisations that you feel are needed and make this service prod ready.
