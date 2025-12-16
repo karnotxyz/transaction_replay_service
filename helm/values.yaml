@@ -20,7 +20,7 @@ transaction_syncing_service:
   replicas: 1
   image:
     repository: "public.ecr.aws/o5q6k5w4/karnot-operator/txn_replay_service"
-    tag: "v1.0.5"
+    tag: "v2.0.0"
   resources:
     limits:
       cpu: 500m
@@ -31,4 +31,4 @@ transaction_syncing_service:
   # Persistent storage for sync state
   storage:
     size: "50Mi"
-    storageClassName: "gp2"
+    storageClassName: "gp3"
