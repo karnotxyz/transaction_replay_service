@@ -428,7 +428,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
       );
       logger.info(
-        `📍 Range: ${process.currentBlock - process.processedBlocks + 1} → ${process.currentBlock - 1}`,
+        `📍 Range: ${process.syncFrom} → ${process.currentBlock}`,
       );
     }
   } catch (error) {
