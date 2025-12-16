@@ -3,3 +3,4 @@ node_modules
 dist
 grafana_provisioning
 starknet-node.postman_collection.json
+/data

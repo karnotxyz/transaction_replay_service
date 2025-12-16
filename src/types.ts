@@ -102,6 +102,15 @@ export interface TransactionResult {
 }
 
 /**
+ * Result from sending transactions (before closeBlock)
+ */
+export interface SendTransactionsResult {
+  txResults: TransactionResult[];
+  txHashes: string[];
+  sendDuration: number;
+}
+
+/**
  * Transaction receipt from getBlockWithReceipts
  */
 export interface TransactionReceipt {

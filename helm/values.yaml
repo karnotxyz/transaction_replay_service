@@ -28,3 +28,7 @@ transaction_syncing_service:
     requests:
       cpu: 250m
       memory: 512Mi
+  # Persistent storage for sync state
+  storage:
+    size: "50Mi"
+    storageClassName: "gp2"

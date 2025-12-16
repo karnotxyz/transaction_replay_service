@@ -4,7 +4,7 @@ import { processTx } from "../transactions/index.js";
 import { validateBlockReceipts } from "../operations/transactionOperations.js";
 import { syncingProvider_v9 } from "../providers.js";
 import { MadaraDownError } from "../errors/index.js";
-import { TransactionResult } from "../types.js";
+import { TransactionResult, SendTransactionsResult } from "../types.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
@@ -12,19 +12,18 @@ import {
 
 /**
  * Process transactions for a block
- * Sends transactions sequentially, then validates all receipts using a single
- * getBlockWithReceipts call with phased polling
+ * Sends transactions sequentially. Receipt validation happens after block is closed.
  */
 export class ParallelTransactionProcessor {
   /**
-   * Send transactions sequentially, then validate all receipts efficiently
+   * Send transactions sequentially (no receipt validation - that happens after closeBlock)
    */
-  async processTransactions(
+  async sendTransactions(
     transactions: TransactionWithHash[],
     blockNumber: number,
-  ): Promise<TransactionResult[]> {
+  ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
-      return [];
+      return { txResults: [], txHashes: [], sendDuration: 0 };
     }
 
     logger.info(
@@ -75,12 +74,32 @@ export class ParallelTransactionProcessor {
     const sendDuration = Date.now() - startTime;
     logger.info(`All ${transactions.length} transactions sent in ${sendDuration}ms`);
 
-    // RECEIPT VALIDATION using getBlockWithReceipts (single RPC call with phased polling)
+    // Record transaction sending duration
+    recordBlockProcessingDuration("send_txs", endTimer());
+
+    return {
+      txResults,
+      txHashes,
+      sendDuration,
+    };
+  }
+
+  /**
+   * Validate receipts for a block (call this AFTER closeBlock)
+   */
+  async validateReceipts(
+    blockNumber: number,
+    txHashes: string[],
+  ): Promise<void> {
+    if (txHashes.length === 0) {
+      return;
+    }
+
     logger.info(
-      `Validating ${transactions.length} receipts using getBlockWithReceipts...`,
+      `Validating ${txHashes.length} receipts using getBlockWithReceipts...`,
     );
 
-    const receiptStartTime = Date.now();
+    const startTime = Date.now();
 
     try {
       await validateBlockReceipts(syncingProvider_v9, blockNumber, txHashes);
@@ -92,18 +111,8 @@ export class ParallelTransactionProcessor {
       throw error;
     }
 
-    const receiptDuration = Date.now() - receiptStartTime;
-    logger.info(`All receipts validated in ${receiptDuration}ms`);
-
-    const totalDuration = Date.now() - startTime;
-    logger.info(
-      `Block ${blockNumber} completed in ${totalDuration}ms (${transactions.length} txs)`,
-    );
-
-    // Record total transaction processing duration for this block
-    recordBlockProcessingDuration("process_txs", endTimer());
-
-    return txResults;
+    const duration = Date.now() - startTime;
+    logger.info(`All receipts validated in ${duration}ms`);
   }
 }
 

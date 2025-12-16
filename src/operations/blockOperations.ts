@@ -425,10 +425,12 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
     }
 
     try {
-      const originalHash = await getBlockHash(originalProvider_v9, blockNumber);
+      // Fetch both hashes in parallel for better performance
+      const [originalHash, syncingHash] = await Promise.all([
+        getBlockHash(originalProvider_v9, blockNumber),
+        getBlockHash(syncingProvider_v9, blockNumber),
+      ]);
       logger.info(`Original node block hash: ${originalHash}`);
-
-      const syncingHash = await getBlockHash(syncingProvider_v9, blockNumber);
       logger.info(`Syncing node block hash: ${syncingHash}`);
 
       // Check if we failed to fetch either hash

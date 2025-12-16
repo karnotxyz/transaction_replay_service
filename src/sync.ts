@@ -217,10 +217,15 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
  * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
  * Returns the number of transactions processed
  */
+interface ProcessBlockResult {
+  txCount: number;
+  txHashes: string[];
+}
+
 async function processBlock(
   blockNumber: number,
   process: SyncProcess,
-): Promise<number> {
+): Promise<ProcessBlockResult> {
   const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
 
   const transactions = blockWithTxs.transactions;
@@ -230,15 +235,16 @@ async function processBlock(
 
   if (transactions.length === 0) {
     logger.info(`⏭️  Block ${blockNumber} has no transactions, skipping...`);
-    return 0;
+    return { txCount: 0, txHashes: [] };
   }
 
   try {
-    // Use parallel transaction processor
-    await parallelTransactionProcessor.processTransactions(
+    // Send transactions (no receipt validation yet - that happens after closeBlock)
+    const result = await parallelTransactionProcessor.sendTransactions(
       transactions as TransactionWithHash[],
       blockNumber,
     );
+    return { txCount: transactions.length, txHashes: result.txHashes };
   } catch (error) {
     // If the error message indicates a restart is needed, propagate it
     if (error instanceof Error && error.message.includes("Restarting block")) {
@@ -246,8 +252,6 @@ async function processBlock(
     }
     throw error;
   }
-
-  return transactions.length;
 }
 
 /**
@@ -314,11 +318,11 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           throw headersResult.error;
         }
 
-        // Process block with parallel transaction processing
+        // Process block: send transactions (receipt validation happens after closeBlock)
         let blockNeedsRestart = false;
-        let txCount = 0;
+        let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
         try {
-          txCount = await processBlock(currentBlock, process);
+          blockResult = await processBlock(currentBlock, process);
         } catch (error) {
           if (
             error instanceof Error &&
@@ -355,13 +359,21 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           continue;
         }
 
-        // Close the block
+        // Close the block (must happen before receipt validation)
         const closeResult = await blockProcessor.closeCurrentBlock(
           currentBlock,
           process,
         );
         if (!closeResult.success) {
           throw closeResult.error;
+        }
+
+        // Validate receipts AFTER block is closed
+        if (blockResult.txHashes.length > 0) {
+          await parallelTransactionProcessor.validateReceipts(
+            currentBlock,
+            blockResult.txHashes,
+          );
         }
 
         // Verify block hash
@@ -378,7 +390,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         recordBlockStatus("success");
 
         // Update throughput metrics
-        throughputTracker.recordBlock(txCount);
+        throughputTracker.recordBlock(blockResult.txCount);
 
         process.processedBlocks++;
 

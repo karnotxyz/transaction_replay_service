@@ -1,6 +1,6 @@
 # app.yaml
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ .Values.instance.name }}-replay-service
   namespace: {{ .Values.namespace.name }}
@@ -10,6 +10,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 spec:
+  serviceName: {{ .Values.instance.name }}-replay-service
   replicas: {{ .Values.transaction_syncing_service.replicas }}
   selector:
     matchLabels:
@@ -36,3 +37,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Values.instance.name }}-replay-service-config
+          volumeMounts:
+            - name: state-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: state-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.transaction_syncing_service.storage.storageClassName | default "gp2" }}
+        resources:
+          requests:
+            storage: {{ .Values.transaction_syncing_service.storage.size | default "50Mi" }}
