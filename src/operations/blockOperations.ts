@@ -5,7 +5,7 @@ import {
   BlockTag,
 } from "starknet";
 import logger from "../logger.js";
-import { GasPrices, MadaraRpcResponse } from "../types.js";
+import { GasPrices, MadaraRpcResponse, BlockWithReceipts } from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
@@ -111,6 +111,65 @@ export async function getBlockWithTxs(
       );
     }
   }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
+}
+
+/**
+ * Get block with all transaction receipts (single RPC call)
+ * This is much more efficient than fetching individual receipts
+ */
+export async function getBlockWithReceipts(
+  provider: RpcProvider,
+  blockNumber: number,
+): Promise<BlockWithReceipts | null> {
+  const nodeName = getNodeName(provider);
+
+  try {
+    // Get the RPC URL from the provider
+    const rpcUrl =
+      provider === syncingProvider_v9
+        ? config.rpcUrlSyncingNode
+        : config.rpcUrlOriginalNode;
+
+    const response = await axios.post(
+      rpcUrl,
+      {
+        jsonrpc: "2.0",
+        method: "starknet_getBlockWithReceipts",
+        params: [{ block_number: blockNumber }],
+        id: 1,
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+
+    if (response.data.error) {
+      // Block not ready yet - return null to signal retry needed
+      if (
+        response.data.error.code === 24 ||
+        response.data.error.message?.includes("Block not found")
+      ) {
+        return null;
+      }
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
+    }
+
+    return response.data.result as BlockWithReceipts;
+  } catch (error) {
+    // Connection errors should be retried
+    if (axios.isAxiosError(error) && !error.response) {
+      logger.warn(
+        `Connection error fetching block with receipts [${nodeName}]: ${error.message}`,
+      );
+      return null;
+    }
+    throw wrapMadaraError(
+      error,
+      `getBlockWithReceipts(${blockNumber}) [${nodeName}]`,
+    );
+  }
 }
 
 /**

@@ -100,3 +100,45 @@ export interface TransactionResult {
   success: boolean;
   error?: string;
 }
+
+/**
+ * Transaction receipt from getBlockWithReceipts
+ */
+export interface TransactionReceipt {
+  transaction_hash: string;
+  actual_fee: {
+    amount: string;
+    unit: string;
+  };
+  execution_status: "SUCCEEDED" | "REVERTED";
+  finality_status: string;
+  type: string;
+  messages_sent: any[];
+  events: any[];
+  execution_resources?: any;
+  revert_reason?: string;
+}
+
+/**
+ * Transaction with receipt from getBlockWithReceipts
+ */
+export interface TransactionWithReceipt {
+  transaction: any;
+  receipt: TransactionReceipt;
+}
+
+/**
+ * Block with receipts response
+ */
+export interface BlockWithReceipts {
+  block_hash?: string;
+  block_number?: number;
+  parent_hash?: string;
+  timestamp?: number;
+  sequencer_address?: string;
+  l1_gas_price?: any;
+  l1_data_gas_price?: any;
+  l2_gas_price?: any;
+  starknet_version?: string;
+  transactions: TransactionWithReceipt[];
+}

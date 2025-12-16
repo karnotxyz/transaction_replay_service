@@ -5,12 +5,13 @@ import {
   MadaraDownError,
   isMadaraDownError,
 } from "../errors/index.js";
-import { RetryConfig } from "../constants.js";
-import { RetryOptions } from "../types.js";
+import { RetryConfig, ReceiptValidationConfig } from "../constants.js";
+import { RetryOptions, BlockWithReceipts } from "../types.js";
 import axios, { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
 import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
 import { getNodeName } from "../providers.js";
+import { getBlockWithReceipts } from "./blockOperations.js";
 
 // Nonce tracker for special address
 const nonceTracker: Record<string, number> = {};
@@ -242,4 +243,155 @@ export async function postWithRetry(
   }
 
   throw new Error(`POST ${url} failed after ${maxAttempts + 1} attempts`);
+}
+
+/**
+ * Get the polling interval based on elapsed time (phased polling)
+ * Phase 1 (0-5s): 100ms
+ * Phase 2 (5s-1min): 500ms
+ * Phase 3 (>1min): 2000ms
+ */
+function getPollingInterval(elapsedMs: number): number {
+  if (elapsedMs < ReceiptValidationConfig.PHASE1_DURATION_MS) {
+    return ReceiptValidationConfig.PHASE1_INTERVAL_MS;
+  }
+  if (elapsedMs < ReceiptValidationConfig.PHASE2_DURATION_MS) {
+    return ReceiptValidationConfig.PHASE2_INTERVAL_MS;
+  }
+  return ReceiptValidationConfig.PHASE3_INTERVAL_MS;
+}
+
+/**
+ * Validate all transaction receipts for a block using getBlockWithReceipts
+ * Uses phased polling: fast initially, then slower over time
+ * Times out after 15 minutes
+ */
+export async function validateBlockReceipts(
+  provider: RpcProvider,
+  blockNumber: number,
+  expectedTxHashes: string[],
+): Promise<void> {
+  const nodeName = getNodeName(provider);
+  const startTime = Date.now();
+  const timeout = ReceiptValidationConfig.TIMEOUT_MS;
+
+  logger.info(
+    `Validating ${expectedTxHashes.length} receipts for block ${blockNumber} [${nodeName}]`,
+  );
+
+  // Initial delay before starting validation
+  await new Promise((resolve) =>
+    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
+  );
+
+  let pollCount = 0;
+  let consecutiveErrors = 0;
+  const maxConsecutiveErrors = 5;
+
+  while (true) {
+    const elapsed = Date.now() - startTime;
+
+    // Check timeout
+    if (elapsed >= timeout) {
+      const errorMsg = `Receipt validation timed out after ${Math.round(elapsed / 1000)}s for block ${blockNumber} [${nodeName}]`;
+      logger.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    pollCount++;
+    const interval = getPollingInterval(elapsed);
+
+    try {
+      const blockWithReceipts = await getBlockWithReceipts(provider, blockNumber);
+
+      if (!blockWithReceipts) {
+        // Block not ready yet, wait and retry
+        logger.debug(
+          `Block ${blockNumber} not ready yet, retrying in ${interval}ms (poll #${pollCount}, ${Math.round(elapsed / 1000)}s elapsed)`,
+        );
+        consecutiveErrors = 0; // Reset on successful RPC (just no block yet)
+        await new Promise((resolve) => setTimeout(resolve, interval));
+        continue;
+      }
+
+      // Block found - validate receipts
+      const receipts = blockWithReceipts.transactions;
+      const receiptMap = new Map(
+        receipts.map((txWithReceipt) => [
+          txWithReceipt.receipt.transaction_hash,
+          txWithReceipt.receipt,
+        ]),
+      );
+
+      // Check all expected transactions have receipts
+      const missingTxs: string[] = [];
+      const failedTxs: string[] = [];
+
+      for (const txHash of expectedTxHashes) {
+        const receipt = receiptMap.get(txHash);
+
+        if (!receipt) {
+          missingTxs.push(txHash);
+          continue;
+        }
+
+        // Check execution status
+        if (
+          receipt.execution_status !== "SUCCEEDED" &&
+          receipt.execution_status !== "REVERTED"
+        ) {
+          failedTxs.push(
+            `${txHash} (status: ${receipt.execution_status})`,
+          );
+        }
+      }
+
+      if (missingTxs.length > 0) {
+        // Some transactions not in block yet - this shouldn't happen if block is finalized
+        logger.warn(
+          `Block ${blockNumber} missing ${missingTxs.length} expected transactions, retrying...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, interval));
+        continue;
+      }
+
+      if (failedTxs.length > 0) {
+        const errorMsg = `${failedTxs.length} transactions in unexpected state for block ${blockNumber}: ${failedTxs.join(", ")}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // All receipts validated successfully
+      const duration = Date.now() - startTime;
+      logger.info(
+        `All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`,
+      );
+      return;
+    } catch (error) {
+      // Check for Madara down
+      if (error instanceof MadaraDownError || isMadaraDownError(error)) {
+        logger.warn(
+          `Madara connection error during receipt validation for block ${blockNumber} [${nodeName}]`,
+        );
+        throw new MadaraDownError(
+          `Madara down while validating receipts for block ${blockNumber}`,
+        );
+      }
+
+      consecutiveErrors++;
+
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        logger.error(
+          `Too many consecutive errors (${consecutiveErrors}) validating receipts for block ${blockNumber}`,
+        );
+        throw error;
+      }
+
+      // Transient error, retry
+      logger.warn(
+        `Error validating receipts (attempt ${pollCount}), retrying: ${error}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+  }
 }

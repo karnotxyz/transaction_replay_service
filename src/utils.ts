@@ -22,6 +22,7 @@ export {
   getNonce,
   getTransactionReceipt,
   validateTransactionReceipt,
+  validateBlockReceipts,
   postWithRetry,
 } from "./operations/transactionOperations.js";
 
