@@ -72,16 +72,16 @@ export class InvalidBlockError extends AppError {
  * Block hash mismatch
  */
 export class BlockHashMismatchError extends AppError {
-  public readonly paradexHash: string;
-  public readonly madaraHash: string;
+  public readonly originalNodeHash: string;
+  public readonly syncingNodeHash: string;
   public readonly blockNumber: number;
 
-  constructor(blockNumber: number, paradexHash: string, madaraHash: string) {
-    const message = `Block hash mismatch at block ${blockNumber}: Paradex=${paradexHash}, Madara=${madaraHash}`;
+  constructor(blockNumber: number, originalNodeHash: string, syncingNodeHash: string) {
+    const message = `Block hash mismatch at block ${blockNumber}: Original=${originalNodeHash}, Syncing=${syncingNodeHash}`;
     super(message, ErrorCode.BLOCK_HASH_MISMATCH, 500, true);
     this.blockNumber = blockNumber;
-    this.paradexHash = paradexHash;
-    this.madaraHash = madaraHash;
+    this.originalNodeHash = originalNodeHash;
+    this.syncingNodeHash = syncingNodeHash;
   }
 }
 

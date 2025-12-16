@@ -410,12 +410,14 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
   // Use retry logic with special handling for hash mismatch
   let attempts = 0;
   const maxAttempts = 400;
+  const maxDelayMs = 30000; // Cap delay at 30 seconds
 
   while (attempts < maxAttempts) {
     attempts++;
 
     if (attempts > 1) {
-      const delay = Math.pow(2, attempts - 1) * 100;
+      // Exponential backoff with cap to prevent overflow
+      const delay = Math.min(Math.pow(2, attempts - 1) * 100, maxDelayMs);
       logger.info(
         `Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`,
       );

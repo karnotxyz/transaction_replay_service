@@ -3,7 +3,6 @@ import { generalInvoke } from "./invoke.js";
 import { generalDeclare } from "./declare.js";
 import { generalDeployAccount } from "./deploy_account.js";
 import { l1_handler_message } from "./l1_handler.js";
-import { syncingProvider_v9 } from "../providers.js";
 import { MadaraDownError, isMadaraDownError } from "../errors/index.js";
 import {
   incrementTransactionsProcessed,
@@ -23,10 +22,10 @@ export async function processTx(
 
   try {
     const handlers: Record<string, () => Promise<string>> = {
-      INVOKE: () => generalInvoke(tx, syncingProvider_v9),
-      DEPLOY_ACCOUNT: () => generalDeployAccount(tx, syncingProvider_v9),
-      DECLARE: () => generalDeclare(tx, syncingProvider_v9),
-      L1_HANDLER: () => l1_handler_message(tx, syncingProvider_v9),
+      INVOKE: () => generalInvoke(tx),
+      DEPLOY_ACCOUNT: () => generalDeployAccount(tx),
+      DECLARE: () => generalDeclare(tx),
+      L1_HANDLER: () => l1_handler_message(tx),
     };
 
     const handler = handlers[tx.type];

@@ -13,39 +13,6 @@ import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
 import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
 
-// Nonce tracker for special address
-const nonceTracker: Record<string, number> = {};
-
-/**
- * Get nonce for an address with special handling for "0x1"
- */
-export async function getNonce(
-  address: string,
-  provider: RpcProvider,
-  nonce: string,
-): Promise<string> {
-  const nodeName = getNodeName(provider);
-
-  if (address !== "0x1") {
-    return nonce;
-  }
-
-  try {
-    if (nonceTracker[address] === undefined) {
-      nonceTracker[address] = Number(
-        await provider.getNonceForAddress(address),
-      );
-    }
-
-    const addressNonce = nonceTracker[address];
-    nonceTracker[address] += 1;
-
-    return `0x${addressNonce.toString(16)}`;
-  } catch (error) {
-    throw wrapMadaraError(error, `getNonce(${address}) [${nodeName}]`);
-  }
-}
-
 /**
  * Get transaction receipt
  */

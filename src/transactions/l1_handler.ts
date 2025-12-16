@@ -1,12 +1,9 @@
 import * as starknet from "starknet";
-import { postWithRetry, getNonce } from "../utils.js";
+import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 import { L1HandlerConfig } from "../constants.js";
 
-export async function l1_handler_message(
-  tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
-) {
+export async function l1_handler_message(tx: starknet.TransactionWithHash) {
   type L1_HANDLER_TXN = {
     version: string;
     nonce: string;

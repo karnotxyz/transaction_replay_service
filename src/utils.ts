@@ -17,7 +17,6 @@ export {
 
 // Transaction operations
 export {
-  getNonce,
   getTransactionReceipt,
   validateBlockReceipts,
   postWithRetry,

@@ -1,5 +1,5 @@
 import * as starknet from "starknet";
-import { postWithRetry, getNonce } from "../utils.js";
+import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 
 /**
@@ -7,21 +7,20 @@ import { config } from "../config.js";
  */
 export async function generalInvoke(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   let tx_version = tx.version;
 
   switch (tx_version) {
     case "0x0": {
-      return invokeV0(tx, syncingProvider);
+      return invokeV0(tx);
     }
 
     case "0x1": {
-      return invokeV1(tx, syncingProvider);
+      return invokeV1(tx);
     }
 
     case "0x3": {
-      return invokeV3(tx, syncingProvider);
+      return invokeV3(tx);
     }
     default: {
       throw new Error(`Unsupported Invoke transaction version: ${tx_version}`);
@@ -31,7 +30,6 @@ export async function generalInvoke(
 
 async function invokeV0(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type INVOKE_TXN_V0 = {
     type: "INVOKE";
@@ -67,7 +65,6 @@ async function invokeV0(
 
 async function invokeV1(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type INVOKE_TXN_V1 = {
     type: "INVOKE";
@@ -93,7 +90,7 @@ async function invokeV1(
         max_fee: txn.max_fee,
         version: txn.version,
         signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
+        nonce: txn.nonce,
       },
     ],
   });
@@ -103,7 +100,6 @@ async function invokeV1(
 
 async function invokeV3(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type INVOKE_TXN_V3 = {
     type: "INVOKE";
@@ -133,7 +129,7 @@ async function invokeV3(
         calldata: txn.calldata,
         version: txn.version,
         signature: txn.signature,
-        nonce: await getNonce(txn.sender_address!, syncingProvider, txn.nonce),
+        nonce: txn.nonce,
         resource_bounds: txn.resource_bounds,
         tip: txn.tip,
         paymaster_data: txn.paymaster_data,
