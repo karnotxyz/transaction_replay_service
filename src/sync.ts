@@ -31,13 +31,13 @@ import {
 } from "./errors/index.js";
 
 /**
- * Start a snap sync process (for auto-resume and API)
+ * Start a sync process (for auto-resume and API)
  */
-export async function start_snap_sync(endBlock: BlockIdentifier) {
-  if (syncStateManager.isSnapSyncRunning()) {
-    const currentProcess = syncStateManager.getSnapSyncProcess()!;
+export async function startSync(endBlock: BlockIdentifier) {
+  if (syncStateManager.isSyncRunning()) {
+    const currentProcess = syncStateManager.getProcess()!;
     throw new SyncInProgressError(
-      `Snap sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
+      `Sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
       {
         processId: currentProcess.id,
         currentBlock: currentProcess.currentBlock,
@@ -85,7 +85,7 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     originalTarget: isContinuous ? targetBlock : undefined,
   };
 
-  syncStateManager.setSnapSyncProcess(newProcess);
+  syncStateManager.setProcess(newProcess);
 
   // Save state to file
   persistence.startSync(isContinuous ? "latest" : targetBlock, isContinuous);
@@ -103,19 +103,19 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     );
     logger.info(`📍 Initial target: block ${targetBlock}`);
     const probeInterval = probeManager.createProbeInterval(newProcess);
-    syncStateManager.setSnapProbeInterval(probeInterval);
+    syncStateManager.setProbeInterval(probeInterval);
   }
 
-  // Mark snap sync as active
-  updateActiveSyncProcessCount("snap_sync", true);
+  // Mark sync as active
+  updateActiveSyncProcessCount("sync", true);
 
-  snapSyncBlocksAsync(newProcess).catch(async (error) => {
-    logger.error(`❌ sync process ${processId} failed:`, error);
+  syncBlocksAsync(newProcess).catch(async (error) => {
+    logger.error(`❌ Sync process ${processId} failed:`, error);
     if (newProcess.isContinuous) {
-      syncStateManager.stopSnapProbe();
+      syncStateManager.stopProbe();
     }
-    syncStateManager.clearSnapSyncProcess();
-    updateActiveSyncProcessCount("snap_sync", false);
+    syncStateManager.clearProcess();
+    updateActiveSyncProcessCount("sync", false);
     // Mark sync as stopped on failure
     persistence.stopSync();
   });
@@ -131,9 +131,9 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
 }
 
 /**
- * Snap Sync Endpoint Handler
+ * Sync Endpoint Handler
  */
-export const snapSyncEndpoint = async (req: Request, res: Response) => {
+export const syncEndpoint = async (req: Request, res: Response) => {
   try {
     const { endBlock }: { endBlock: BlockIdentifier } = req.body;
 
@@ -143,7 +143,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
       });
     }
 
-    const result = await start_snap_sync(endBlock);
+    const result = await startSync(endBlock);
 
     if (result.alreadyComplete) {
       return res.status(HttpStatus.OK).json({
@@ -155,17 +155,14 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     }
 
     const response: any = {
-      message: "snap sync process started successfully",
+      message: "Sync process started successfully",
       processId: result.processId,
-      mode: result.isContinuous
-        ? "continuous-parallel"
-        : "sequential-send-parallel-receipt",
+      mode: result.isContinuous ? "continuous" : "fixed",
       status: {
         startBlock: result.syncFrom,
         endBlock: result.syncTo,
         totalBlocks: result.estimatedBlocks,
       },
-      note: "Transactions will be sent sequentially, then all receipts validated in parallel before closing block",
     };
 
     if (result.isContinuous) {
@@ -182,9 +179,9 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
         details: error.details,
       });
     }
-    logger.error("Error starting snap sync process:", error);
+    logger.error("Error starting sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-      error: `Failed to start snap sync: ${error.message || error}`,
+      error: `Failed to start sync: ${error.message || error}`,
     });
   }
 };
@@ -220,7 +217,7 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
  * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
  * Returns the number of transactions processed
  */
-async function snapSyncBlock(
+async function processBlock(
   blockNumber: number,
   process: SyncProcess,
 ): Promise<number> {
@@ -254,9 +251,9 @@ async function snapSyncBlock(
 }
 
 /**
- * Async function to process blocks sequentially with parallel transaction processing
+ * Async function to process blocks
  */
-async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
+async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
@@ -269,9 +266,9 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       // Check for cancellation
       if (process.cancelRequested) {
         persistence.stopSync();
-        syncStateManager.stopSnapProbe();
-        syncStateManager.clearSnapSyncProcess();
-        updateActiveSyncProcessCount("snap_sync", false);
+        syncStateManager.stopProbe();
+        syncStateManager.clearProcess();
+        updateActiveSyncProcessCount("sync", false);
         logger.info(
           `🛑 Sync process ${process.id} cancelled at block ${currentBlock}`,
         );
@@ -321,7 +318,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         let blockNeedsRestart = false;
         let txCount = 0;
         try {
-          txCount = await snapSyncBlock(currentBlock, process);
+          txCount = await processBlock(currentBlock, process);
         } catch (error) {
           if (
             error instanceof Error &&
@@ -380,7 +377,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         incrementBlocksProcessed();
         recordBlockStatus("success");
 
-        // Update throughput metrics (txCount already obtained from snapSyncBlock)
+        // Update throughput metrics
         throughputTracker.recordBlock(txCount);
 
         process.processedBlocks++;
@@ -408,7 +405,7 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         recordBlockStatus("failed");
 
         process.status = ProcessStatus.FAILED;
-        syncStateManager.stopSnapProbe();
+        syncStateManager.stopProbe();
         logger.error(`❌ Failed to process block ${currentBlock}:`, error);
         throw error;
       }
@@ -418,14 +415,14 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       process.status = ProcessStatus.COMPLETED;
       process.endTime = new Date();
       persistence.stopSync();
-      syncStateManager.stopSnapProbe();
-      syncStateManager.clearSnapSyncProcess();
-      updateActiveSyncProcessCount("snap_sync", false);
+      syncStateManager.stopProbe();
+      syncStateManager.clearProcess();
+      updateActiveSyncProcessCount("sync", false);
 
       const duration = process.endTime.getTime() - process.startTime.getTime();
       const durationSeconds = (duration / 1000).toFixed(2);
 
-      logger.info(`🎉SYNC COMPLETED!`);
+      logger.info(`🎉 SYNC COMPLETED!`);
       logger.info(`✅ Process ${process.id} finished successfully`);
       logger.info(
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
@@ -438,20 +435,20 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
     process.status = ProcessStatus.FAILED;
     process.error = error instanceof Error ? error.message : String(error);
 
-    syncStateManager.stopSnapProbe();
-    syncStateManager.clearSnapSyncProcess();
-    updateActiveSyncProcessCount("snap_sync", false);
-    logger.error(`❌ sync process ${process.id} failed:`, error);
+    syncStateManager.stopProbe();
+    syncStateManager.clearProcess();
+    updateActiveSyncProcessCount("sync", false);
+    logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }
 }
 
 /**
- * Cancel the current  sync process
+ * Cancel the current sync process
  */
-export const cancelSnapSync = async (req: Request, res: Response) => {
+export const cancelSync = async (req: Request, res: Response) => {
   try {
-    const currentProcess = syncStateManager.getSnapSyncProcess();
+    const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
       return res.status(HttpStatus.NOT_FOUND).json({
@@ -494,7 +491,7 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error("Error cancelling sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-      error: `Failed to cancel snap sync: ${error.message || error}`,
+      error: `Failed to cancel sync: ${error.message || error}`,
     });
   }
 };
@@ -502,9 +499,9 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
 /**
  * Get sync status
  */
-export const getSnapSyncStatus = async (req: Request, res: Response) => {
+export const getSyncStatus = async (req: Request, res: Response) => {
   try {
-    const currentProcess = syncStateManager.getSnapSyncProcess();
+    const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
       return res.json({
@@ -528,9 +525,7 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
     const response: any = {
       processId: currentProcess.id,
       status: currentProcess.status,
-      mode: currentProcess.isContinuous
-        ? "continuous-parallel"
-        : "sequential-send-parallel-receipt",
+      mode: currentProcess.isContinuous ? "continuous" : "fixed",
       progress: {
         currentBlock: currentProcess.currentBlock,
         endBlock: currentProcess.syncTo,

@@ -303,7 +303,7 @@ export function incrementTransactionReceiptRetries(txType: string): void {
 }
 
 export function updateActiveSyncProcesses(
-  syncMode: "sequential" | "snap_sync",
+  syncMode: "sync",
   count: number,
 ): void {
   initializeMetrics();

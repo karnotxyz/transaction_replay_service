@@ -54,9 +54,7 @@ src/
 ├── logger.ts                   # Winston logging
 ├── providers.ts                # RPC provider factory (v0.8.1 & v0.9.0)
 ├── persistence.ts              # File-based state management (sync-state.json)
-├── snapSync.ts                 # Parallel sync endpoint + logic
-├── syncing.ts                  # Sequential sync helpers
-├── startSyncing.ts             # Sync initialization (legacy)
+├── sync.ts                     # Main sync logic and API endpoints
 │
 ├── api/                        # API response formatting
 ├── errors/                     # Custom error classes
@@ -75,12 +73,18 @@ src/
 
 ## Key Concepts
 
-### Sync Modes
-1. **Snap Sync (default)** - Send all txs sequentially, validate receipts in parallel
-2. **Continuous Sync** - Use `endBlock: "latest"` to follow new blocks automatically
+### Sync Mode
+The service sends transactions sequentially with a small delay, then validates all receipts in parallel. This provides a good balance of speed and reliability.
+
+### Continuous Sync
+When `endBlock: "latest"`, the service:
+- Syncs to current latest block
+- Starts probe loop (every 60s)
+- Automatically updates target as source advances
+- "Fire and forget" operation
 
 ### State File (sync-state.json)
-The service uses a simple JSON file for persistence instead of Redis:
+The service uses a simple JSON file for persistence:
 ```json
 {
   "status": "running",      // "running" | "idle"
@@ -99,7 +103,7 @@ When the service starts:
    - **Validate both `block_hash` and `parent_hash` match**
    - If match: resume from block N+1
    - If mismatch: **exit with error code 1** (triggers CrashLoopBackoff)
-3. If no file or `status: "idle"`: wait for RPC call to start sync
+3. If no file or `status: "idle"`: wait for RPC call
 
 ### Madara Recovery
 - Detects when Madara is unreachable
@@ -136,10 +140,10 @@ OTEL_SERVICE_NAME=transaction-replay-service
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | Health check + process status |
-| POST | `/sync` | Start snap sync `{endBlock: number\|"latest"}` |
+| GET | `/health` | Health check + sync status |
+| POST | `/sync` | Start sync `{endBlock: number\|"latest"}` |
 | POST | `/sync/cancel` | Cancel sync |
-| GET | `/snap/status` | Current snap sync process status |
+| GET | `/sync/status` | Current sync process status |
 
 ---
 
@@ -206,7 +210,7 @@ TX_DELAY_FIRST_RECEIPT: 2000ms
 ### Changing Sync Logic
 - Block processing: `src/sync/BlockProcessor.ts`
 - Transaction processing: `src/sync/TransactionProcessor.ts`
-- Main flow: `src/snapSync.ts`
+- Main flow: `src/sync.ts`
 
 ---
 
@@ -263,8 +267,9 @@ Configure `STATE_FILE_PATH` in ConfigMap. Default: `/data/sync-state.json`
 ## Recent Changes
 
 - **Removed Redis dependency** - Replaced with simple file-based state
+- **Simplified codebase** - Removed old sequential sync, kept only parallel receipt validation
+- **Renamed snapSync to sync** - Cleaner naming throughout
 - **Improved recovery** - Validates chain integrity (block_hash + parent_hash) on startup
-- **Simplified architecture** - No external dependencies for state management
 - **K8s-friendly** - Hash mismatch triggers exit(1) for CrashLoopBackoff alerts
 
 ---

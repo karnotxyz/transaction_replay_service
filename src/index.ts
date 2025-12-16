@@ -8,11 +8,11 @@ import { config } from "./config.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import {
-  snapSyncEndpoint,
-  cancelSnapSync,
-  getSnapSyncStatus,
-  start_snap_sync,
-} from "./snapSync.js";
+  syncEndpoint,
+  cancelSync,
+  getSyncStatus,
+  startSync,
+} from "./sync.js";
 import { metricsMiddleware } from "./telemetry/middleware.js";
 import { BlockHashMismatchError } from "./errors/index.js";
 
@@ -29,19 +29,16 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     service: "transaction_replay_service",
-    activeProcesses: {
-      sequential: syncStateManager.isSequentialSyncRunning(),
-      snapSync: syncStateManager.isSnapSyncRunning(),
-    },
+    syncRunning: syncStateManager.isSyncRunning(),
   });
 });
 
 // ========================================
-// Sync Endpoints (Parallel)
+// Sync Endpoints
 // ========================================
-app.post("/sync", snapSyncEndpoint);
-app.post("/sync/cancel", cancelSnapSync);
-app.get("/snap/status", getSnapSyncStatus);
+app.post("/sync", syncEndpoint);
+app.post("/sync/cancel", cancelSync);
+app.get("/sync/status", getSyncStatus);
 
 // ========================================
 // Clean Slate Handler
@@ -65,15 +62,15 @@ async function handleCleanSlate(): Promise<void> {
 }
 
 // ========================================
-// Recovery Handler (replaces auto-resume)
+// Recovery Handler
 // ========================================
 async function recoverOnStartup(): Promise<void> {
   try {
     // Check if there's already a process running in-memory
-    if (syncStateManager.isSnapSyncRunning()) {
-      const currentProcess = syncStateManager.getSnapSyncProcess()!;
+    if (syncStateManager.isSyncRunning()) {
+      const currentProcess = syncStateManager.getProcess()!;
       logger.info(
-        `ℹ️  Snap sync already running in-memory (Process ID: ${currentProcess.id})`,
+        `ℹ️  Sync already running in-memory (Process ID: ${currentProcess.id})`,
       );
       return;
     }
@@ -109,7 +106,7 @@ async function recoverOnStartup(): Promise<void> {
       logger.info(`📋 Mode: ${mode}, Target: ${recovery.syncTo}`);
 
       // Start sync from recovery point
-      const result = await start_snap_sync(
+      const result = await startSync(
         recovery.isContinuous ? "latest" : recovery.syncTo,
       );
 
@@ -180,7 +177,7 @@ async function main() {
         "  • POST /sync - Start sync with {endBlock: number | 'latest'}",
       );
       logger.info("  • POST /sync/cancel - Cancel sync");
-      logger.info("  • GET  /snap/status - Get sync status");
+      logger.info("  • GET  /sync/status - Get sync status");
       logger.info("📌 Continuous sync:");
       logger.info("  • Use endBlock: 'latest' in sync request");
       logger.info("  • System will automatically follow new blocks");
