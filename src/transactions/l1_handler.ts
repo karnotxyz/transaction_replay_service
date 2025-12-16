@@ -2,6 +2,7 @@ import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 import { L1HandlerConfig } from "../constants.js";
+import logger from "../logger.js";
 
 export async function l1_handler_message(tx: starknet.TransactionWithHash) {
   type L1_HANDLER_TXN = {
@@ -48,12 +49,11 @@ export async function l1_handler_message(tx: starknet.TransactionWithHash) {
 
   // Check if the status is successful
   if (result.status === 200) {
-    console.log(
-      "L1 Handler Message sent successfully: ",
-      result.data.result.transaction_hash,
+    logger.debug(
+      `L1 Handler Message sent successfully: ${result.data.result.transaction_hash}`,
     );
   } else {
-    console.error("Failed to send L1 Handler Message");
+    logger.error("Failed to send L1 Handler Message");
   }
 
   return result.data.result.transaction_hash;
