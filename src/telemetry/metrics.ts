@@ -1,11 +1,13 @@
 import { metrics } from "@opentelemetry/api";
 import { Counter, Gauge, Histogram, ObservableGauge } from "@opentelemetry/api";
-import logger from "../logger.js";
+import { telemetryConfig } from "./config.js";
 
 // This file uses a lazy initialization pattern to ensure metrics are created
 // AFTER the OpenTelemetry SDK's MeterProvider is registered
+// When OTEL is disabled, all metric operations become no-ops
 
 let _metricsInitialized = false;
+let _metricsEnabled = false;
 
 // Private metric instances
 let _blocksProcessedCounter: Counter;
@@ -33,8 +35,16 @@ let _probeChecksCounter: Counter;
 let _probeNewBlocksCounter: Counter;
 let _processUptimeGauge: ObservableGauge;
 
-function initializeMetrics(): void {
-  if (_metricsInitialized) return;
+function initializeMetrics(): boolean {
+  if (_metricsInitialized) return _metricsEnabled;
+
+  _metricsInitialized = true;
+  _metricsEnabled = telemetryConfig.enabled;
+
+  // Skip metric initialization if OTEL is disabled
+  if (!_metricsEnabled) {
+    return false;
+  }
 
   const meter = metrics.getMeter("transaction-replay-service");
 
@@ -219,45 +229,46 @@ function initializeMetrics(): void {
     observableResult.observe(process.uptime());
   });
 
-  _metricsInitialized = true;
+  return true;
 }
 
 // ============================================================================
 // HELPER FUNCTIONS
+// All functions are no-ops when OTEL is disabled
 // ============================================================================
 
 export function recordBlockProcessingDuration(
   operation: string,
   durationSeconds: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _blockProcessingDurationHistogram.record(durationSeconds, { operation });
 }
 
 export function incrementBlocksProcessed(): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _blocksProcessedCounter.add(1, { status: "processed" });
 }
 
 export function recordBlockStatus(
   status: "success" | "failed" | "hash_mismatch",
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _blockStatusCounter.add(1, { status });
 }
 
 export function updateCurrentBlock(blockNumber: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _currentBlockGauge.record(blockNumber, { node: "processing" });
 }
 
 export function updateOriginalNodeBlockNumber(blockNumber: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _originalNodeBlockNumberGauge.record(blockNumber, { node: "original" });
 }
 
 export function updateSyncingNodeBlockNumber(blockNumber: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _syncingNodeBlockNumberGauge.record(blockNumber, { node: "syncing" });
 }
 
@@ -265,7 +276,7 @@ export function incrementTransactionsProcessed(
   txType: string,
   txVersion: string,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _transactionsProcessedCounter.add(1, {
     tx_type: txType,
     tx_version: txVersion,
@@ -277,7 +288,7 @@ export function recordTransactionStatus(
   txVersion: string,
   status: "success" | "failed" | "retried",
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _transactionStatusCounter.add(1, {
     tx_type: txType,
     tx_version: txVersion,
@@ -290,7 +301,7 @@ export function recordTransactionProcessingDuration(
   txVersion: string,
   durationSeconds: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _transactionProcessingDurationHistogram.record(durationSeconds, {
     tx_type: txType,
     tx_version: txVersion,
@@ -298,7 +309,7 @@ export function recordTransactionProcessingDuration(
 }
 
 export function incrementTransactionReceiptRetries(txType: string): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _transactionReceiptRetriesCounter.add(1, { tx_type: txType });
 }
 
@@ -306,7 +317,7 @@ export function updateActiveSyncProcesses(
   syncMode: "sync",
   count: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _activeSyncProcessesGauge.record(count, { sync_mode: syncMode });
 }
 
@@ -314,12 +325,12 @@ export function updateSyncProgress(
   processId: string,
   percentage: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _syncProgressGauge.record(percentage, { process_id: processId });
 }
 
 export function updateSyncBacklog(blocks: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _syncBacklogGauge.record(blocks, { metric: "backlog" });
 }
 
@@ -327,28 +338,28 @@ export function updateThroughput(
   blocksPerSecond: number,
   txsPerSecond: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _blocksPerSecondGauge.record(blocksPerSecond, { metric: "blocks_rate" });
   _transactionsPerSecondGauge.record(txsPerSecond, { metric: "txs_rate" });
 }
 
 export function updateMadaraHealthStatus(isHealthy: boolean): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _madaraHealthStatusGauge.record(isHealthy ? 1 : 0, { service: "madara" });
 }
 
 export function incrementMadaraRecoveryEvents(): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _madaraRecoveryCounter.add(1, { event: "recovery" });
 }
 
 export function recordMadaraDowntime(durationSeconds: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _madaraDowntimeHistogram.record(durationSeconds, { event: "downtime" });
 }
 
 export function incrementErrors(errorType: string, operation: string): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _errorCounter.add(1, { error_type: errorType, operation });
 }
 
@@ -358,7 +369,7 @@ export function recordHttpRequest(
   statusCode: number,
   durationSeconds: number,
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _httpRequestsCounter.add(1, {
     method,
     endpoint,
@@ -370,12 +381,12 @@ export function recordHttpRequest(
 export function incrementProbeChecks(
   result: "new_blocks" | "no_change" | "error",
 ): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _probeChecksCounter.add(1, { result });
 }
 
 export function incrementProbeNewBlocks(count: number): void {
-  initializeMetrics();
+  if (!initializeMetrics()) return;
   _probeNewBlocksCounter.add(count);
 }
 
