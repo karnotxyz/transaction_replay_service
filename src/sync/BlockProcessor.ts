@@ -7,6 +7,7 @@ import {
   matchBlockHash,
   getBlockWithTxs,
   getPreConfirmedBlock,
+  getLatestBlockNumber,
 } from "../operations/blockOperations.js";
 import { validateBlock } from "../validation/index.js";
 import { executeWithMadaraRecovery } from "../madara/index.js";
@@ -25,6 +26,15 @@ export interface BlockProcessResult {
   needsRestart?: boolean;
   error?: Error;
 }
+
+/**
+ * Recovery action to take after Madara comes back up
+ */
+export type RecoveryAction =
+  | { type: "restart_block"; blockNumber: number }
+  | { type: "continue_block"; blockNumber: number; existingTxHashes: string[] }
+  | { type: "skip_to_block"; blockNumber: number }
+  | { type: "failed"; error: string };
 
 /**
  * Common block processing operations shared between sequential and snap sync
@@ -162,15 +172,92 @@ export class BlockProcessor {
   // Block processing metrics are now tracked directly in snapSync.ts where blocks are actually processed.
 
   /**
-   * Handle Madara recovery for a block
-   * Determines if block needs restart based on PRE_CONFIRMED state
+   * Query Madara's actual state and determine what action to take
+   * This is STATELESS - we don't assume anything about what we were doing before
+   *
+   * Possible states after Madara recovery:
+   * 1. Madara is at block N-1 (completed), PRE_CONFIRMED is empty → restart block N
+   * 2. Madara is at block N-1 (completed), PRE_CONFIRMED has some txs → continue block N with remaining txs
+   * 3. Madara is at block N (completed) → skip to block N+1
+   * 4. Madara is at block < N-1 → skip to Madara's latest + 1
+   */
+  async queryMadaraState(targetBlockNumber: number): Promise<RecoveryAction> {
+    try {
+      // Get Madara's latest completed block
+      const latestBlock = await getLatestBlockNumber(syncingProvider_v9);
+      logger.info(`📊 Madara latest completed block: ${latestBlock}`);
+
+      // Get PRE_CONFIRMED block state
+      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+      const preConfirmedBlockNumber = preConfirmedBlock.block_number;
+      const preConfirmedTxHashes = (preConfirmedBlock.transactions || []) as string[];
+
+      logger.info(
+        `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxHashes.length}`,
+      );
+
+      // Case 1: Madara has already completed the target block
+      if (latestBlock >= targetBlockNumber) {
+        logger.info(
+          `✅ Madara already at block ${latestBlock} >= target ${targetBlockNumber}, skipping to next`,
+        );
+        return { type: "skip_to_block", blockNumber: latestBlock + 1 };
+      }
+
+      // Case 2: Madara is behind where we expected (e.g., restarted from earlier state)
+      if (latestBlock < targetBlockNumber - 1) {
+        logger.info(
+          `⚠️ Madara is at block ${latestBlock}, behind expected ${targetBlockNumber - 1}. Continuing from ${latestBlock + 1}`,
+        );
+        return { type: "skip_to_block", blockNumber: latestBlock + 1 };
+      }
+
+      // Case 3: Madara is at targetBlockNumber - 1, check PRE_CONFIRMED state
+      if (preConfirmedBlockNumber !== targetBlockNumber) {
+        // PRE_CONFIRMED doesn't match - this means we need to start fresh
+        logger.info(
+          `📭 PRE_CONFIRMED block ${preConfirmedBlockNumber} doesn't match target ${targetBlockNumber}, restarting block`,
+        );
+        return { type: "restart_block", blockNumber: latestBlock + 1 };
+      }
+
+      // PRE_CONFIRMED matches target block
+      if (preConfirmedTxHashes.length === 0) {
+        // Empty pending block - restart (headers may need to be set)
+        logger.info(
+          `📭 PRE_CONFIRMED block ${targetBlockNumber} is empty, restarting block`,
+        );
+        return { type: "restart_block", blockNumber: targetBlockNumber };
+      }
+
+      // Has some transactions - continue with remaining
+      logger.info(
+        `📦 PRE_CONFIRMED block ${targetBlockNumber} has ${preConfirmedTxHashes.length} transactions, will send remaining`,
+      );
+      return {
+        type: "continue_block",
+        blockNumber: targetBlockNumber,
+        existingTxHashes: preConfirmedTxHashes,
+      };
+    } catch (error) {
+      logger.error(`❌ Failed to query Madara state:`, error);
+      return {
+        type: "failed",
+        error: `Failed to query Madara state: ${error}`,
+      };
+    }
+  }
+
+  /**
+   * Handle Madara recovery for a block - STATELESS approach
+   * Waits for Madara to come back, then queries its actual state
    */
   async handleBlockRecovery(
     blockNumber: number,
     process: SyncProcess,
   ): Promise<{
     recovered: boolean;
-    needsRestart: boolean;
+    action: RecoveryAction;
   }> {
     logger.warn(`🚨 Madara down detected at block ${blockNumber}`);
 
@@ -185,48 +272,25 @@ export class BlockProcessor {
       );
       process.status = ProcessStatus.FAILED;
       process.error = "Madara recovery timeout - exceeded 24 hour wait period";
-      return { recovered: false, needsRestart: false };
+      return {
+        recovered: false,
+        action: { type: "failed", error: "Madara recovery timeout" },
+      };
     }
 
-    logger.info(`✅ Madara recovered - checking PRE_CONFIRMED block state...`);
+    logger.info(`✅ Madara recovered - querying actual state...`);
 
-    try {
-      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
-      const preConfirmedBlockNumber = preConfirmedBlock.block_number!;
-      const preConfirmedTxCount = preConfirmedBlock.transactions.length;
+    // Query Madara's actual state - STATELESS
+    const action = await this.queryMadaraState(blockNumber);
 
-      logger.info(
-        `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxCount}`,
-      );
-
-      if (preConfirmedBlockNumber !== blockNumber) {
-        logger.error(
-          `❌ PRE_CONFIRMED block ${preConfirmedBlockNumber} doesn't match current block ${blockNumber}`,
-        );
-        process.status = ProcessStatus.FAILED;
-        process.error = `PRE_CONFIRMED block mismatch after recovery`;
-        return { recovered: false, needsRestart: false };
-      }
-
-      if (preConfirmedTxCount === 0) {
-        logger.info(
-          `📭 PRE_CONFIRMED block ${blockNumber} is EMPTY - will restart block`,
-        );
-        process.status = ProcessStatus.RUNNING;
-        return { recovered: true, needsRestart: true };
-      } else {
-        logger.info(
-          `📦 PRE_CONFIRMED block ${blockNumber} has ${preConfirmedTxCount} transactions`,
-        );
-        process.status = ProcessStatus.RUNNING;
-        return { recovered: true, needsRestart: true };
-      }
-    } catch (error) {
-      logger.error(`❌ Failed to check PRE_CONFIRMED block state:`, error);
+    if (action.type === "failed") {
       process.status = ProcessStatus.FAILED;
-      process.error = `Failed to check PRE_CONFIRMED block state after recovery: ${error}`;
-      return { recovered: false, needsRestart: false };
+      process.error = action.error;
+      return { recovered: false, action };
     }
+
+    process.status = ProcessStatus.RUNNING;
+    return { recovered: true, action };
   }
 }
 

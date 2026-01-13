@@ -7,7 +7,7 @@ import { SyncProcess } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
-import { blockProcessor } from "./sync/BlockProcessor.js";
+import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
@@ -216,6 +216,10 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 /**
  * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
  * Returns the number of transactions processed
+ *
+ * @param blockNumber - The block number to process
+ * @param process - The sync process
+ * @param existingTxHashes - Optional list of tx hashes already in Madara's pending block (for recovery)
  */
 interface ProcessBlockResult {
   txCount: number;
@@ -225,13 +229,36 @@ interface ProcessBlockResult {
 async function processBlock(
   blockNumber: number,
   process: SyncProcess,
+  existingTxHashes: string[] = [],
 ): Promise<ProcessBlockResult> {
   const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
 
-  const transactions = blockWithTxs.transactions;
+  let transactions = blockWithTxs.transactions as TransactionWithHash[];
+  const totalTxCount = transactions.length;
+
   logger.info(
-    `📦 Block ${blockNumber}: Found ${transactions.length} transactions`,
+    `📦 Block ${blockNumber}: Found ${totalTxCount} transactions`,
   );
+
+  // If we have existing transactions (recovery scenario), filter them out
+  if (existingTxHashes.length > 0) {
+    const existingSet = new Set(existingTxHashes);
+    const originalCount = transactions.length;
+    transactions = transactions.filter(
+      (tx) => !existingSet.has(tx.transaction_hash),
+    );
+    logger.info(
+      `🔄 Recovery mode: ${existingTxHashes.length} transactions already in Madara, sending ${transactions.length} remaining`,
+    );
+
+    if (transactions.length === 0) {
+      logger.info(
+        `✅ All ${originalCount} transactions already in Madara's pending block`,
+      );
+      // Return all tx hashes (existing + none new) for receipt validation
+      return { txCount: totalTxCount, txHashes: existingTxHashes };
+    }
+  }
 
   if (transactions.length === 0) {
     logger.info(`⏭️  Block ${blockNumber} has no transactions, skipping...`);
@@ -241,16 +268,51 @@ async function processBlock(
   try {
     // Send transactions (no receipt validation yet - that happens after closeBlock)
     const result = await parallelTransactionProcessor.sendTransactions(
-      transactions as TransactionWithHash[],
+      transactions,
       blockNumber,
     );
-    return { txCount: transactions.length, txHashes: result.txHashes };
+    // Combine existing tx hashes with newly sent ones for receipt validation
+    const allTxHashes = [...existingTxHashes, ...result.txHashes];
+    return { txCount: totalTxCount, txHashes: allTxHashes };
   } catch (error) {
     // If the error message indicates a restart is needed, propagate it
     if (error instanceof Error && error.message.includes("Restarting block")) {
       throw error;
     }
     throw error;
+  }
+}
+
+/**
+ * Handle recovery action returned by blockProcessor.handleBlockRecovery
+ * Returns the new block number to continue from, or throws if recovery failed
+ */
+function handleRecoveryAction(
+  action: RecoveryAction,
+  currentBlock: number,
+): { newBlock: number; existingTxHashes: string[] } {
+  switch (action.type) {
+    case "restart_block":
+      logger.info(`🔄 Restarting block ${action.blockNumber} from scratch`);
+      return { newBlock: action.blockNumber, existingTxHashes: [] };
+
+    case "continue_block":
+      logger.info(
+        `🔄 Continuing block ${action.blockNumber} with ${action.existingTxHashes.length} existing transactions`,
+      );
+      return {
+        newBlock: action.blockNumber,
+        existingTxHashes: action.existingTxHashes,
+      };
+
+    case "skip_to_block":
+      logger.info(
+        `⏭️ Skipping to block ${action.blockNumber} (Madara already ahead)`,
+      );
+      return { newBlock: action.blockNumber, existingTxHashes: [] };
+
+    case "failed":
+      throw new Error(`Recovery failed: ${action.error}`);
   }
 }
 
@@ -265,6 +327,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     );
 
     let currentBlock = process.currentBlock;
+    // Track existing tx hashes for recovery scenarios (continue_block action)
+    let existingTxHashes: string[] = [];
 
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
@@ -300,39 +364,41 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        // Validate block
-        const validateResult = await blockProcessor.validateBlockReady(
-          currentBlock,
-          process,
-        );
-        if (!validateResult.success) {
-          throw validateResult.error;
-        }
+        // Validate block (unless we're continuing with existing txs - block is already set up)
+        if (existingTxHashes.length === 0) {
+          const validateResult = await blockProcessor.validateBlockReady(
+            currentBlock,
+            process,
+          );
+          if (!validateResult.success) {
+            throw validateResult.error;
+          }
 
-        // Set custom headers
-        const headersResult = await blockProcessor.setBlockHeaders(
-          currentBlock,
-          process,
-        );
-        if (!headersResult.success) {
-          throw headersResult.error;
+          // Set custom headers
+          const headersResult = await blockProcessor.setBlockHeaders(
+            currentBlock,
+            process,
+          );
+          if (!headersResult.success) {
+            throw headersResult.error;
+          }
+        } else {
+          logger.info(
+            `⏭️ Skipping validation/headers - continuing block with ${existingTxHashes.length} existing txs`,
+          );
         }
 
         // Process block: send transactions (receipt validation happens after closeBlock)
-        let blockNeedsRestart = false;
         let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
         try {
-          blockResult = await processBlock(currentBlock, process);
+          blockResult = await processBlock(currentBlock, process, existingTxHashes);
+          // Clear existing tx hashes after successful processing
+          existingTxHashes = [];
         } catch (error) {
-          if (
-            error instanceof Error &&
-            error.message.includes("Restarting block")
-          ) {
-            blockNeedsRestart = true;
-          } else if (error instanceof MadaraDownError) {
-            // Handle Madara recovery
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery - STATELESS approach
             logger.warn(
-              `🚨 Madara down detected during sync at block ${currentBlock}`,
+              `🚨 Madara down detected during transaction sending at block ${currentBlock}`,
             );
 
             const recoveryResult = await blockProcessor.handleBlockRecovery(
@@ -346,43 +412,127 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
               );
             }
 
-            blockNeedsRestart = true;
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
           } else {
             throw error;
           }
         }
 
-        if (blockNeedsRestart) {
-          logger.info(
-            `🔄 Restarting block ${currentBlock} after Madara recovery`,
-          );
-          continue;
-        }
-
         // Close the block (must happen before receipt validation)
-        const closeResult = await blockProcessor.closeCurrentBlock(
-          currentBlock,
-          process,
-        );
-        if (!closeResult.success) {
-          throw closeResult.error;
+        let closeResult;
+        try {
+          closeResult = await blockProcessor.closeCurrentBlock(
+            currentBlock,
+            process,
+          );
+          if (!closeResult.success) {
+            throw closeResult.error;
+          }
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery during closeBlock - STATELESS approach
+            logger.warn(
+              `🚨 Madara down detected during closeBlock at block ${currentBlock}`,
+            );
+
+            const recoveryResult = await blockProcessor.handleBlockRecovery(
+              currentBlock,
+              process,
+            );
+
+            if (!recoveryResult.recovered) {
+              throw new Error(
+                `Madara recovery failed at block ${currentBlock}`,
+              );
+            }
+
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
+          }
+          throw error;
         }
 
         // Validate receipts AFTER block is closed
         if (blockResult.txHashes.length > 0) {
-          await parallelTransactionProcessor.validateReceipts(
-            currentBlock,
-            blockResult.txHashes,
-          );
+          try {
+            await parallelTransactionProcessor.validateReceipts(
+              currentBlock,
+              blockResult.txHashes,
+            );
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              // Handle Madara recovery during receipt validation - STATELESS approach
+              logger.warn(
+                `🚨 Madara down detected during receipt validation at block ${currentBlock}`,
+              );
+
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              // Handle the recovery action
+              const { newBlock, existingTxHashes: recoveredTxHashes } =
+                handleRecoveryAction(recoveryResult.action, currentBlock);
+              currentBlock = newBlock;
+              existingTxHashes = recoveredTxHashes;
+              continue;
+            }
+            throw error;
+          }
         }
 
         // Verify block hash
-        const verifyResult = await blockProcessor.verifyBlockHash(
-          currentBlock,
-          process,
-        );
-        if (!verifyResult.success) {
-          throw verifyResult.error;
+        let verifyResult;
+        try {
+          verifyResult = await blockProcessor.verifyBlockHash(
+            currentBlock,
+            process,
+          );
+          if (!verifyResult.success) {
+            throw verifyResult.error;
+          }
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery during hash verification - STATELESS approach
+            logger.warn(
+              `🚨 Madara down detected during hash verification at block ${currentBlock}`,
+            );
+
+            const recoveryResult = await blockProcessor.handleBlockRecovery(
+              currentBlock,
+              process,
+            );
+
+            if (!recoveryResult.recovered) {
+              throw new Error(
+                `Madara recovery failed at block ${currentBlock}`,
+              );
+            }
+
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
+          }
+          throw error;
         }
 
         // Record successful block processing metrics
