@@ -1,23 +1,20 @@
 import * as starknet from "starknet";
-import { postWithRetry, getNonce } from "../utils.js";
+import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 
 /**
  * General deploy account transaction handler
  */
-export async function generalDeployAccount(
-  tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
-) {
+export async function generalDeployAccount(tx: starknet.TransactionWithHash) {
   let tx_version = tx.version;
 
   switch (tx_version) {
     case "0x1": {
-      return deployAccountV1(tx, syncingProvider);
+      return deployAccountV1(tx);
     }
 
     case "0x3": {
-      return deployAccountV3(tx, syncingProvider);
+      return deployAccountV3(tx);
     }
     default: {
       throw new Error(
@@ -27,10 +24,7 @@ export async function generalDeployAccount(
   }
 }
 
-async function deployAccountV1(
-  tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
-) {
+async function deployAccountV1(tx: starknet.TransactionWithHash) {
   type DEPLOY_ACCOUNT_TXN_V1 = {
     type: "DEPLOY_ACCOUNT";
     max_fee: starknet.FELT;
@@ -64,10 +58,7 @@ async function deployAccountV1(
   return result.data.result.transaction_hash;
 }
 
-async function deployAccountV3(
-  tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
-) {
+async function deployAccountV3(tx: starknet.TransactionWithHash) {
   type DEPLOY_ACCOUNT_TXN_V3 = {
     type: "DEPLOY_ACCOUNT";
     version: "0x3";

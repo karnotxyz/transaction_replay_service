@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import path from "path";
 import logger from "./logger.js";
 
 dotenv.config();
@@ -20,8 +21,8 @@ interface EnvironmentConfig {
   rpcUrlSyncingNode: string;
   adminRpcUrlSyncingNode: string;
 
-  // Redis
-  redisUrl: string;
+  // State file (replaces Redis)
+  stateFilePath: string;
 
   // Features
   cleanSlate: boolean;
@@ -79,8 +80,10 @@ class Config {
       rpcUrlSyncingNode: process.env.RPC_URL_SYNCING_NODE!,
       adminRpcUrlSyncingNode: process.env.ADMIN_RPC_URL_SYNCING_NODE!,
 
-      // Redis
-      redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
+      // State file (replaces Redis)
+      stateFilePath:
+        process.env.STATE_FILE_PATH ||
+        path.join(process.cwd(), "sync-state.json"),
 
       // Features
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
@@ -122,7 +125,7 @@ class Config {
     logger.info(
       `  • Admin RPC: ${this.maskUrl(config.adminRpcUrlSyncingNode)}`,
     );
-    logger.info(`  • Redis: ${this.maskUrl(config.redisUrl)}`);
+    logger.info(`  • State File: ${config.stateFilePath}`);
     logger.info(
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
     );
@@ -176,8 +179,8 @@ class Config {
     return this.config.adminRpcUrlSyncingNode;
   }
 
-  public get redisUrl(): string {
-    return this.config.redisUrl;
+  public get stateFilePath(): string {
+    return this.config.stateFilePath;
   }
 
   public get cleanSlate(): boolean {

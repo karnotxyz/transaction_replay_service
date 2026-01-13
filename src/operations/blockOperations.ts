@@ -1,17 +1,20 @@
 import {
   BlockWithTxHashes,
-  // BlockWithTxs,
   RpcProvider,
   BlockIdentifier,
   BlockTag,
 } from "starknet";
 import logger from "../logger.js";
-import { GasPrices, MadaraRpcResponse } from "../types.js";
+import { GasPrices, MadaraRpcResponse, BlockWithReceipts } from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
-import { originalProvider_v9, syncingProvider_v9 } from "../providers.js";
+import {
+  originalProvider_v9,
+  syncingProvider_v9,
+  getNodeName,
+} from "../providers.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
@@ -27,6 +30,8 @@ import {
 export async function getLatestBlockNumber(
   provider: RpcProvider,
 ): Promise<number> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const latestBlock: any = await provider.getBlockLatestAccepted();
@@ -41,9 +46,9 @@ export async function getLatestBlockNumber(
 
       return blockNumber;
     } catch (error) {
-      throw wrapMadaraError(error, "getLatestBlockNumber");
+      throw wrapMadaraError(error, `getLatestBlockNumber [${nodeName}]`);
     }
-  }, "getLatestBlockNumber");
+  }, `getLatestBlockNumber [${nodeName}]`);
 }
 
 /**
@@ -53,14 +58,19 @@ export async function getBlockWithTxHashes(
   provider: RpcProvider,
   blockNumber: number,
 ): Promise<BlockWithTxHashes> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getBlockWithTxHashes(${blockNumber})`);
+      throw wrapMadaraError(
+        error,
+        `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`,
+      );
     }
-  }, `getBlockWithTxHashes(${blockNumber})`);
+  }, `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`);
 }
 
 /**
@@ -69,14 +79,16 @@ export async function getBlockWithTxHashes(
 export async function getPreConfirmedBlock(
   provider: RpcProvider,
 ): Promise<BlockWithTxHashes> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(BlockTag.PRE_CONFIRMED);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, "getPreConfirmedBlock");
+      throw wrapMadaraError(error, `getPreConfirmedBlock [${nodeName}]`);
     }
-  }, "getPreConfirmedBlock");
+  }, `getPreConfirmedBlock [${nodeName}]`);
 }
 
 /**
@@ -86,14 +98,78 @@ export async function getBlockWithTxs(
   provider: RpcProvider,
   blockNumber: number,
 ): Promise<any> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxs(blockNumber);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getBlockWithTxs(${blockNumber})`);
+      throw wrapMadaraError(
+        error,
+        `getBlockWithTxs(${blockNumber}) [${nodeName}]`,
+      );
     }
-  }, `getBlockWithTxs(${blockNumber})`);
+  }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
+}
+
+/**
+ * Get block with all transaction receipts (single RPC call)
+ * This is much more efficient than fetching individual receipts
+ */
+export async function getBlockWithReceipts(
+  provider: RpcProvider,
+  blockNumber: number,
+): Promise<BlockWithReceipts | null> {
+  const nodeName = getNodeName(provider);
+
+  try {
+    // Get the RPC URL from the provider
+    const rpcUrl =
+      provider === syncingProvider_v9
+        ? config.rpcUrlSyncingNode
+        : config.rpcUrlOriginalNode;
+
+    const response = await axios.post(
+      rpcUrl,
+      {
+        jsonrpc: "2.0",
+        method: "starknet_getBlockWithReceipts",
+        params: [{ block_number: blockNumber }],
+        id: 1,
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+
+    if (response.data.error) {
+      // Block not ready yet - return null to signal retry needed
+      if (
+        response.data.error.code === 24 ||
+        response.data.error.message?.includes("Block not found")
+      ) {
+        return null;
+      }
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
+    }
+
+    return response.data.result as BlockWithReceipts;
+  } catch (error) {
+    // Connection errors should be retried
+    if (axios.isAxiosError(error) && !error.response) {
+      logger.warn(
+        `Connection error fetching block with receipts [${nodeName}]: ${error.message}`,
+      );
+      return null;
+    }
+    throw wrapMadaraError(
+      error,
+      `getBlockWithReceipts(${blockNumber}) [${nodeName}]`,
+    );
+  }
 }
 
 /**
@@ -103,14 +179,16 @@ export async function getBlock(
   provider: RpcProvider,
   blockTag: BlockIdentifier,
 ): Promise<BlockWithTxHashes> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockTag);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getBlock(${blockTag})`);
+      throw wrapMadaraError(error, `getBlock(${blockTag}) [${nodeName}]`);
     }
-  }, `getBlock(${blockTag})`);
+  }, `getBlock(${blockTag}) [${nodeName}]`);
 }
 
 /**
@@ -120,6 +198,8 @@ export async function getBlockTimestamp(
   provider: RpcProvider,
   blockNumber: number,
 ): Promise<number | null> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
@@ -130,9 +210,12 @@ export async function getBlockTimestamp(
 
       return null; // Pending block
     } catch (error) {
-      throw wrapMadaraError(error, `getBlockTimestamp(${blockNumber})`);
+      throw wrapMadaraError(
+        error,
+        `getBlockTimestamp(${blockNumber}) [${nodeName}]`,
+      );
     }
-  }, `getBlockTimestamp(${blockNumber})`);
+  }, `getBlockTimestamp(${blockNumber}) [${nodeName}]`);
 }
 
 /**
@@ -142,6 +225,8 @@ export async function getGasPrices(
   provider: RpcProvider,
   blockNumber: number,
 ): Promise<GasPrices> {
+  const nodeName = getNodeName(provider);
+
   return blockFetchRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
@@ -157,9 +242,12 @@ export async function getGasPrices(
         l2_gas_price: block.l2_gas_price,
       };
     } catch (error) {
-      throw wrapMadaraError(error, `getGasPrices(${blockNumber})`);
+      throw wrapMadaraError(
+        error,
+        `getGasPrices(${blockNumber}) [${nodeName}]`,
+      );
     }
-  }, `getGasPrices(${blockNumber})`);
+  }, `getGasPrices(${blockNumber}) [${nodeName}]`);
 }
 
 /**
@@ -169,6 +257,8 @@ export async function getBlockHash(
   provider: RpcProvider,
   blockNumber: number,
 ): Promise<string | null> {
+  const nodeName = getNodeName(provider);
+
   return blockHashRetry.execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
@@ -179,26 +269,42 @@ export async function getBlockHash(
 
       return null; // Pending block
     } catch (error) {
-      throw wrapMadaraError(error, `getBlockHash(${blockNumber})`);
+      throw wrapMadaraError(
+        error,
+        `getBlockHash(${blockNumber}) [${nodeName}]`,
+      );
     }
-  }, `getBlockHash(${blockNumber})`);
+  }, `getBlockHash(${blockNumber}) [${nodeName}]`);
 }
 
 /**
  * Set custom block header (Madara-specific)
+ * Optimized to fetch block data once instead of 3 separate calls
  */
 export async function setCustomHeader(currentBlock: number): Promise<void> {
   const endTimer = startTimer();
   try {
-    const timestamp = await getBlockTimestamp(
-      originalProvider_v9,
-      currentBlock,
-    );
-    const expectedBlockHash = await getBlockHash(
-      originalProvider_v9,
-      currentBlock,
-    );
-    const gasPrices = await getGasPrices(originalProvider_v9, currentBlock);
+    // Single fetch for all block data (was 3 separate calls before)
+    const block = await getBlockWithTxHashes(originalProvider_v9, currentBlock);
+
+    // Extract timestamp
+    const timestamp = "timestamp" in block ? block.timestamp : null;
+
+    // Extract block hash
+    const expectedBlockHash =
+      "block_hash" in block && block.block_hash ? block.block_hash : null;
+
+    // Extract gas prices
+    if (!("block_hash" in block && block.block_hash)) {
+      throw new Error(`Block ${currentBlock} is pending - cannot set headers`);
+    }
+
+    const gasPrices: GasPrices = {
+      l1_data_gas_price: block.l1_data_gas_price,
+      l1_gas_price: block.l1_gas_price,
+      // @ts-ignore - l2_gas_price exists in the block
+      l2_gas_price: block.l2_gas_price,
+    };
 
     const response = await axios.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
@@ -257,7 +363,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     recordBlockProcessingDuration("set_header", endTimer());
   } catch (error) {
     incrementErrors("set_custom_header_error", "setCustomHeader");
-    throw wrapMadaraError(error, `setCustomHeader(${currentBlock})`);
+    throw wrapMadaraError(error, `setCustomHeader(${currentBlock}) [syncing]`);
   }
 }
 
@@ -291,7 +397,7 @@ export async function closeBlock(): Promise<void> {
     recordBlockProcessingDuration("close_block", endTimer());
   } catch (error) {
     incrementErrors("close_block_error", "closeBlock");
-    throw wrapMadaraError(error, "closeBlock");
+    throw wrapMadaraError(error, "closeBlock [syncing]");
   }
 }
 
@@ -300,18 +406,18 @@ export async function closeBlock(): Promise<void> {
  */
 export async function matchBlockHash(blockNumber: number): Promise<void> {
   const endTimer = startTimer();
-  const originalProvider = originalProvider_v9;
-  const syncingProvider = syncingProvider_v9;
 
   // Use retry logic with special handling for hash mismatch
   let attempts = 0;
   const maxAttempts = 400;
+  const maxDelayMs = 30000; // Cap delay at 30 seconds
 
   while (attempts < maxAttempts) {
     attempts++;
 
     if (attempts > 1) {
-      const delay = Math.pow(2, attempts - 1) * 100;
+      // Exponential backoff with cap to prevent overflow
+      const delay = Math.min(Math.pow(2, attempts - 1) * 100, maxDelayMs);
       logger.info(
         `Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`,
       );
@@ -319,26 +425,28 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
     }
 
     try {
-      const paradexHash = await getBlockHash(originalProvider, blockNumber);
-      logger.info(`Paradex block hash: ${paradexHash}`);
-
-      const madaraHash = await getBlockHash(syncingProvider, blockNumber);
-      logger.info(`Madara block hash: ${madaraHash}`);
+      // Fetch both hashes in parallel for better performance
+      const [originalHash, syncingHash] = await Promise.all([
+        getBlockHash(originalProvider_v9, blockNumber),
+        getBlockHash(syncingProvider_v9, blockNumber),
+      ]);
+      logger.info(`Original node block hash: ${originalHash}`);
+      logger.info(`Syncing node block hash: ${syncingHash}`);
 
       // Check if we failed to fetch either hash
-      if (!paradexHash || !madaraHash) {
-        const errorMsg = `Failed to fetch block hash for block ${blockNumber} (paradex: ${paradexHash}, madara: ${madaraHash})`;
+      if (!originalHash || !syncingHash) {
+        const errorMsg = `Failed to fetch block hash for block ${blockNumber} (original: ${originalHash}, syncing: ${syncingHash})`;
         logger.warn(errorMsg);
         // This is retriable - block might not be finalized yet
         continue;
       }
 
       // Both hashes retrieved - check if they match
-      if (paradexHash !== madaraHash) {
+      if (originalHash !== syncingHash) {
         // Hash mismatch is NOT retriable - fail immediately
         recordBlockStatus("hash_mismatch");
         incrementErrors("block_hash_mismatch", "matchBlockHash");
-        throw new BlockHashMismatchError(blockNumber, paradexHash, madaraHash);
+        throw new BlockHashMismatchError(blockNumber, originalHash, syncingHash);
       }
 
       recordBlockProcessingDuration("verify_hash", endTimer());

@@ -1,35 +1,31 @@
 import * as starknet from "starknet";
-import { postWithRetry, getNonce } from "../utils.js";
+import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
-import { originalProvider_v9, originalProvider_v8 } from "../providers.js";
-import { writeFile } from "fs/promises";
-import * as path from "path";
-import * as fs from "fs";
+import { originalProvider_v9, originalProvider_v8, syncingProvider_v9 } from "../providers.js";
 
 /**
  * General declare transaction handler
  */
 export async function generalDeclare(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   let tx_version = tx.version;
 
   switch (tx_version) {
     case "0x0": {
-      return declareV0(tx, syncingProvider);
+      return declareV0(tx);
     }
 
     case "0x1": {
-      return declareV1(tx, syncingProvider);
+      return declareV1(tx);
     }
 
     case "0x2": {
-      return declareV2(tx, syncingProvider);
+      return declareV2(tx);
     }
 
     case "0x3": {
-      return declareV3(tx, syncingProvider);
+      return declareV3(tx);
     }
     default: {
       throw new Error(`Unsupported Declare transaction version: ${tx_version}`);
@@ -39,7 +35,6 @@ export async function generalDeclare(
 
 async function declareV0(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type DECLARE_TXN_V0 = {
     type: "DECLARE";
@@ -73,7 +68,6 @@ async function declareV0(
 
 async function declareV1(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type DECLARE_TXN_V1 = {
     type: "DECLARE";
@@ -108,7 +102,7 @@ async function declareV1(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingProvider.declareContract(
+  let declareTransactionResult = await syncingProvider_v9.declareContract(
     transaction,
     invocationDetails,
   );
@@ -118,7 +112,6 @@ async function declareV1(
 
 async function declareV2(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type DECLARE_TXN_V2 = {
     type: "DECLARE";
@@ -173,7 +166,7 @@ async function declareV2(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingProvider.declareContract(
+  let declareTransactionResult = await syncingProvider_v9.declareContract(
     transaction,
     invocationDetails,
   );
@@ -183,7 +176,6 @@ async function declareV2(
 
 async function declareV3(
   tx: starknet.TransactionWithHash,
-  syncingProvider: starknet.RpcProvider,
 ) {
   type DECLARE_TXN_V3 = {
     type: "DECLARE";
@@ -218,7 +210,7 @@ async function declareV3(
   const nonceDataAvailabilityMode = String(txn.nonce_data_availability_mode);
 
   const dummyAccount = new starknet.Account({
-    provider: syncingProvider,
+    provider: syncingProvider_v9,
     address: txn.sender_address,
     signer: '0x123',
     transactionVersion: '0x3',
@@ -266,7 +258,7 @@ async function declareV3(
   let payload;
   try {
     payload = await dummyAccount.buildDeclarePayload(
-        // @ts-ignore
+      // @ts-ignore
       { contract: contract_class, compiledClassHash: txn.compiled_class_hash },
       {
         nonce: nonceBigInt,
@@ -278,7 +270,7 @@ async function declareV3(
         nonceDataAvailabilityMode: nonceDataAvailabilityMode as starknet.EDataAvailabilityMode,
         feeDataAvailabilityMode: feeDataAvailabilityMode as starknet.EDataAvailabilityMode,
         walletAddress: txn.sender_address,
-        chainId: await syncingProvider.getChainId(),
+        chainId: await syncingProvider_v9.getChainId(),
       }
     );
   } catch (error) {
@@ -291,30 +283,30 @@ async function declareV3(
     jsonrpc: "2.0",
     method: "madara_V0_1_0_bypassAddDeclareTransaction",
     params: {
-        declare_transaction: {
-          type: "DECLARE",
-          sender_address: txn.sender_address,
-          compiled_class_hash: txn.compiled_class_hash,
-          version: txn.version,
-          signature: txn.signature,
-          nonce: txn.nonce,
-          contract_class: {
-            // @ts-ignore
-            sierra_program: contract_class.sierra_program,
-            // @ts-ignore
-            contract_class_version: payload.contract.contract_class_version,
-            entry_points_by_type: payload.contract.entry_points_by_type,
-            abi: payload.contract.abi,
-          },
-          resource_bounds: txn.resource_bounds,
-          tip: tipValue,
-          paymaster_data: txn.paymaster_data,
-          account_deployment_data: txn.account_deployment_data,
-          nonce_data_availability_mode: nonceDataAvailabilityMode,
-          fee_data_availability_mode: feeDataAvailabilityMode
-        }
+      declare_transaction: {
+        type: "DECLARE",
+        sender_address: txn.sender_address,
+        compiled_class_hash: txn.compiled_class_hash,
+        version: txn.version,
+        signature: txn.signature,
+        nonce: txn.nonce,
+        contract_class: {
+          // @ts-ignore
+          sierra_program: contract_class.sierra_program,
+          // @ts-ignore
+          contract_class_version: payload.contract.contract_class_version,
+          entry_points_by_type: payload.contract.entry_points_by_type,
+          abi: payload.contract.abi,
+        },
+        resource_bounds: txn.resource_bounds,
+        tip: tipValue,
+        paymaster_data: txn.paymaster_data,
+        account_deployment_data: txn.account_deployment_data,
+        nonce_data_availability_mode: nonceDataAvailabilityMode,
+        fee_data_availability_mode: feeDataAvailabilityMode
       }
+    }
   });
-  
+
   return result.data.result.transaction_hash;
 }

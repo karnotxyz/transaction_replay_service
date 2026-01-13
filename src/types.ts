@@ -35,17 +35,14 @@ export interface SyncProcess {
 }
 
 /**
- * Stored sync process (Redis format)
+ * Sync state stored in file (replaces Redis)
+ * Minimal state - recovery queries syncing node for current position
  */
-export interface StoredSyncProcess {
-  processId: string;
-  syncFrom: number;
-  syncTo: number;
-  status: ProcessStatusType;
-  createdAt: string;
-  lastChecked: string;
-  isContinuous?: string; // stored as string in Redis
-  originalTarget?: string; // stored as string in Redis
+export interface SyncState {
+  status: "running" | "idle";
+  syncTo: number | "latest" | null;
+  isContinuous: boolean;
+  updatedAt: string;
 }
 
 /**
@@ -102,4 +99,55 @@ export interface TransactionResult {
   txHash: string;
   success: boolean;
   error?: string;
+}
+
+/**
+ * Result from sending transactions (before closeBlock)
+ */
+export interface SendTransactionsResult {
+  txResults: TransactionResult[];
+  txHashes: string[];
+  sendDuration: number;
+}
+
+/**
+ * Transaction receipt from getBlockWithReceipts
+ */
+export interface TransactionReceipt {
+  transaction_hash: string;
+  actual_fee: {
+    amount: string;
+    unit: string;
+  };
+  execution_status: "SUCCEEDED" | "REVERTED";
+  finality_status: string;
+  type: string;
+  messages_sent: any[];
+  events: any[];
+  execution_resources?: any;
+  revert_reason?: string;
+}
+
+/**
+ * Transaction with receipt from getBlockWithReceipts
+ */
+export interface TransactionWithReceipt {
+  transaction: any;
+  receipt: TransactionReceipt;
+}
+
+/**
+ * Block with receipts response
+ */
+export interface BlockWithReceipts {
+  block_hash?: string;
+  block_number?: number;
+  parent_hash?: string;
+  timestamp?: number;
+  sequencer_address?: string;
+  l1_gas_price?: any;
+  l1_data_gas_price?: any;
+  l2_gas_price?: any;
+  starknet_version?: string;
+  transactions: TransactionWithReceipt[];
 }

@@ -1,6 +1,5 @@
 import { updateThroughput, updateSyncBacklog, updateSyncProgress, updateActiveSyncProcesses } from './metrics.js';
 import { SyncProcess } from '../types.js';
-import logger from '../logger.js';
 
 /**
  * Throughput tracker for monitoring blocks and transactions per second
@@ -94,7 +93,7 @@ export function updateSyncMetrics(
  * Update active sync process count
  */
 export function updateActiveSyncProcessCount(
-  syncMode: 'sequential' | 'snap_sync',
+  syncMode: 'sync',
   isActive: boolean
 ): void {
   updateActiveSyncProcesses(syncMode, isActive ? 1 : 0);

@@ -1,14 +1,4 @@
 /**
- * Redis Keys
- */
-export const RedisKeys = {
-  LAST_SYNCED_BLOCK: "LAST_SYNCED_BLOCK",
-  LAST_VERIFIED_BLOCK: "LAST_VERIFIED_BLOCK",
-  LAST_SYNCED_TXN_INDEX: "LAST_SYNCED_TXN_INDEX",
-  SYNC_PROCESS_PREFIX: "sync:",
-} as const;
-
-/**
  * Retry Configuration
  */
 export const RetryConfig = {
@@ -41,11 +31,6 @@ export const TimeoutConfig = {
   // Madara recovery
   MADARA_RECOVERY_MAX_WAIT: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
   MADARA_HEALTH_CHECK_TIMEOUT: 5000, // 5 seconds
-
-  // General timeouts
-  REDIS_CONNECT_TIMEOUT: 2000, // 2 seconds
-  REDIS_RETRY_DELAY: 50, // 50ms base delay for Redis retries
-  REDIS_MAX_RETRIES: 3,
 } as const;
 
 /**
@@ -54,6 +39,29 @@ export const TimeoutConfig = {
 export const ProbeConfig = {
   INTERVAL_MS: 60 * 1000, // 1 minute
   CAUGHT_UP_WAIT_MS: 5000, // 5 seconds when caught up
+} as const;
+
+/**
+ * Receipt Validation Configuration
+ * Uses phased polling: fast initially, then slower over time
+ */
+export const ReceiptValidationConfig = {
+  // Total timeout for receipt validation
+  TIMEOUT_MS: 15 * 60 * 1000, // 15 minutes
+
+  // Phase 1: Fast polling (first 5 seconds)
+  PHASE1_DURATION_MS: 5000, // 5 seconds
+  PHASE1_INTERVAL_MS: 100, // 100ms between polls
+
+  // Phase 2: Medium polling (5 seconds to 1 minute)
+  PHASE2_DURATION_MS: 60 * 1000, // 1 minute cumulative
+  PHASE2_INTERVAL_MS: 500, // 500ms between polls
+
+  // Phase 3: Slow polling (after 1 minute)
+  PHASE3_INTERVAL_MS: 2000, // 2 seconds between polls
+
+  // Initial delay before starting validation
+  INITIAL_DELAY_MS: 500, // Wait 500ms before first poll
 } as const;
 
 /**

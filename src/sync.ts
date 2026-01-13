@@ -3,17 +3,16 @@ import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 import { BlockIdentifier, TransactionWithHash, BlockTag } from "starknet";
 import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
-import { SyncProcess, TransactionResult } from "./types.js";
+import { SyncProcess } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
-import { blockProcessor } from "./sync/BlockProcessor.js";
+import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
   getBlockWithTxs,
 } from "./operations/blockOperations.js";
-import { validateBlock } from "./validation/index.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import {
   incrementBlocksProcessed,
@@ -32,13 +31,13 @@ import {
 } from "./errors/index.js";
 
 /**
- * Start a snap sync process (for auto-resume and API)
+ * Start a sync process (for auto-resume and API)
  */
-export async function start_snap_sync(endBlock: BlockIdentifier) {
-  if (syncStateManager.isSnapSyncRunning()) {
-    const currentProcess = syncStateManager.getSnapSyncProcess()!;
+export async function startSync(endBlock: BlockIdentifier) {
+  if (syncStateManager.isSyncRunning()) {
+    const currentProcess = syncStateManager.getProcess()!;
     throw new SyncInProgressError(
-      `Snap sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
+      `Sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
       {
         processId: currentProcess.id,
         currentBlock: currentProcess.currentBlock,
@@ -86,15 +85,10 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     originalTarget: isContinuous ? targetBlock : undefined,
   };
 
-  syncStateManager.setSnapSyncProcess(newProcess);
+  syncStateManager.setProcess(newProcess);
 
-  await persistence.saveSyncProcess(
-    processId,
-    startBlock,
-    targetBlock,
-    isContinuous,
-    isContinuous ? targetBlock : undefined,
-  );
+  // Save state to file
+  persistence.startSync(isContinuous ? "latest" : targetBlock, isContinuous);
 
   const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
   logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
@@ -109,24 +103,21 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
     );
     logger.info(`📍 Initial target: block ${targetBlock}`);
     const probeInterval = probeManager.createProbeInterval(newProcess);
-    syncStateManager.setSnapProbeInterval(probeInterval);
+    syncStateManager.setProbeInterval(probeInterval);
   }
 
-  // Mark snap sync as active
-  updateActiveSyncProcessCount("snap_sync", true);
+  // Mark sync as active
+  updateActiveSyncProcessCount("sync", true);
 
-  snapSyncBlocksAsync(newProcess).catch(async (error) => {
-    logger.error(`❌ sync process ${processId} failed:`, error);
+  syncBlocksAsync(newProcess).catch(async (error) => {
+    logger.error(`❌ Sync process ${processId} failed:`, error);
     if (newProcess.isContinuous) {
-      syncStateManager.stopSnapProbe();
+      syncStateManager.stopProbe();
     }
-    syncStateManager.clearSnapSyncProcess();
-    updateActiveSyncProcessCount("snap_sync", false);
-    try {
-      await persistence.updateStatus(processId, ProcessStatus.FAILED);
-    } catch (err) {
-      logger.error(`Failed to update Redis status: ${err}`);
-    }
+    syncStateManager.clearProcess();
+    updateActiveSyncProcessCount("sync", false);
+    // Mark sync as stopped on failure
+    persistence.stopSync();
   });
 
   return {
@@ -140,9 +131,9 @@ export async function start_snap_sync(endBlock: BlockIdentifier) {
 }
 
 /**
- * Snap Sync Endpoint Handler
+ * Sync Endpoint Handler
  */
-export const snapSyncEndpoint = async (req: Request, res: Response) => {
+export const syncEndpoint = async (req: Request, res: Response) => {
   try {
     const { endBlock }: { endBlock: BlockIdentifier } = req.body;
 
@@ -152,7 +143,7 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
       });
     }
 
-    const result = await start_snap_sync(endBlock);
+    const result = await startSync(endBlock);
 
     if (result.alreadyComplete) {
       return res.status(HttpStatus.OK).json({
@@ -164,17 +155,14 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
     }
 
     const response: any = {
-      message: "snap sync process started successfully",
+      message: "Sync process started successfully",
       processId: result.processId,
-      mode: result.isContinuous
-        ? "continuous-parallel"
-        : "sequential-send-parallel-receipt",
+      mode: result.isContinuous ? "continuous" : "fixed",
       status: {
         startBlock: result.syncFrom,
         endBlock: result.syncTo,
         totalBlocks: result.estimatedBlocks,
       },
-      note: "Transactions will be sent sequentially, then all receipts validated in parallel before closing block",
     };
 
     if (result.isContinuous) {
@@ -191,9 +179,9 @@ export const snapSyncEndpoint = async (req: Request, res: Response) => {
         details: error.details,
       });
     }
-    logger.error("Error starting snap sync process:", error);
+    logger.error("Error starting sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-      error: `Failed to start snap sync: ${error.message || error}`,
+      error: `Failed to start sync: ${error.message || error}`,
     });
   }
 };
@@ -228,29 +216,64 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 /**
  * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
  * Returns the number of transactions processed
+ *
+ * @param blockNumber - The block number to process
+ * @param process - The sync process
+ * @param existingTxHashes - Optional list of tx hashes already in Madara's pending block (for recovery)
  */
-async function snapSyncBlock(
+interface ProcessBlockResult {
+  txCount: number;
+  txHashes: string[];
+}
+
+async function processBlock(
   blockNumber: number,
   process: SyncProcess,
-): Promise<number> {
+  existingTxHashes: string[] = [],
+): Promise<ProcessBlockResult> {
   const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
 
-  const transactions = blockWithTxs.transactions;
+  let transactions = blockWithTxs.transactions as TransactionWithHash[];
+  const totalTxCount = transactions.length;
+
   logger.info(
-    `📦 Block ${blockNumber}: Found ${transactions.length} transactions`,
+    `📦 Block ${blockNumber}: Found ${totalTxCount} transactions`,
   );
+
+  // If we have existing transactions (recovery scenario), filter them out
+  if (existingTxHashes.length > 0) {
+    const existingSet = new Set(existingTxHashes);
+    const originalCount = transactions.length;
+    transactions = transactions.filter(
+      (tx) => !existingSet.has(tx.transaction_hash),
+    );
+    logger.info(
+      `🔄 Recovery mode: ${existingTxHashes.length} transactions already in Madara, sending ${transactions.length} remaining`,
+    );
+
+    if (transactions.length === 0) {
+      logger.info(
+        `✅ All ${originalCount} transactions already in Madara's pending block`,
+      );
+      // Return all tx hashes (existing + none new) for receipt validation
+      return { txCount: totalTxCount, txHashes: existingTxHashes };
+    }
+  }
 
   if (transactions.length === 0) {
     logger.info(`⏭️  Block ${blockNumber} has no transactions, skipping...`);
-    return 0;
+    return { txCount: 0, txHashes: [] };
   }
 
   try {
-    // Use parallel transaction processor
-    await parallelTransactionProcessor.processTransactions(
-      transactions as TransactionWithHash[],
+    // Send transactions (no receipt validation yet - that happens after closeBlock)
+    const result = await parallelTransactionProcessor.sendTransactions(
+      transactions,
       blockNumber,
     );
+    // Combine existing tx hashes with newly sent ones for receipt validation
+    const allTxHashes = [...existingTxHashes, ...result.txHashes];
+    return { txCount: totalTxCount, txHashes: allTxHashes };
   } catch (error) {
     // If the error message indicates a restart is needed, propagate it
     if (error instanceof Error && error.message.includes("Restarting block")) {
@@ -258,14 +281,45 @@ async function snapSyncBlock(
     }
     throw error;
   }
-
-  return transactions.length;
 }
 
 /**
- * Async function to process blocks sequentially with parallel transaction processing
+ * Handle recovery action returned by blockProcessor.handleBlockRecovery
+ * Returns the new block number to continue from, or throws if recovery failed
  */
-async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
+function handleRecoveryAction(
+  action: RecoveryAction,
+  currentBlock: number,
+): { newBlock: number; existingTxHashes: string[] } {
+  switch (action.type) {
+    case "restart_block":
+      logger.info(`🔄 Restarting block ${action.blockNumber} from scratch`);
+      return { newBlock: action.blockNumber, existingTxHashes: [] };
+
+    case "continue_block":
+      logger.info(
+        `🔄 Continuing block ${action.blockNumber} with ${action.existingTxHashes.length} existing transactions`,
+      );
+      return {
+        newBlock: action.blockNumber,
+        existingTxHashes: action.existingTxHashes,
+      };
+
+    case "skip_to_block":
+      logger.info(
+        `⏭️ Skipping to block ${action.blockNumber} (Madara already ahead)`,
+      );
+      return { newBlock: action.blockNumber, existingTxHashes: [] };
+
+    case "failed":
+      throw new Error(`Recovery failed: ${action.error}`);
+  }
+}
+
+/**
+ * Async function to process blocks
+ */
+async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
@@ -273,14 +327,16 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
     );
 
     let currentBlock = process.currentBlock;
+    // Track existing tx hashes for recovery scenarios (continue_block action)
+    let existingTxHashes: string[] = [];
 
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
       if (process.cancelRequested) {
-        await persistence.updateStatus(process.id, ProcessStatus.CANCELLED);
-        syncStateManager.stopSnapProbe();
-        syncStateManager.clearSnapSyncProcess();
-        updateActiveSyncProcessCount("snap_sync", false);
+        persistence.stopSync();
+        syncStateManager.stopProbe();
+        syncStateManager.clearProcess();
+        updateActiveSyncProcessCount("sync", false);
         logger.info(
           `🛑 Sync process ${process.id} cancelled at block ${currentBlock}`,
         );
@@ -308,39 +364,41 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        // Validate block
-        const validateResult = await blockProcessor.validateBlockReady(
-          currentBlock,
-          process,
-        );
-        if (!validateResult.success) {
-          throw validateResult.error;
+        // Validate block (unless we're continuing with existing txs - block is already set up)
+        if (existingTxHashes.length === 0) {
+          const validateResult = await blockProcessor.validateBlockReady(
+            currentBlock,
+            process,
+          );
+          if (!validateResult.success) {
+            throw validateResult.error;
+          }
+
+          // Set custom headers
+          const headersResult = await blockProcessor.setBlockHeaders(
+            currentBlock,
+            process,
+          );
+          if (!headersResult.success) {
+            throw headersResult.error;
+          }
+        } else {
+          logger.info(
+            `⏭️ Skipping validation/headers - continuing block with ${existingTxHashes.length} existing txs`,
+          );
         }
 
-        // Set custom headers
-        const headersResult = await blockProcessor.setBlockHeaders(
-          currentBlock,
-          process,
-        );
-        if (!headersResult.success) {
-          throw headersResult.error;
-        }
-
-        // Process block with parallel transaction processing
-        let blockNeedsRestart = false;
-        let txCount = 0;
+        // Process block: send transactions (receipt validation happens after closeBlock)
+        let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
         try {
-          txCount = await snapSyncBlock(currentBlock, process);
+          blockResult = await processBlock(currentBlock, process, existingTxHashes);
+          // Clear existing tx hashes after successful processing
+          existingTxHashes = [];
         } catch (error) {
-          if (
-            error instanceof Error &&
-            error.message.includes("Restarting block")
-          ) {
-            blockNeedsRestart = true;
-          } else if (error instanceof MadaraDownError) {
-            // Handle Madara recovery
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery - STATELESS approach
             logger.warn(
-              `🚨 Madara down detected during sync at block ${currentBlock}`,
+              `🚨 Madara down detected during transaction sending at block ${currentBlock}`,
             );
 
             const recoveryResult = await blockProcessor.handleBlockRecovery(
@@ -354,60 +412,149 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
               );
             }
 
-            blockNeedsRestart = true;
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
           } else {
             throw error;
           }
         }
 
-        if (blockNeedsRestart) {
-          logger.info(
-            `🔄 Restarting block ${currentBlock} after Madara recovery`,
+        // Close the block (must happen before receipt validation)
+        let closeResult;
+        try {
+          closeResult = await blockProcessor.closeCurrentBlock(
+            currentBlock,
+            process,
           );
-          continue;
+          if (!closeResult.success) {
+            throw closeResult.error;
+          }
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery during closeBlock - STATELESS approach
+            logger.warn(
+              `🚨 Madara down detected during closeBlock at block ${currentBlock}`,
+            );
+
+            const recoveryResult = await blockProcessor.handleBlockRecovery(
+              currentBlock,
+              process,
+            );
+
+            if (!recoveryResult.recovered) {
+              throw new Error(
+                `Madara recovery failed at block ${currentBlock}`,
+              );
+            }
+
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
+          }
+          throw error;
         }
 
-        // Close the block
-        const closeResult = await blockProcessor.closeCurrentBlock(
-          currentBlock,
-          process,
-        );
-        if (!closeResult.success) {
-          throw closeResult.error;
+        // Validate receipts AFTER block is closed
+        if (blockResult.txHashes.length > 0) {
+          try {
+            await parallelTransactionProcessor.validateReceipts(
+              currentBlock,
+              blockResult.txHashes,
+            );
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              // Handle Madara recovery during receipt validation - STATELESS approach
+              logger.warn(
+                `🚨 Madara down detected during receipt validation at block ${currentBlock}`,
+              );
+
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              // Handle the recovery action
+              const { newBlock, existingTxHashes: recoveredTxHashes } =
+                handleRecoveryAction(recoveryResult.action, currentBlock);
+              currentBlock = newBlock;
+              existingTxHashes = recoveredTxHashes;
+              continue;
+            }
+            throw error;
+          }
         }
 
         // Verify block hash
-        const verifyResult = await blockProcessor.verifyBlockHash(
-          currentBlock,
-          process,
-        );
-        if (!verifyResult.success) {
-          throw verifyResult.error;
+        let verifyResult;
+        try {
+          verifyResult = await blockProcessor.verifyBlockHash(
+            currentBlock,
+            process,
+          );
+          if (!verifyResult.success) {
+            throw verifyResult.error;
+          }
+        } catch (error) {
+          if (error instanceof MadaraDownError) {
+            // Handle Madara recovery during hash verification - STATELESS approach
+            logger.warn(
+              `🚨 Madara down detected during hash verification at block ${currentBlock}`,
+            );
+
+            const recoveryResult = await blockProcessor.handleBlockRecovery(
+              currentBlock,
+              process,
+            );
+
+            if (!recoveryResult.recovered) {
+              throw new Error(
+                `Madara recovery failed at block ${currentBlock}`,
+              );
+            }
+
+            // Handle the recovery action
+            const { newBlock, existingTxHashes: recoveredTxHashes } =
+              handleRecoveryAction(recoveryResult.action, currentBlock);
+            currentBlock = newBlock;
+            existingTxHashes = recoveredTxHashes;
+            continue;
+          }
+          throw error;
         }
 
         // Record successful block processing metrics
         incrementBlocksProcessed();
         recordBlockStatus("success");
 
-        // Update throughput metrics (txCount already obtained from snapSyncBlock)
-        throughputTracker.recordBlock(txCount);
+        // Update throughput metrics
+        throughputTracker.recordBlock(blockResult.txCount);
 
         process.processedBlocks++;
 
-        await persistence.updateLastChecked(process.id);
-
         // Update sync progress metrics
-        const originalNodeLatest =
-          await getLatestBlockNumber(originalProvider_v9);
-        const syncingNodeLatest =
-          await getLatestBlockNumber(syncingProvider_v9);
-        updateSyncMetrics(process, originalNodeLatest, syncingNodeLatest);
+        // Use known values instead of making redundant RPC calls:
+        // - originalNodeLatest: use process.syncTo (updated by probe for continuous sync)
+        // - syncingNodeLatest: we just synced this block, so it's currentBlock
+        updateSyncMetrics(process, process.syncTo, currentBlock);
 
         const percentComplete = process.isContinuous
           ? "N/A (continuous)"
           : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-              2,
-            ) + "%";
+            2,
+          ) + "%";
 
         logger.info(
           `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
@@ -418,10 +565,8 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
         // Record failed block processing metric
         recordBlockStatus("failed");
 
-        if (process.status !== ProcessStatus.FAILED) {
-          await persistence.updateStatus(process.id, ProcessStatus.FAILED);
-        }
-        syncStateManager.stopSnapProbe();
+        process.status = ProcessStatus.FAILED;
+        syncStateManager.stopProbe();
         logger.error(`❌ Failed to process block ${currentBlock}:`, error);
         throw error;
       }
@@ -430,41 +575,41 @@ async function snapSyncBlocksAsync(process: SyncProcess): Promise<void> {
     if (!process.isContinuous) {
       process.status = ProcessStatus.COMPLETED;
       process.endTime = new Date();
-      await persistence.updateStatus(process.id, ProcessStatus.COMPLETED);
-      syncStateManager.stopSnapProbe();
-      syncStateManager.clearSnapSyncProcess();
-      updateActiveSyncProcessCount("snap_sync", false);
+      persistence.stopSync();
+      syncStateManager.stopProbe();
+      syncStateManager.clearProcess();
+      updateActiveSyncProcessCount("sync", false);
 
       const duration = process.endTime.getTime() - process.startTime.getTime();
       const durationSeconds = (duration / 1000).toFixed(2);
 
-      logger.info(`🎉SYNC COMPLETED!`);
+      logger.info(`🎉 SYNC COMPLETED!`);
       logger.info(`✅ Process ${process.id} finished successfully`);
       logger.info(
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
       );
       logger.info(
-        `📍 Range: ${process.currentBlock - process.processedBlocks + 1} → ${process.currentBlock - 1}`,
+        `📍 Range: ${process.syncFrom} → ${process.currentBlock}`,
       );
     }
   } catch (error) {
     process.status = ProcessStatus.FAILED;
     process.error = error instanceof Error ? error.message : String(error);
 
-    syncStateManager.stopSnapProbe();
-    syncStateManager.clearSnapSyncProcess();
-    updateActiveSyncProcessCount("snap_sync", false);
-    logger.error(`❌ sync process ${process.id} failed:`, error);
+    syncStateManager.stopProbe();
+    syncStateManager.clearProcess();
+    updateActiveSyncProcessCount("sync", false);
+    logger.error(`❌ Sync process ${process.id} failed:`, error);
     throw error;
   }
 }
 
 /**
- * Cancel the current  sync process
+ * Cancel the current sync process
  */
-export const cancelSnapSync = async (req: Request, res: Response) => {
+export const cancelSync = async (req: Request, res: Response) => {
   try {
-    const currentProcess = syncStateManager.getSnapSyncProcess();
+    const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
       return res.status(HttpStatus.NOT_FOUND).json({
@@ -507,7 +652,7 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error("Error cancelling sync process:", error);
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-      error: `Failed to cancel snap sync: ${error.message || error}`,
+      error: `Failed to cancel sync: ${error.message || error}`,
     });
   }
 };
@@ -515,9 +660,9 @@ export const cancelSnapSync = async (req: Request, res: Response) => {
 /**
  * Get sync status
  */
-export const getSnapSyncStatus = async (req: Request, res: Response) => {
+export const getSyncStatus = async (req: Request, res: Response) => {
   try {
-    const currentProcess = syncStateManager.getSnapSyncProcess();
+    const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
       return res.json({
@@ -529,9 +674,9 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
       ? "N/A (continuous sync)"
       : currentProcess.totalBlocks! > 0
         ? (
-            (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
-            100
-          ).toFixed(2) + "%"
+          (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
+          100
+        ).toFixed(2) + "%"
         : "0.00%";
 
     const runningFor = currentProcess.endTime
@@ -541,9 +686,7 @@ export const getSnapSyncStatus = async (req: Request, res: Response) => {
     const response: any = {
       processId: currentProcess.id,
       status: currentProcess.status,
-      mode: currentProcess.isContinuous
-        ? "continuous-parallel"
-        : "sequential-send-parallel-receipt",
+      mode: currentProcess.isContinuous ? "continuous" : "fixed",
       progress: {
         currentBlock: currentProcess.currentBlock,
         endBlock: currentProcess.syncTo,

@@ -8,12 +8,13 @@ import { config } from "./config.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import {
-  snapSyncEndpoint,
-  cancelSnapSync,
-  getSnapSyncStatus,
-  start_snap_sync,
-} from "./snapSync.js";
+  syncEndpoint,
+  cancelSync,
+  getSyncStatus,
+  startSync,
+} from "./sync.js";
 import { metricsMiddleware } from "./telemetry/middleware.js";
+import { BlockHashMismatchError } from "./errors/index.js";
 
 const app = express();
 app.use(express.json());
@@ -28,49 +29,32 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     service: "transaction_replay_service",
-    redis: persistence.isConnected() ? "connected" : "disconnected",
-    activeProcesses: {
-      sequential: syncStateManager.isSequentialSyncRunning(),
-      snapSync: syncStateManager.isSnapSyncRunning(),
-    },
+    syncRunning: syncStateManager.isSyncRunning(),
   });
 });
 
 // ========================================
-// Sync Endpoints (Parallel)
+// Sync Endpoints
 // ========================================
-app.post("/sync", snapSyncEndpoint);
-app.post("/sync/cancel", cancelSnapSync);
-app.get("/snap/status", getSnapSyncStatus);
+app.post("/sync", syncEndpoint);
+app.post("/sync/cancel", cancelSync);
+app.get("/sync/status", getSyncStatus);
 
 // ========================================
 // Clean Slate Handler
 // ========================================
 async function handleCleanSlate(): Promise<void> {
   if (!config.cleanSlate) {
-    logger.info("ℹ️  CLEAN_SLATE not enabled - preserving existing Redis data");
+    logger.info("ℹ️  CLEAN_SLATE not enabled - preserving existing state");
     return;
   }
 
-  logger.warn("⚠️  CLEAN_SLATE=true detected - clearing all Redis data!");
-
-  // Wait for Redis to connect
-  let retries = 0;
-  while (!persistence.isConnected() && retries < 10) {
-    logger.info("⏳ Waiting for Redis connection before cleaning...");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    retries++;
-  }
-
-  if (!persistence.isConnected()) {
-    logger.error("❌ Redis not connected - cannot perform clean slate");
-    throw new Error("Redis not connected for clean slate operation");
-  }
+  logger.warn("⚠️  CLEAN_SLATE=true detected - clearing state file!");
 
   try {
-    const deleted = await persistence.clearAllSyncData();
-    logger.info(`✅ Clean slate complete - removed ${deleted} process(es)`);
-    logger.info("🆕 Starting with fresh Redis state");
+    persistence.clearState();
+    logger.info("✅ Clean slate complete - state file removed");
+    logger.info("🆕 Starting with fresh state");
   } catch (error) {
     logger.error("❌ Failed to perform clean slate:", error);
     throw error;
@@ -78,106 +62,74 @@ async function handleCleanSlate(): Promise<void> {
 }
 
 // ========================================
-// Auto-Resume Handler
+// Recovery Handler
 // ========================================
-async function autoResumeOnStartup(): Promise<void> {
+async function recoverOnStartup(): Promise<void> {
   try {
-    if (!persistence.isConnected()) {
-      logger.warn(
-        "⚠️  Redis not connected - will retry auto-resume when connected",
-      );
-      return;
-    }
-
     // Check if there's already a process running in-memory
-    // This prevents overriding a process that's currently active
-    if (syncStateManager.isSnapSyncRunning()) {
-      const currentProcess = syncStateManager.getSnapSyncProcess()!;
+    if (syncStateManager.isSyncRunning()) {
+      const currentProcess = syncStateManager.getProcess()!;
       logger.info(
-        `ℹ️  Snap sync already running in-memory (Process ID: ${currentProcess.id})`,
+        `ℹ️  Sync already running in-memory (Process ID: ${currentProcess.id})`,
       );
-      logger.info(
-        `📊 Current state: Block ${currentProcess.currentBlock} → ${currentProcess.syncTo}`,
-      );
-      logger.info("✅ Skipping auto-resume - will not override active process");
       return;
     }
 
-    logger.info("🔍 Checking Redis for incomplete sync processes...");
-
-    const activeProcess = await persistence.getMostRecentActiveProcess();
-
-    if (!activeProcess) {
-      logger.info("✅ No incomplete sync processes found in Redis");
+    // Check state file
+    if (!persistence.stateExists()) {
+      logger.info("✅ No state file found - waiting for RPC call to start sync");
       return;
     }
 
-    const isContinuous = activeProcess.isContinuous === "true";
-    const originalTarget = activeProcess.originalTarget
-      ? parseInt(activeProcess.originalTarget)
-      : undefined;
+    const state = persistence.readState();
 
-    const mode = isContinuous ? "CONTINUOUS" : "FIXED";
-    logger.info(
-      `📋 Found incomplete process: ${activeProcess.processId} [${mode}]`,
-    );
-    logger.info(
-      `📊 Process details: ${activeProcess.syncFrom} → ${activeProcess.syncTo}`,
-    );
-    logger.info(`📅 Last checked: ${activeProcess.lastChecked}`);
-
-    if (isContinuous) {
-      logger.info(
-        `🔄 This is a CONTINUOUS sync process (original target: ${originalTarget})`,
-      );
-      logger.info(
-        `📍 Current target has been dynamically updated to: ${activeProcess.syncTo}`,
-      );
+    if (!state) {
+      logger.info("✅ Could not read state file - waiting for RPC call to start sync");
+      return;
     }
 
-    const endBlock = isContinuous ? "latest" : activeProcess.syncTo;
-
-    logger.info(`🔄 Auto-resuming sync process ${activeProcess.processId}...`);
-
-    if (isContinuous) {
-      logger.info(
-        `🔄 Restarting in CONTINUOUS mode - will fetch latest target and continue tracking`,
-      );
+    if (state.status !== "running") {
+      logger.info(`✅ State file shows status="${state.status}" - waiting for RPC call to start sync`);
+      return;
     }
+
+    // State says we should be running - validate and recover
+    logger.info("🔍 Found running state - validating chain integrity...");
 
     try {
-      const result = await start_snap_sync(endBlock);
+      const recovery = await persistence.validateAndGetResumePoint();
+
+      logger.info(`✅ Chain integrity validated`);
+      logger.info(`🔄 Resuming sync from block ${recovery.resumeFrom}`);
+
+      const mode = recovery.isContinuous ? "CONTINUOUS" : "FIXED";
+      logger.info(`📋 Mode: ${mode}, Target: ${recovery.syncTo}`);
+
+      // Start sync from recovery point
+      const result = await startSync(
+        recovery.isContinuous ? "latest" : recovery.syncTo,
+      );
 
       if (result.alreadyComplete) {
-        logger.info(
-          `✅ Process ${activeProcess.processId} is already complete`,
-        );
-        await persistence.updateStatus(activeProcess.processId, "completed");
+        logger.info("✅ Sync already complete - marking as idle");
+        persistence.stopSync();
       } else {
-        logger.info(
-          `✅ Successfully auto-resumed snap sync process ${activeProcess.processId}`,
-        );
-        logger.info(`📊 Resuming from block ${result.syncFrom}`);
-
-        if (isContinuous) {
-          logger.info(
-            `🔄 Continuous sync mode reactivated - probe loop will track new blocks`,
-          );
-        }
+        logger.info(`✅ Successfully recovered sync process ${result.processId}`);
       }
-    } catch (error: any) {
-      if (error.code === "SYNC_IN_PROGRESS") {
-        logger.info(`ℹ️  Snap sync already in progress - ${error.message}`);
-      } else {
-        logger.error(
-          `❌ Failed to auto-resume snap sync process ${activeProcess.processId}:`,
-          error,
-        );
-        await persistence.updateStatus(activeProcess.processId, "failed");
+    } catch (error) {
+      if (error instanceof BlockHashMismatchError) {
+        logger.error("❌ FATAL: Block hash mismatch detected!");
+        logger.error("❌ Chain integrity compromised - cannot recover safely");
+        logger.error("❌ Exiting with error code 1");
+        process.exit(1);
       }
+      throw error;
     }
   } catch (error) {
-    logger.error("❌ Error in auto-resume on startup:", error);
+    logger.error("❌ Error during recovery:", error);
+    // For non-hash-mismatch errors, mark as idle and let operator investigate
+    persistence.stopSync();
+    throw error;
   }
 }
 
@@ -193,9 +145,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     // Shutdown OpenTelemetry
     await shutdownTelemetry();
-
-    // Close persistence layer
-    await persistence.close();
 
     logger.info("✅ Graceful shutdown complete");
     process.exit(0);
@@ -213,39 +162,25 @@ async function main() {
     app.listen(config.port, async () => {
       logger.info(`🌐 Syncing service listening on port ${config.port}`);
 
-      // Wait for Redis to connect
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Handle clean slate BEFORE setting up auto-resume callback
-      // This prevents race condition where auto-resume starts before clean slate
+      // Handle clean slate first
       await handleCleanSlate();
-
-      // Register reconnection callback for Redis AFTER clean slate
-      // This ensures auto-resume runs when Redis reconnects after being down
-      persistence.setReconnectionCallback(async () => {
-        logger.info(
-          "🔄 Redis reconnected - checking for incomplete processes...",
-        );
-        await autoResumeOnStartup();
-      });
 
       logger.info("🚀 Starting Transaction Replay Service");
 
-      // Auto-resume any incomplete processes
-      await autoResumeOnStartup();
+      // Recover any incomplete sync
+      await recoverOnStartup();
 
       logger.info("✅ Service fully initialized and ready");
       logger.info("📌 Available endpoints:");
       logger.info("  • GET  /health - Health check");
       logger.info(
-        "  • POST /sync - Sequential transaction processing, Parallel receipt waiting",
+        "  • POST /sync - Start sync with {endBlock: number | 'latest'}",
       );
       logger.info("  • POST /sync/cancel - Cancel sync");
       logger.info("  • GET  /sync/status - Get sync status");
       logger.info("📌 Continuous sync:");
-      logger.info("  • Use endBlock: 'latest' in any sync request");
+      logger.info("  • Use endBlock: 'latest' in sync request");
       logger.info("  • System will automatically follow new blocks");
-      logger.info("  • Auto-resume works for continuous sync processes");
     });
 
     // Register shutdown handlers

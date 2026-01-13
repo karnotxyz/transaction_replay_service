@@ -50,3 +50,16 @@ export function getProvider(
       : syncingProvider_v9;
   }
 }
+
+/**
+ * Get a human-readable name for a provider (for logging)
+ */
+export function getNodeName(provider: RpcProvider): string {
+  if (provider === originalProvider_v8 || provider === originalProvider_v9) {
+    return "original";
+  }
+  if (provider === syncingProvider_v8 || provider === syncingProvider_v9) {
+    return "syncing";
+  }
+  return "unknown";
+}

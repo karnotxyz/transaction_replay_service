@@ -1,26 +1,18 @@
 import { SyncProcess } from "../types.js";
-import { persistence } from "../persistence.js";
 import logger from "../logger.js";
 import { ProcessStatus } from "../constants.js";
-import {
-  ProcessNotFoundError,
-  InvalidProcessStatusError,
-} from "../errors/index.js";
+import { ProcessNotFoundError } from "../errors/index.js";
 
 /**
- * Singleton state manager for sync processes
- * Provides controlled access to sync process state
+ * Singleton state manager for sync process
+ * Provides controlled access to sync process state (in-memory only)
  */
 export class SyncStateManager {
   private static instance: SyncStateManager;
 
-  // Sequential sync state
-  private currentSequentialProcess: SyncProcess | null = null;
-  private sequentialProbeInterval: NodeJS.Timeout | null = null;
-
-  // sync state
-  private currentSnapSyncProcess: SyncProcess | null = null;
-  private snapProbeInterval: NodeJS.Timeout | null = null;
+  // Sync state
+  private currentProcess: SyncProcess | null = null;
+  private probeInterval: NodeJS.Timeout | null = null;
 
   private constructor() {
     // Private constructor for singleton
@@ -34,246 +26,108 @@ export class SyncStateManager {
   }
 
   // ========================================
-  // Sequential Sync Methods
-  // ========================================
-
-  /**
-   * Get current sequential sync process
-   */
-  public getSequentialProcess(): SyncProcess | null {
-    return this.currentSequentialProcess;
-  }
-
-  /**
-   * Set current sequential sync process
-   */
-  public setSequentialProcess(process: SyncProcess | null): void {
-    this.currentSequentialProcess = process;
-
-    if (process) {
-      logger.info(
-        `📝 Sequential sync process registered: ${process.id} (${process.syncFrom} → ${process.syncTo})`,
-      );
-    } else {
-      logger.info("📝 Sequential sync process cleared");
-    }
-  }
-
-  /**
-   * Check if sequential sync is running
-   */
-  public isSequentialSyncRunning(): boolean {
-    return (
-      this.currentSequentialProcess !== null &&
-      this.currentSequentialProcess.status === ProcessStatus.RUNNING
-    );
-  }
-
-  /**
-   * Update sequential process status
-   */
-  public async updateSequentialStatus(
-    status: (typeof ProcessStatus)[keyof typeof ProcessStatus],
-  ): Promise<void> {
-    if (!this.currentSequentialProcess) {
-      throw new ProcessNotFoundError("No sequential process active");
-    }
-
-    this.currentSequentialProcess.status = status;
-    await persistence.updateStatus(this.currentSequentialProcess.id, status);
-  }
-
-  /**
-   * Clear sequential process
-   */
-  public clearSequentialProcess(): void {
-    this.currentSequentialProcess = null;
-    this.stopSequentialProbe();
-  }
-
-  /**
-   * Set sequential probe interval
-   */
-  public setSequentialProbeInterval(interval: NodeJS.Timeout): void {
-    if (this.sequentialProbeInterval) {
-      logger.warn(
-        "⚠️  Sequential probe already running, clearing old interval",
-      );
-      clearInterval(this.sequentialProbeInterval);
-    }
-    this.sequentialProbeInterval = interval;
-  }
-
-  /**
-   * Stop sequential probe
-   */
-  public stopSequentialProbe(): void {
-    if (this.sequentialProbeInterval) {
-      clearInterval(this.sequentialProbeInterval);
-      this.sequentialProbeInterval = null;
-      logger.info("🛑 Sequential probe loop stopped");
-    }
-  }
-
-  /**
-   * Get sequential probe interval
-   */
-  public getSequentialProbeInterval(): NodeJS.Timeout | null {
-    return this.sequentialProbeInterval;
-  }
-
-  // ========================================
   // Sync Methods
   // ========================================
 
   /**
    * Get current sync process
    */
-  public getSnapSyncProcess(): SyncProcess | null {
-    return this.currentSnapSyncProcess;
+  public getProcess(): SyncProcess | null {
+    return this.currentProcess;
   }
 
   /**
    * Set current sync process
    */
-  public setSnapSyncProcess(process: SyncProcess | null): void {
-    this.currentSnapSyncProcess = process;
+  public setProcess(process: SyncProcess | null): void {
+    this.currentProcess = process;
 
     if (process) {
       logger.info(
-        `📝 sync process registered: ${process.id} (${process.syncFrom} → ${process.syncTo})`,
+        `📝 Sync process registered: ${process.id} (${process.syncFrom} → ${process.syncTo})`,
       );
     } else {
-      logger.info("📝 sync process cleared");
+      logger.info("📝 Sync process cleared");
     }
   }
 
   /**
    * Check if sync is running
    */
-  public isSnapSyncRunning(): boolean {
+  public isSyncRunning(): boolean {
     return (
-      this.currentSnapSyncProcess !== null &&
-      this.currentSnapSyncProcess.status === ProcessStatus.RUNNING
+      this.currentProcess !== null &&
+      this.currentProcess.status === ProcessStatus.RUNNING
     );
   }
 
   /**
    * Update sync process status
    */
-  public async updateSnapSyncStatus(
+  public updateStatus(
     status: (typeof ProcessStatus)[keyof typeof ProcessStatus],
-  ): Promise<void> {
-    if (!this.currentSnapSyncProcess) {
+  ): void {
+    if (!this.currentProcess) {
       throw new ProcessNotFoundError("No sync process active");
     }
 
-    this.currentSnapSyncProcess.status = status;
-    await persistence.updateStatus(this.currentSnapSyncProcess.id, status);
+    this.currentProcess.status = status;
   }
 
   /**
    * Clear sync process
    */
-  public clearSnapSyncProcess(): void {
-    this.currentSnapSyncProcess = null;
-    this.stopSnapProbe();
+  public clearProcess(): void {
+    this.currentProcess = null;
+    this.stopProbe();
   }
 
   /**
-   * Set snap probe interval
+   * Set probe interval
    */
-  public setSnapProbeInterval(interval: NodeJS.Timeout): void {
-    if (this.snapProbeInterval) {
-      logger.warn("⚠️  Snap probe already running, clearing old interval");
-      clearInterval(this.snapProbeInterval);
+  public setProbeInterval(interval: NodeJS.Timeout): void {
+    if (this.probeInterval) {
+      logger.warn("⚠️  Probe already running, clearing old interval");
+      clearInterval(this.probeInterval);
     }
-    this.snapProbeInterval = interval;
+    this.probeInterval = interval;
   }
 
   /**
-   * Stop snap probe
+   * Stop probe
    */
-  public stopSnapProbe(): void {
-    if (this.snapProbeInterval) {
-      clearInterval(this.snapProbeInterval);
-      this.snapProbeInterval = null;
-      logger.info("🛑 Snap probe loop stopped");
+  public stopProbe(): void {
+    if (this.probeInterval) {
+      clearInterval(this.probeInterval);
+      this.probeInterval = null;
+      logger.info("🛑 Probe loop stopped");
     }
   }
 
   /**
-   * Get snap probe interval
+   * Get probe interval
    */
-  public getSnapProbeInterval(): NodeJS.Timeout | null {
-    return this.snapProbeInterval;
-  }
-
-  // ========================================
-  // General Methods
-  // ========================================
-
-  /**
-   * Check if any sync is running
-   */
-  public isAnySyncRunning(): boolean {
-    return this.isSequentialSyncRunning() || this.isSnapSyncRunning();
+  public getProbeInterval(): NodeJS.Timeout | null {
+    return this.probeInterval;
   }
 
   /**
-   * Get all active processes
-   */
-  public getAllActiveProcesses(): SyncProcess[] {
-    const processes: SyncProcess[] = [];
-
-    if (this.currentSequentialProcess) {
-      processes.push(this.currentSequentialProcess);
-    }
-
-    if (this.currentSnapSyncProcess) {
-      processes.push(this.currentSnapSyncProcess);
-    }
-
-    return processes;
-  }
-
-  /**
-   * Stop all probes
-   */
-  public stopAllProbes(): void {
-    this.stopSequentialProbe();
-    this.stopSnapProbe();
-  }
-
-  /**
-   * Clear all processes
-   */
-  public clearAllProcesses(): void {
-    this.clearSequentialProcess();
-    this.clearSnapSyncProcess();
-  }
-
-  /**
-   * Graceful shutdown - stop all probes and clear state
+   * Graceful shutdown - stop probe and clear state
    */
   public async shutdown(): Promise<void> {
     logger.info("🛑 Shutting down SyncStateManager...");
 
-    this.stopAllProbes();
+    this.stopProbe();
 
-    // Keep processes in RUNNING status in Redis so they can be auto-resumed
-    // Just update the lastChecked timestamp to indicate clean shutdown
-    const processes = this.getAllActiveProcesses();
-    for (const process of processes) {
-      if (process.status === ProcessStatus.RUNNING) {
-        await persistence.updateLastChecked(process.id);
-        logger.info(
-          `💾 Process ${process.id} left in RUNNING state for auto-resume`,
-        );
-      }
+    // State file tracks intent, not position
+    // On restart, recovery will query syncing node for actual position
+    if (this.currentProcess && this.currentProcess.status === ProcessStatus.RUNNING) {
+      logger.info(
+        `💾 Process ${this.currentProcess.id} state preserved for recovery on restart`,
+      );
     }
 
-    this.clearAllProcesses();
+    this.clearProcess();
 
     logger.info("✅ SyncStateManager shutdown complete");
   }

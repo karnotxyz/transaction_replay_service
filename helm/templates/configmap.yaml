@@ -10,8 +10,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 data:
-  data:
   {{- range $key, $value := .Values.transaction_syncing_service.environment }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
-  REDIS_URL: {{ printf "redis://redis-%s.%s.svc.cluster.local:%v" .Values.instance.name .Values.namespace.name (.Values.redis.port | int) | quote }}
+  STATE_FILE_PATH: {{ .Values.stateFile.path | quote }}

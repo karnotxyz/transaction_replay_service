@@ -54,8 +54,8 @@ export class ProbeManager {
               1;
           }
 
-          // Update Redis
-          await persistence.updateSyncTarget(process.id, latestBlock);
+          // Update state file
+          persistence.updateSyncTarget(latestBlock);
 
           logger.info(
             `📈 Sync target updated: ${oldTarget} → ${latestBlock} (${newBlocks} new blocks detected)`,
