@@ -2,7 +2,7 @@ import axios from "axios";
 import logger from "../logger.js";
 import { config } from "../config.js";
 import { TimeoutConfig } from "../constants.js";
-import { MadaraDownError } from "../errors/index.js";
+import { MadaraDownError, isMadaraDownError } from "../errors/index.js";
 import {
   updateMadaraHealthStatus,
   incrementMadaraRecoveryEvents,
@@ -92,13 +92,8 @@ export async function executeWithMadaraRecovery<T>(
   try {
     return await operation();
   } catch (error) {
-    // Check if this is a Madara down error
-    if (
-      error instanceof MadaraDownError ||
-      (error instanceof Error &&
-        (error.message.includes("ECONNREFUSED") ||
-          error.message.includes("fetch failed")))
-    ) {
+    // Check if this is a Madara down error using comprehensive pattern matching
+    if (error instanceof MadaraDownError || isMadaraDownError(error)) {
       logger.warn(`🚨 Madara down detected during ${operationName}`);
 
       if (onRecoveryStart) {
