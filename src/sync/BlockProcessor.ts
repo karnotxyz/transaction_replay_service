@@ -110,6 +110,79 @@ export class BlockProcessor {
   }
 
   /**
+   * Validate that all sent transactions are in Madara's PRE_CONFIRMED block before closing
+   * This ensures Madara has actually processed all transactions before we call closeBlock
+   */
+  async validateTransactionsBeforeClose(
+    blockNumber: number,
+    expectedTxHashes: string[],
+    process: SyncProcess,
+    maxRetries: number = 500,
+    retryDelayMs: number = 200,
+  ): Promise<BlockProcessResult> {
+    if (expectedTxHashes.length === 0) {
+      logger.info(`⏭️ No transactions to validate for block ${blockNumber}`);
+      return { success: true };
+    }
+
+    logger.info(
+      `🔍 Validating ${expectedTxHashes.length} transactions are in PRE_CONFIRMED block before close...`,
+    );
+
+    const expectedSet = new Set(expectedTxHashes);
+    let attempt = 0;
+
+    while (attempt < maxRetries) {
+      attempt++;
+
+      try {
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+        const preConfirmedBlockNumber = preConfirmedBlock.block_number;
+        const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
+
+        // Verify we're looking at the right block
+        if (preConfirmedBlockNumber !== blockNumber) {
+          logger.warn(
+            `⚠️ PRE_CONFIRMED block is ${preConfirmedBlockNumber}, expected ${blockNumber}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          continue;
+        }
+
+        // Check which transactions are missing
+        const missingTxHashes = expectedTxHashes.filter(
+          (txHash) => !pendingTxHashes.includes(txHash),
+        );
+
+        if (missingTxHashes.length === 0) {
+          logger.info(
+            `✅ All ${expectedTxHashes.length} transactions confirmed in PRE_CONFIRMED block ${blockNumber}`,
+          );
+          return { success: true };
+        }
+
+        logger.debug(
+          `⏳ Attempt ${attempt}/${maxRetries}: ${missingTxHashes.length}/${expectedTxHashes.length} transactions still missing`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error; // Propagate for recovery handling
+        }
+        logger.warn(
+          `⚠️ Error checking PRE_CONFIRMED block (attempt ${attempt}/${maxRetries}): ${error}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+
+    const errorMsg = `Failed to validate all transactions in PRE_CONFIRMED block ${blockNumber} after ${maxRetries} attempts`;
+    logger.error(errorMsg);
+    return { success: false, error: new Error(errorMsg) };
+  }
+
+  /**
    * Close a block
    */
   async closeCurrentBlock(

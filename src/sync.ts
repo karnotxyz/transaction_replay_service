@@ -423,6 +423,44 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
         }
 
+        // Validate all transactions are in PRE_CONFIRMED block before closing
+        if (blockResult.txHashes.length > 0) {
+          try {
+            const validateTxResult = await blockProcessor.validateTransactionsBeforeClose(
+              currentBlock,
+              blockResult.txHashes,
+              process,
+            );
+            if (!validateTxResult.success) {
+              throw validateTxResult.error;
+            }
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              logger.warn(
+                `🚨 Madara down detected during pre-close validation at block ${currentBlock}`,
+              );
+
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              const { newBlock, existingTxHashes: recoveredTxHashes } =
+                handleRecoveryAction(recoveryResult.action, currentBlock);
+              currentBlock = newBlock;
+              existingTxHashes = recoveredTxHashes;
+              continue;
+            }
+            throw error;
+          }
+        }
+
         // Close the block (must happen before receipt validation)
         let closeResult;
         try {
