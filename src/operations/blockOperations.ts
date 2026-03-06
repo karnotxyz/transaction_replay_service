@@ -5,7 +5,12 @@ import {
   BlockTag,
 } from "starknet";
 import logger from "../logger.js";
-import { GasPrices, MadaraRpcResponse, BlockWithReceipts } from "../types.js";
+import {
+  GasPrices,
+  MadaraRpcResponse,
+  BlockWithReceipts,
+  ReplayBoundaryStatus,
+} from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
@@ -30,7 +35,7 @@ import {
  * Get latest block number from provider
  */
 export async function getLatestBlockNumber(
-  provider: RpcProvider,
+  provider: RpcProvider
 ): Promise<number> {
   const nodeName = getNodeName(provider);
 
@@ -58,7 +63,7 @@ export async function getLatestBlockNumber(
  */
 export async function getBlockWithTxHashes(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
@@ -69,7 +74,7 @@ export async function getBlockWithTxHashes(
     } catch (error) {
       throw wrapMadaraError(
         error,
-        `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`,
+        `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`
       );
     }
   }, `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`);
@@ -79,7 +84,7 @@ export async function getBlockWithTxHashes(
  * Get PRE_CONFIRMED block
  */
 export async function getPreConfirmedBlock(
-  provider: RpcProvider,
+  provider: RpcProvider
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
@@ -98,7 +103,7 @@ export async function getPreConfirmedBlock(
  */
 export async function getBlockWithTxs(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<any> {
   const nodeName = getNodeName(provider);
 
@@ -109,7 +114,7 @@ export async function getBlockWithTxs(
     } catch (error) {
       throw wrapMadaraError(
         error,
-        `getBlockWithTxs(${blockNumber}) [${nodeName}]`,
+        `getBlockWithTxs(${blockNumber}) [${nodeName}]`
       );
     }
   }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
@@ -160,7 +165,7 @@ export async function getOriginalBlockWithTxsAndProofFacts(
  */
 export async function getBlockWithReceipts(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<BlockWithReceipts | null> {
   const nodeName = getNodeName(provider);
 
@@ -181,7 +186,7 @@ export async function getBlockWithReceipts(
       },
       {
         headers: { "Content-Type": "application/json" },
-      },
+      }
     );
 
     if (response.data.error) {
@@ -193,7 +198,7 @@ export async function getBlockWithReceipts(
         return null;
       }
       throw new Error(
-        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
       );
     }
 
@@ -202,13 +207,13 @@ export async function getBlockWithReceipts(
     // Connection errors should be retried
     if (axios.isAxiosError(error) && !error.response) {
       logger.warn(
-        `Connection error fetching block with receipts [${nodeName}]: ${error.message}`,
+        `Connection error fetching block with receipts [${nodeName}]: ${error.message}`
       );
       return null;
     }
     throw wrapMadaraError(
       error,
-      `getBlockWithReceipts(${blockNumber}) [${nodeName}]`,
+      `getBlockWithReceipts(${blockNumber}) [${nodeName}]`
     );
   }
 }
@@ -218,7 +223,7 @@ export async function getBlockWithReceipts(
  */
 export async function getBlock(
   provider: RpcProvider,
-  blockTag: BlockIdentifier,
+  blockTag: BlockIdentifier
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
@@ -237,7 +242,7 @@ export async function getBlock(
  */
 export async function getBlockTimestamp(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<number | null> {
   const nodeName = getNodeName(provider);
 
@@ -253,7 +258,7 @@ export async function getBlockTimestamp(
     } catch (error) {
       throw wrapMadaraError(
         error,
-        `getBlockTimestamp(${blockNumber}) [${nodeName}]`,
+        `getBlockTimestamp(${blockNumber}) [${nodeName}]`
       );
     }
   }, `getBlockTimestamp(${blockNumber}) [${nodeName}]`);
@@ -264,7 +269,7 @@ export async function getBlockTimestamp(
  */
 export async function getGasPrices(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<GasPrices> {
   const nodeName = getNodeName(provider);
 
@@ -285,7 +290,7 @@ export async function getGasPrices(
     } catch (error) {
       throw wrapMadaraError(
         error,
-        `getGasPrices(${blockNumber}) [${nodeName}]`,
+        `getGasPrices(${blockNumber}) [${nodeName}]`
       );
     }
   }, `getGasPrices(${blockNumber}) [${nodeName}]`);
@@ -296,7 +301,7 @@ export async function getGasPrices(
  */
 export async function getBlockHash(
   provider: RpcProvider,
-  blockNumber: number,
+  blockNumber: number
 ): Promise<string | null> {
   const nodeName = getNodeName(provider);
 
@@ -312,7 +317,7 @@ export async function getBlockHash(
     } catch (error) {
       throw wrapMadaraError(
         error,
-        `getBlockHash(${blockNumber}) [${nodeName}]`,
+        `getBlockHash(${blockNumber}) [${nodeName}]`
       );
     }
   }, `getBlockHash(${blockNumber}) [${nodeName}]`);
@@ -360,27 +365,27 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
             gas_prices: {
               eth_l1_gas_price: parseInt(
                 gasPrices.l1_gas_price.price_in_wei,
-                16,
+                16
               ),
               strk_l1_gas_price: parseInt(
                 gasPrices.l1_gas_price.price_in_fri,
-                16,
+                16
               ),
               eth_l1_data_gas_price: parseInt(
                 gasPrices.l1_data_gas_price.price_in_wei,
-                16,
+                16
               ),
               strk_l1_data_gas_price: parseInt(
                 gasPrices.l1_data_gas_price.price_in_fri,
-                16,
+                16
               ),
               eth_l2_gas_price: parseInt(
                 gasPrices.l2_gas_price.price_in_wei,
-                16,
+                16
               ),
               strk_l2_gas_price: parseInt(
                 gasPrices.l2_gas_price.price_in_fri,
-                16,
+                16
               ),
             },
             expected_block_hash: expectedBlockHash,
@@ -391,12 +396,12 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
         headers: {
           "Content-Type": "application/json",
         },
-      },
+      }
     );
 
     if (response.data.error) {
       throw new Error(
-        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
       );
     }
 
@@ -406,6 +411,150 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     incrementErrors("set_custom_header_error", "setCustomHeader");
     throw wrapMadaraError(error, `setCustomHeader(${currentBlock}) [syncing]`);
   }
+}
+
+/**
+ * Set replay boundary metadata for a block on Madara.
+ */
+export async function setReplayBoundary(
+  currentBlock: number,
+  expectedTxCount: number,
+  lastTxHash: string
+): Promise<ReplayBoundaryStatus> {
+  try {
+    const response = await axios.post<MadaraRpcResponse>(
+      config.adminRpcUrlSyncingNode,
+      {
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_setReplayBoundary",
+        id: 1,
+        params: [
+          {
+            block_n: currentBlock,
+            expected_tx_count: expectedTxCount,
+            last_tx_hash: lastTxHash,
+          },
+        ],
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.error) {
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
+      );
+    }
+
+    const status = response.data.result as ReplayBoundaryStatus;
+    logger.info(
+      `✅ Replay boundary set for block ${currentBlock} (expected_tx_count=${expectedTxCount}, last_tx_hash=${lastTxHash})`
+    );
+    return status;
+  } catch (error) {
+    incrementErrors("set_replay_boundary_error", "setReplayBoundary");
+    throw wrapMadaraError(
+      error,
+      `setReplayBoundary(${currentBlock}) [syncing]`
+    );
+  }
+}
+
+/**
+ * Get replay boundary status for a block from Madara.
+ */
+export async function getReplayBoundaryStatus(
+  blockNumber: number
+): Promise<ReplayBoundaryStatus | null> {
+  try {
+    const response = await axios.post<MadaraRpcResponse>(
+      config.adminRpcUrlSyncingNode,
+      {
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_getReplayBoundaryStatus",
+        id: 1,
+        params: [blockNumber],
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.error) {
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
+      );
+    }
+
+    if (response.data.result == null) {
+      return null;
+    }
+
+    return response.data.result as ReplayBoundaryStatus;
+  } catch (error) {
+    throw wrapMadaraError(
+      error,
+      `getReplayBoundaryStatus(${blockNumber}) [syncing]`
+    );
+  }
+}
+
+/**
+ * Wait until Madara reports the replay boundary block is closed and boundary matched.
+ */
+export async function waitForReplayBoundaryClose(
+  blockNumber: number,
+  maxAttempts: number = 4000,
+  delayMs: number = 100,
+  shouldAbort?: () => boolean
+): Promise<ReplayBoundaryStatus> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (shouldAbort?.()) {
+      throw new Error(`Replay boundary wait aborted for block ${blockNumber}`);
+    }
+
+    const status = await getReplayBoundaryStatus(blockNumber);
+
+    if (!status) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if (status.mismatch) {
+      throw new Error(
+        `Replay boundary mismatch for block ${blockNumber}: ${status.mismatch}`
+      );
+    }
+
+    if (status.closed) {
+      if (!status.boundary_met) {
+        throw new Error(
+          `Replay boundary for block ${blockNumber} closed without boundary match`
+        );
+      }
+      logger.info(
+        `✅ Replay boundary closed for block ${blockNumber} (executed=${status.executed_tx_count}/${status.expected_tx_count})`
+      );
+      return status;
+    }
+
+    if (attempt % 50 === 0) {
+      logger.info(
+        `⏳ Waiting replay boundary close for block ${blockNumber}: executed=${status.executed_tx_count}/${status.expected_tx_count}, closed=${status.closed}`
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  throw new Error(
+    `Timed out waiting for replay boundary close for block ${blockNumber} after ${maxAttempts} attempts`
+  );
 }
 
 /**
@@ -425,12 +574,12 @@ export async function closeBlock(): Promise<void> {
         headers: {
           "Content-Type": "application/json",
         },
-      },
+      }
     );
 
     if (response.data.error) {
       throw new Error(
-        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
       );
     }
 
@@ -445,7 +594,10 @@ export async function closeBlock(): Promise<void> {
 /**
  * Match block hashes between original and syncing nodes
  */
-export async function matchBlockHash(blockNumber: number): Promise<void> {
+export async function matchBlockHash(
+  blockNumber: number,
+  shouldAbort?: () => boolean
+): Promise<void> {
   const endTimer = startTimer();
 
   // Use retry logic with special handling for hash mismatch
@@ -456,11 +608,15 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
   while (attempts < maxAttempts) {
     attempts++;
 
+    if (shouldAbort?.()) {
+      throw new Error(`Block hash matching aborted for block ${blockNumber}`);
+    }
+
     if (attempts > 1) {
       // Exponential backoff with cap to prevent overflow
       const delay = Math.min(Math.pow(2, attempts - 1) * 100, maxDelayMs);
       logger.info(
-        `Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`,
+        `Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -487,7 +643,11 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
         // Hash mismatch is NOT retriable - fail immediately
         recordBlockStatus("hash_mismatch");
         incrementErrors("block_hash_mismatch", "matchBlockHash");
-        throw new BlockHashMismatchError(blockNumber, originalHash, syncingHash);
+        throw new BlockHashMismatchError(
+          blockNumber,
+          originalHash,
+          syncingHash
+        );
       }
 
       recordBlockProcessingDuration("verify_hash", endTimer());
@@ -496,7 +656,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
       // If it's a hash mismatch error, don't retry
       if (error instanceof BlockHashMismatchError) {
         logger.error(
-          `❌ Block hash mismatch detected at block ${blockNumber} - failing without retry`,
+          `❌ Block hash mismatch detected at block ${blockNumber} - failing without retry`
         );
         throw error;
       }
@@ -504,7 +664,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
       // For other errors, check if we've exhausted retries
       if (attempts >= maxAttempts) {
         logger.error(
-          `❌ All ${maxAttempts} attempts failed for block ${blockNumber}`,
+          `❌ All ${maxAttempts} attempts failed for block ${blockNumber}`
         );
         incrementErrors("block_hash_match_failed", "matchBlockHash");
         throw error;
@@ -512,13 +672,13 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
 
       // Otherwise, log and continue to next attempt
       logger.warn(
-        `Attempt ${attempts}/${maxAttempts} failed for block ${blockNumber}: ${error}`,
+        `Attempt ${attempts}/${maxAttempts} failed for block ${blockNumber}: ${error}`
       );
     }
   }
 
   incrementErrors("block_hash_match_timeout", "matchBlockHash");
   throw new Error(
-    `Failed to match block hash for block ${blockNumber} after ${maxAttempts} attempts`,
+    `Failed to match block hash for block ${blockNumber} after ${maxAttempts} attempts`
   );
 }
