@@ -11,6 +11,9 @@ export {
   getBlockWithReceipts,
   getPreConfirmedBlock,
   setCustomHeader,
+  setReplayBoundary,
+  getReplayBoundaryStatus,
+  waitForReplayBoundaryClose,
   closeBlock,
   matchBlockHash,
 } from "./operations/blockOperations.js";

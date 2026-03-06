@@ -21,14 +21,13 @@ export class ParallelTransactionProcessor {
   async sendTransactions(
     transactions: TransactionWithHash[],
     blockNumber: number,
+    shouldAbort?: () => boolean
   ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
       return { txResults: [], txHashes: [], sendDuration: 0 };
     }
 
-    logger.info(
-      `Sending ${transactions.length} transactions sequentially...`,
-    );
+    logger.info(`Sending ${transactions.length} transactions sequentially...`);
 
     const startTime = Date.now();
     const endTimer = startTimer();
@@ -37,6 +36,10 @@ export class ParallelTransactionProcessor {
 
     // SEQUENTIAL SENDING
     for (let index = 0; index < transactions.length; index++) {
+      if (shouldAbort?.()) {
+        throw new Error(`Transaction sending aborted for block ${blockNumber}`);
+      }
+
       const tx = transactions[index];
 
       try {
@@ -44,7 +47,7 @@ export class ParallelTransactionProcessor {
         txHashes.push(txHash);
 
         logger.debug(
-          `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
+          `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`
         );
 
         await processTx(tx, blockNumber);
@@ -56,23 +59,29 @@ export class ParallelTransactionProcessor {
       } catch (error: any) {
         if (error instanceof MadaraDownError) {
           logger.warn(
-            `Madara down while sending transaction ${index + 1}/${transactions.length}`,
+            `Madara down while sending transaction ${index + 1}/${
+              transactions.length
+            }`
           );
           throw error; // Propagate to caller for recovery handling
         }
 
         logger.error(
           `  Failed to send transaction ${index + 1}:`,
-          error.message,
+          error.message
         );
         throw new Error(
-          `Failed to send transaction ${index + 1}/${transactions.length} in block ${blockNumber}: ${error.message}`,
+          `Failed to send transaction ${index + 1}/${
+            transactions.length
+          } in block ${blockNumber}: ${error.message}`
         );
       }
     }
 
     const sendDuration = Date.now() - startTime;
-    logger.info(`All ${transactions.length} transactions sent in ${sendDuration}ms`);
+    logger.info(
+      `All ${transactions.length} transactions sent in ${sendDuration}ms`
+    );
 
     // Record transaction sending duration
     recordBlockProcessingDuration("send_txs", endTimer());
@@ -90,19 +99,25 @@ export class ParallelTransactionProcessor {
   async validateReceipts(
     blockNumber: number,
     txHashes: string[],
+    shouldAbort?: () => boolean
   ): Promise<void> {
     if (txHashes.length === 0) {
       return;
     }
 
     logger.info(
-      `Validating ${txHashes.length} receipts using getBlockWithReceipts...`,
+      `Validating ${txHashes.length} receipts using getBlockWithReceipts...`
     );
 
     const startTime = Date.now();
 
     try {
-      await validateBlockReceipts(syncingProvider_v9, blockNumber, txHashes);
+      await validateBlockReceipts(
+        syncingProvider_v9,
+        blockNumber,
+        txHashes,
+        shouldAbort
+      );
     } catch (error: any) {
       if (error instanceof MadaraDownError) {
         logger.warn(`Madara down detected during receipt validation`);
