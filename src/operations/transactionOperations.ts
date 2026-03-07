@@ -7,11 +7,18 @@ import {
 } from "../errors/index.js";
 import { RetryConfig, ReceiptValidationConfig } from "../constants.js";
 import { RetryOptions, BlockWithReceipts } from "../types.js";
-import axios, { AxiosResponse } from "axios";
+import { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
-import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
+import {
+  incrementTransactionReceiptRetries,
+  incrementReceiptValidationTimeouts,
+  recordBlockProcessingDuration,
+  recordReceiptValidation,
+} from "../telemetry/metrics.js";
 import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
+import { config } from "../config.js";
+import { rpcHttpClient } from "../rpcClient.js";
 
 /**
  * Get transaction receipt
@@ -141,7 +148,7 @@ export async function postWithRetry(
 
   while (attempt <= maxAttempts) {
     try {
-      const result = await axios.post(url, data);
+      const result = await rpcHttpClient.post(url, data);
 
       // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
@@ -266,9 +273,11 @@ export async function validateBlockReceipts(
   if (shouldAbort?.()) {
     throw new Error(`Receipt validation aborted for block ${blockNumber}`);
   }
-  await new Promise((resolve) =>
-    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS)
-  );
+  if (config.receiptValidationInitialDelayMs > 0) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, config.receiptValidationInitialDelayMs)
+    );
+  }
 
   let pollCount = 0;
   let consecutiveErrors = 0;
@@ -283,6 +292,7 @@ export async function validateBlockReceipts(
 
     // Check timeout
     if (elapsed >= timeout) {
+      incrementReceiptValidationTimeouts();
       const errorMsg = `Receipt validation timed out after ${Math.round(
         elapsed / 1000
       )}s for block ${blockNumber} [${nodeName}]`;
@@ -362,6 +372,8 @@ export async function validateBlockReceipts(
 
       // All receipts validated successfully
       const duration = Date.now() - startTime;
+      recordBlockProcessingDuration("validate_receipts", duration / 1000);
+      recordReceiptValidation(duration / 1000, pollCount);
       logger.info(
         `All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`
       );

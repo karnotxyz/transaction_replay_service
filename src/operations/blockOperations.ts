@@ -15,6 +15,7 @@ import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
+import { rpcHttpClient } from "../rpcClient.js";
 import {
   originalProvider_v9,
   syncingProvider_v9,
@@ -24,6 +25,7 @@ import {
 } from "../providers.js";
 import {
   recordBlockProcessingDuration,
+  recordBoundaryWait,
   startTimer,
   updateOriginalNodeBlockNumber,
   updateSyncingNodeBlockNumber,
@@ -176,7 +178,7 @@ export async function getBlockWithReceipts(
         ? getSyncingUserRpcUrl()
         : getOriginalUserRpcUrl();
 
-    const response = await axios.post(
+    const response = await rpcHttpClient.post(
       rpcUrl,
       {
         jsonrpc: "2.0",
@@ -352,7 +354,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
       l2_gas_price: block.l2_gas_price,
     };
 
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",
@@ -422,7 +424,7 @@ export async function setReplayBoundary(
   lastTxHash: string
 ): Promise<ReplayBoundaryStatus> {
   try {
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",
@@ -470,7 +472,7 @@ export async function getReplayBoundaryStatus(
   blockNumber: number
 ): Promise<ReplayBoundaryStatus | null> {
   try {
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",
@@ -513,6 +515,7 @@ export async function waitForReplayBoundaryClose(
   delayMs: number = 100,
   shouldAbort?: () => boolean
 ): Promise<ReplayBoundaryStatus> {
+  const endTimer = startTimer();
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (shouldAbort?.()) {
       throw new Error(`Replay boundary wait aborted for block ${blockNumber}`);
@@ -537,6 +540,9 @@ export async function waitForReplayBoundaryClose(
           `Replay boundary for block ${blockNumber} closed without boundary match`
         );
       }
+      const durationSeconds = endTimer();
+      recordBlockProcessingDuration("wait_boundary_close", durationSeconds);
+      recordBoundaryWait(durationSeconds, attempt);
       logger.info(
         `✅ Replay boundary closed for block ${blockNumber} (executed=${status.executed_tx_count}/${status.expected_tx_count})`
       );
@@ -563,7 +569,7 @@ export async function waitForReplayBoundaryClose(
 export async function closeBlock(): Promise<void> {
   const endTimer = startTimer();
   try {
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",

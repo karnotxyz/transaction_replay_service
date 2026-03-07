@@ -4,6 +4,8 @@
 
 OpenTelemetry metrics support has been fully integrated into the Transaction Replay Service. The implementation provides comprehensive observability for all aspects of block and transaction processing.
 
+> Note: this summary predates the current pipelined validator model. Treat `docs/METRICS.md` and `grafana/replay-pipeline-dashboard.json` as the current references for metric names, queue/frontier gauges, and dashboard panels.
+
 ## Implementation Overview
 
 ### 1. Core Infrastructure
