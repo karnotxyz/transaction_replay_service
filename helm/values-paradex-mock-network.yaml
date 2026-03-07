@@ -20,6 +20,8 @@ transaction_syncing_service:
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-collector.otel-stack.svc.cluster.local:4318"
     OTEL_EXPORT_INTERVAL_MS: "3000"
     OTEL_SERVICE_NAME: "paradex-mock-network-transaction-replay-service"
+    VALIDATOR_WORKER_COUNT: "2"
+    RECEIPT_VALIDATION_INITIAL_DELAY_MS: "100"
 
 # Deploy paradex-mock-network instance
 # helm install paradex-mock-network-replay ./helm -f ./helm/values-paradex-mock-network.yaml -n madara-full-node

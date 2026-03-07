@@ -2,6 +2,8 @@
 
 This document describes all the metrics exposed by the Transaction Replay Service via OpenTelemetry.
 
+> Current pipeline deployments should use the importable dashboard at `grafana/replay-pipeline-dashboard.json`. The legacy examples below were updated for the pipelined validator model, but the dashboard JSON is the authoritative starting point for Grafana.
+
 ## Table of Contents
 
 1. [Configuration](#configuration)
@@ -114,7 +116,7 @@ increase(replay_blocks_status_total{status="hash_mismatch"}[1h])
 
 ### `replay.block.processing_duration_seconds`
 **Type:** Histogram
-**Labels:** `operation` (validate, set_header, process_txs, close_block, verify_hash)
+**Labels:** `operation` (validate, set_header, send_txs, wait_boundary_close, validate_receipts, close_block, verify_hash)
 **Description:** Duration of block processing operations
 **Buckets:** Default histogram buckets
 **Use Cases:**
@@ -127,11 +129,11 @@ increase(replay_blocks_status_total{status="hash_mismatch"}[1h])
 # Average block processing time
 avg(replay_block_processing_duration_seconds)
 
-# P95 latency for transaction processing
-histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="process_txs"}[5m]))
+# P95 latency for transaction submission
+histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="send_txs"}[5m]))
 
-# P99 latency for block validation
-histogram_quantile(0.99, rate(replay_block_processing_duration_seconds_bucket{operation="validate"}[5m]))
+# P95 latency for replay-boundary waiting
+histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="wait_boundary_close"}[5m]))
 ```
 
 ---
@@ -239,7 +241,7 @@ sum by (tx_type) (rate(replay_transactions_status_total{status="failed"}[5m]))
 ### `replay.transactions.processing_duration_seconds`
 **Type:** Histogram
 **Labels:** `tx_type`, `tx_version`
-**Description:** Duration of transaction processing (send + receipt validation)
+**Description:** Duration of transaction submission only. This metric is recorded around `processTx()` send/submit work and does not include block-level receipt validation.
 **Use Cases:**
 - Monitor transaction latency
 - Identify slow transaction types
@@ -291,7 +293,7 @@ sum by (tx_type) (replay_transactions_receipt_retries_total)
 
 ### `replay.sync.active_processes`
 **Type:** Gauge
-**Labels:** `sync_mode` (sequential, snap_sync)
+**Labels:** `sync_mode` (`sync`)
 **Description:** Number of active sync processes by mode
 **Use Cases:**
 - Monitor active syncs
@@ -303,8 +305,8 @@ sum by (tx_type) (replay_transactions_receipt_retries_total)
 # Total active processes
 sum(replay_sync_active_processes)
 
-# Active sequential syncs
-replay_sync_active_processes{sync_mode="sequential"}
+# Active sync worker
+replay_sync_active_processes{sync_mode="sync"}
 ```
 
 ---
@@ -331,7 +333,7 @@ replay_sync_progress_percent > 50
 
 ### `replay.sync.backlog_blocks`
 **Type:** Gauge
-**Description:** Number of blocks behind the original node
+**Description:** Target backlog for the current sync request. This is based on the requested sync target and validated frontier, not a live source-head lag metric.
 **Use Cases:**
 - Monitor sync lag
 - Alert on increasing backlog
@@ -347,6 +349,84 @@ replay_sync_backlog_blocks > 1000
 
 # Backlog reduction rate
 rate(replay_sync_backlog_blocks[5m])
+```
+
+---
+
+## Pipeline Metrics
+
+### `replay.pipeline.validation_queue_depth`
+**Type:** Gauge
+**Description:** Current number of validation jobs waiting in memory.
+
+### `replay.pipeline.inflight_blocks`
+**Type:** Gauge
+**Description:** Current number of blocks between enqueue and boundary close.
+
+### `replay.pipeline.validation_backlog_blocks`
+**Type:** Gauge
+**Description:** Current number of blocks that are enqueued but not fully validated yet.
+
+### `replay.pipeline.frontier_block`
+**Type:** Gauge
+**Labels:** `stage` (`enqueued`, `closed`, `validated`)
+**Description:** Current frontier block for each pipeline stage.
+
+### `replay.pipeline.validator_workers`
+**Type:** Gauge
+**Labels:** `state` (`configured`, `active`)
+**Description:** Number of configured validator workers and how many are actively processing jobs.
+
+### `replay.pipeline.max_inflight_blocks`
+**Type:** Gauge
+**Description:** Configured producer backpressure limit.
+
+### `replay.pipeline.backpressure_events_total`
+**Type:** Counter
+**Description:** Number of times producer backpressure engaged.
+
+### `replay.pipeline.backpressure_wait_seconds`
+**Type:** Histogram
+**Description:** Time spent waiting because inflight blocks hit the configured limit.
+
+### `replay.pipeline.boundary_wait_duration_seconds`
+**Type:** Histogram
+**Description:** Time spent waiting for replay-boundary close before validation.
+
+### `replay.pipeline.boundary_wait_polls`
+**Type:** Histogram
+**Description:** Number of replay-boundary status polls per block.
+
+### `replay.receipt_validation.duration_seconds`
+**Type:** Histogram
+**Description:** Block-level receipt validation duration after close.
+
+### `replay.receipt_validation.polls`
+**Type:** Histogram
+**Description:** Number of `getBlockWithReceipts` polls used per block validation.
+
+### `replay.receipt_validation.timeouts_total`
+**Type:** Counter
+**Description:** Number of receipt-validation timeouts.
+
+**Query Examples:**
+```promql
+# Current queue and backlog
+replay_pipeline_validation_queue_depth
+replay_pipeline_validation_backlog_blocks
+
+# Pipeline frontier spread
+replay_pipeline_frontier_block{stage="enqueued"} - replay_pipeline_frontier_block{stage="validated"}
+
+# Active vs configured workers
+replay_pipeline_validator_workers{state="active"}
+replay_pipeline_validator_workers{state="configured"}
+
+# P95 receipt validation latency
+histogram_quantile(0.95, rate(replay_receipt_validation_duration_seconds_bucket[5m]))
+
+# P95 boundary wait latency
+histogram_quantile(0.95, rate(replay_pipeline_boundary_wait_duration_seconds_bucket[5m]))
 ```
 
 ---
@@ -493,23 +573,7 @@ replay_errors_total{error_type="block_hash_mismatch"}
 
 ## System Metrics
 
-### `replay.redis.connection_status`
-**Type:** Gauge
-**Values:** 1 (connected), 0 (disconnected)
-**Description:** Redis connection status
-**Use Cases:**
-- Monitor Redis availability
-- Alert on connection loss
-- Track connectivity issues
-
-**Query Examples:**
-```promql
-# Is Redis connected?
-replay_redis_connection_status == 1
-
-# Alert if Redis is disconnected
-replay_redis_connection_status == 0
-```
+The replay service now persists sync state to a file (`STATE_FILE_PATH`) instead of Redis. There is no Redis connection metric in the current codebase.
 
 ---
 

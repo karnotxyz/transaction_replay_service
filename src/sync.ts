@@ -17,8 +17,16 @@ import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import { config } from "./config.js";
 import {
   incrementBlocksProcessed,
+  incrementBackpressureEvents,
   recordBlockStatus,
+  recordBackpressureWait,
   updateCurrentBlock,
+  updateMaxInflightBlocks,
+  updatePipelineFrontier,
+  updatePipelineInflightBlocks,
+  updateValidationBacklogBlocks,
+  updateValidationQueueDepth,
+  updateValidatorWorkers,
 } from "./telemetry/metrics.js";
 import {
   throughputTracker,
@@ -80,6 +88,11 @@ export async function startSync(endBlock: BlockIdentifier) {
     cancelRequested: false,
     isContinuous,
     originalTarget: isContinuous ? targetBlock : undefined,
+    validationQueueDepth: 0,
+    validationBacklogBlocks: 0,
+    activeValidatorWorkers: 0,
+    validatorWorkerCount: config.validatorWorkerCount,
+    maxInflightBlocks: config.maxInflightBlocks,
   };
 
   syncStateManager.setProcess(newProcess);
@@ -93,7 +106,7 @@ export async function startSync(endBlock: BlockIdentifier) {
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`
   );
   logger.info(
-    `⚡ Mode: PIPELINED producer + validator (fire-and-forget producer with bounded backpressure)`
+    `⚡ Mode: PIPELINED producer + validator pool (ordered producer send, validator_workers=${config.validatorWorkerCount}, max_inflight_blocks=${config.maxInflightBlocks})`
   );
 
   if (isContinuous) {
@@ -213,7 +226,7 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 }
 
 /**
- * Process a single block with SEQUENTIAL transaction sending and PARALLEL receipt validation
+ * Process a single block with ordered transaction sending and pooled receipt validation
  * Returns the number of transactions processed
  *
  * @param blockNumber - The block number to process
@@ -233,6 +246,8 @@ interface PipelineState {
   lastEnqueuedBlock: number;
   lastClosedBlock: number;
   lastValidatedBlock: number;
+  validationCompletedBlocks: Set<number>;
+  activeValidatorWorkers: number;
 }
 
 class AsyncValidationQueue {
@@ -298,11 +313,54 @@ function syncPipelineProgress(
   process: SyncProcess,
   pipeline: PipelineState
 ): void {
+  const queueDepth = pipeline.validationQueue.size();
+  const inflightBlocks = Math.max(
+    0,
+    pipeline.lastEnqueuedBlock - pipeline.lastClosedBlock
+  );
+  const validationBacklogBlocks = Math.max(
+    0,
+    pipeline.lastEnqueuedBlock - pipeline.lastValidatedBlock
+  );
+
   process.lastEnqueuedBlock = pipeline.lastEnqueuedBlock;
   process.lastClosedBlock = pipeline.lastClosedBlock;
   process.lastValidatedBlock = pipeline.lastValidatedBlock;
-  process.validationQueueDepth = pipeline.validationQueue.size();
+  process.validationQueueDepth = queueDepth;
+  process.validationBacklogBlocks = validationBacklogBlocks;
+  process.activeValidatorWorkers = pipeline.activeValidatorWorkers;
+  process.validatorWorkerCount = config.validatorWorkerCount;
   process.maxInflightBlocks = config.maxInflightBlocks;
+
+  updateValidationQueueDepth(queueDepth);
+  updatePipelineInflightBlocks(inflightBlocks);
+  updateValidationBacklogBlocks(validationBacklogBlocks);
+  updatePipelineFrontier("enqueued", Math.max(0, pipeline.lastEnqueuedBlock));
+  updatePipelineFrontier("closed", Math.max(0, pipeline.lastClosedBlock));
+  updatePipelineFrontier(
+    "validated",
+    Math.max(0, pipeline.lastValidatedBlock)
+  );
+  updateValidatorWorkers(
+    config.validatorWorkerCount,
+    pipeline.activeValidatorWorkers
+  );
+  updateMaxInflightBlocks(config.maxInflightBlocks);
+}
+
+function advanceValidatedFrontier(
+  pipeline: PipelineState,
+  blockNumber: number
+): number {
+  pipeline.validationCompletedBlocks.add(blockNumber);
+
+  while (pipeline.validationCompletedBlocks.has(pipeline.lastValidatedBlock + 1)) {
+    const nextBlock = pipeline.lastValidatedBlock + 1;
+    pipeline.validationCompletedBlocks.delete(nextBlock);
+    pipeline.lastValidatedBlock = nextBlock;
+  }
+
+  return pipeline.lastValidatedBlock;
 }
 
 function requestPipelineStop(
@@ -362,6 +420,7 @@ async function waitForBackpressure(
   process: SyncProcess
 ): Promise<void> {
   let logged = false;
+  let waitStartedAt: number | null = null;
 
   while (!pipeline.stopRequested) {
     const inflightBlocks = Math.max(
@@ -370,6 +429,9 @@ async function waitForBackpressure(
     );
 
     if (inflightBlocks < config.maxInflightBlocks) {
+      if (waitStartedAt !== null) {
+        recordBackpressureWait((Date.now() - waitStartedAt) / 1000);
+      }
       if (logged) {
         logger.info(
           `✅ Backpressure released at block ${currentBlock} (closed=${pipeline.lastClosedBlock}, inflight=${inflightBlocks}/${config.maxInflightBlocks})`
@@ -379,6 +441,8 @@ async function waitForBackpressure(
     }
 
     if (!logged) {
+      incrementBackpressureEvents();
+      waitStartedAt = Date.now();
       logger.info(
         `⏸️ Backpressure engaged at block ${currentBlock} (closed=${pipeline.lastClosedBlock}, inflight=${inflightBlocks}/${config.maxInflightBlocks})`
       );
@@ -387,6 +451,10 @@ async function waitForBackpressure(
 
     syncPipelineProgress(process, pipeline);
     await sleep(config.validatorPollIntervalMs);
+  }
+
+  if (waitStartedAt !== null) {
+    recordBackpressureWait((Date.now() - waitStartedAt) / 1000);
   }
 
   abortIfStopped(pipeline);
@@ -478,10 +546,11 @@ async function runProducerLoop(
 
 async function runValidatorLoop(
   process: SyncProcess,
-  pipeline: PipelineState
+  pipeline: PipelineState,
+  workerId: number
 ): Promise<void> {
   logger.info(
-    `Starting validator loop with max_inflight_blocks=${config.maxInflightBlocks}`
+    `Starting validator worker ${workerId}/${config.validatorWorkerCount} with max_inflight_blocks=${config.maxInflightBlocks}`
   );
 
   while (true) {
@@ -492,71 +561,83 @@ async function runValidatorLoop(
       return;
     }
 
+    pipeline.activeValidatorWorkers++;
     syncPipelineProgress(process, pipeline);
 
-    logger.info(
-      `🔎 VALIDATING Block ${
-        job.blockNumber
-      } (queue_depth=${pipeline.validationQueue.size()})`
-    );
-
-    if (job.requiresBoundaryClose) {
-      const closeAttempts = Math.ceil(
-        config.validatorCloseTimeoutMs / config.validatorPollIntervalMs
+    try {
+      logger.info(
+        `🔎 VALIDATING Block ${
+          job.blockNumber
+        } (worker=${workerId}, queue_depth=${pipeline.validationQueue.size()}, active_workers=${pipeline.activeValidatorWorkers})`
       );
-      const boundaryWaitResult =
-        await blockProcessor.waitForReplayBoundaryClose(
-          job.blockNumber,
-          process,
-          {
-            maxAttempts: closeAttempts,
-            delayMs: config.validatorPollIntervalMs,
-            shouldAbort: () => pipeline.stopRequested,
-          }
+
+      if (job.requiresBoundaryClose) {
+        const closeAttempts = Math.ceil(
+          config.validatorCloseTimeoutMs / config.validatorPollIntervalMs
         );
-      if (!boundaryWaitResult.success) {
-        throw boundaryWaitResult.error;
+        const boundaryWaitResult =
+          await blockProcessor.waitForReplayBoundaryClose(
+            job.blockNumber,
+            process,
+            {
+              maxAttempts: closeAttempts,
+              delayMs: config.validatorPollIntervalMs,
+              shouldAbort: () => pipeline.stopRequested,
+            }
+          );
+        if (!boundaryWaitResult.success) {
+          throw boundaryWaitResult.error;
+        }
       }
-    }
 
-    pipeline.lastClosedBlock = job.blockNumber;
-    syncPipelineProgress(process, pipeline);
+      pipeline.lastClosedBlock = Math.max(
+        pipeline.lastClosedBlock,
+        job.blockNumber
+      );
+      syncPipelineProgress(process, pipeline);
 
-    if (job.txHashes.length > 0) {
-      await parallelTransactionProcessor.validateReceipts(
+      if (job.txHashes.length > 0) {
+        await parallelTransactionProcessor.validateReceipts(
+          job.blockNumber,
+          job.txHashes,
+          () => pipeline.stopRequested
+        );
+      }
+
+      const verifyResult = await blockProcessor.verifyBlockHash(
         job.blockNumber,
-        job.txHashes,
+        process,
         () => pipeline.stopRequested
       );
+      if (!verifyResult.success) {
+        throw verifyResult.error;
+      }
+
+      incrementBlocksProcessed();
+      recordBlockStatus("success");
+      throughputTracker.recordBlock(job.txCount);
+
+      advanceValidatedFrontier(pipeline, job.blockNumber);
+      process.processedBlocks++;
+      syncPipelineProgress(process, pipeline);
+
+      updateSyncMetrics(process, process.syncTo, pipeline.lastValidatedBlock);
+
+      const percentComplete = process.isContinuous
+        ? "N/A (continuous)"
+        : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(2) +
+          "%";
+
+      logger.info(
+        `✅ Block ${job.blockNumber} validated by worker ${workerId} (${process.processedBlocks} blocks processed, frontier=${pipeline.lastValidatedBlock}, ${percentComplete} complete)`
+      );
+    } finally {
+      pipeline.activeValidatorWorkers = Math.max(
+        0,
+        pipeline.activeValidatorWorkers - 1
+      );
+      syncPipelineProgress(process, pipeline);
     }
-
-    const verifyResult = await blockProcessor.verifyBlockHash(
-      job.blockNumber,
-      process,
-      () => pipeline.stopRequested
-    );
-    if (!verifyResult.success) {
-      throw verifyResult.error;
-    }
-
-    incrementBlocksProcessed();
-    recordBlockStatus("success");
-    throughputTracker.recordBlock(job.txCount);
-
-    pipeline.lastValidatedBlock = job.blockNumber;
-    process.processedBlocks++;
-    syncPipelineProgress(process, pipeline);
-
-    updateSyncMetrics(process, process.syncTo, job.blockNumber);
-
-    const percentComplete = process.isContinuous
-      ? "N/A (continuous)"
-      : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(2) +
-        "%";
-
-    logger.info(
-      `✅ Block ${job.blockNumber} validated (${process.processedBlocks} blocks processed, ${percentComplete} complete)`
-    );
   }
 }
 
@@ -573,6 +654,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     process.lastClosedBlock = process.currentBlock - 1;
     process.lastValidatedBlock = process.currentBlock - 1;
     process.validationQueueDepth = 0;
+    process.validationBacklogBlocks = 0;
+    process.activeValidatorWorkers = 0;
+    process.validatorWorkerCount = config.validatorWorkerCount;
     process.maxInflightBlocks = config.maxInflightBlocks;
 
     const pipeline: PipelineState = {
@@ -583,10 +667,14 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       lastEnqueuedBlock: process.currentBlock - 1,
       lastClosedBlock: process.currentBlock - 1,
       lastValidatedBlock: process.currentBlock - 1,
+      validationCompletedBlocks: new Set<number>(),
+      activeValidatorWorkers: 0,
     };
 
+    syncPipelineProgress(process, pipeline);
+
     logger.info(
-      `⚡ Mode: PIPELINED producer + validator (max_inflight_blocks=${config.maxInflightBlocks}, poll_interval_ms=${config.validatorPollIntervalMs})`
+      `⚡ Mode: PIPELINED producer + validator pool (validator_workers=${config.validatorWorkerCount}, max_inflight_blocks=${config.maxInflightBlocks}, poll_interval_ms=${config.validatorPollIntervalMs}, receipt_initial_delay_ms=${config.receiptValidationInitialDelayMs})`
     );
 
     const producerPromise = runProducerLoop(process, pipeline).catch(
@@ -598,21 +686,23 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
     );
 
-    const validatorPromise = runValidatorLoop(process, pipeline).catch(
-      (error) => {
-        recordBlockStatus("failed");
-        const err = error instanceof Error ? error : new Error(String(error));
-        requestPipelineStop(pipeline, process, err);
-        throw err;
-      }
+    const validatorPromises = Array.from(
+      { length: config.validatorWorkerCount },
+      (_, index) =>
+        runValidatorLoop(process, pipeline, index + 1).catch((error) => {
+          recordBlockStatus("failed");
+          const err = error instanceof Error ? error : new Error(String(error));
+          requestPipelineStop(pipeline, process, err);
+          throw err;
+        })
     );
 
-    const [producerResult, validatorResult] = await Promise.allSettled([
+    const settledResults = await Promise.allSettled([
       producerPromise,
-      validatorPromise,
+      ...validatorPromises,
     ]);
 
-    const rejected = [producerResult, validatorResult].find(
+    const rejected = settledResults.find(
       (result): result is PromiseRejectedResult => result.status === "rejected"
     );
     if (rejected) {
@@ -752,6 +842,12 @@ export const getSyncStatus = async (req: Request, res: Response) => {
         lastClosedBlock: currentProcess.lastClosedBlock,
         lastValidatedBlock: currentProcess.lastValidatedBlock,
         validationQueueDepth: currentProcess.validationQueueDepth ?? 0,
+        validationBacklogBlocks:
+          currentProcess.validationBacklogBlocks ?? 0,
+        activeValidatorWorkers:
+          currentProcess.activeValidatorWorkers ?? 0,
+        validatorWorkerCount:
+          currentProcess.validatorWorkerCount ?? config.validatorWorkerCount,
         maxInflightBlocks:
           currentProcess.maxInflightBlocks ?? config.maxInflightBlocks,
         inflightBlocks: Math.max(
@@ -759,6 +855,13 @@ export const getSyncStatus = async (req: Request, res: Response) => {
           (currentProcess.lastEnqueuedBlock ??
             currentProcess.currentBlock - 1) -
             (currentProcess.lastClosedBlock ?? currentProcess.currentBlock - 1)
+        ),
+        fullyValidatedInflightBlocks: Math.max(
+          0,
+          (currentProcess.lastEnqueuedBlock ??
+            currentProcess.currentBlock - 1) -
+            (currentProcess.lastValidatedBlock ??
+              currentProcess.currentBlock - 1)
         ),
       },
       timing: {

@@ -29,8 +29,10 @@ interface EnvironmentConfig {
 
   // Replay pipeline
   maxInflightBlocks: number;
+  validatorWorkerCount: number;
   validatorPollIntervalMs: number;
   validatorCloseTimeoutMs: number;
+  receiptValidationInitialDelayMs: number;
 }
 
 class Config {
@@ -99,6 +101,11 @@ class Config {
         15,
         "MAX_INFLIGHT_BLOCKS"
       ),
+      validatorWorkerCount: this.parsePositiveInt(
+        process.env.VALIDATOR_WORKER_COUNT,
+        2,
+        "VALIDATOR_WORKER_COUNT"
+      ),
       validatorPollIntervalMs: this.parsePositiveInt(
         process.env.VALIDATOR_POLL_INTERVAL_MS,
         2000,
@@ -108,6 +115,11 @@ class Config {
         process.env.VALIDATOR_CLOSE_TIMEOUT_MS,
         15 * 60 * 1000,
         "VALIDATOR_CLOSE_TIMEOUT_MS"
+      ),
+      receiptValidationInitialDelayMs: this.parseNonNegativeInt(
+        process.env.RECEIPT_VALIDATION_INITIAL_DELAY_MS,
+        100,
+        "RECEIPT_VALIDATION_INITIAL_DELAY_MS"
       ),
     };
 
@@ -155,6 +167,25 @@ class Config {
     return parsed;
   }
 
+  private parseNonNegativeInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a non-negative integer.`
+      );
+    }
+
+    return parsed;
+  }
+
   private logConfiguration(config: EnvironmentConfig): void {
     logger.info("📋 Configuration loaded:");
     logger.info(`  • Environment: ${config.nodeEnv}`);
@@ -171,11 +202,15 @@ class Config {
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`
     );
     logger.info(`  • Max Inflight Blocks: ${config.maxInflightBlocks}`);
+    logger.info(`  • Validator Workers: ${config.validatorWorkerCount}`);
     logger.info(
       `  • Validator Poll Interval: ${config.validatorPollIntervalMs}ms`
     );
     logger.info(
       `  • Validator Close Timeout: ${config.validatorCloseTimeoutMs}ms`
+    );
+    logger.info(
+      `  • Receipt Validation Initial Delay: ${config.receiptValidationInitialDelayMs}ms`
     );
 
     // OpenTelemetry Configuration
@@ -243,8 +278,16 @@ class Config {
     return this.config.validatorPollIntervalMs;
   }
 
+  public get validatorWorkerCount(): number {
+    return this.config.validatorWorkerCount;
+  }
+
   public get validatorCloseTimeoutMs(): number {
     return this.config.validatorCloseTimeoutMs;
+  }
+
+  public get receiptValidationInitialDelayMs(): number {
+    return this.config.receiptValidationInitialDelayMs;
   }
 
   public get isDevelopment(): boolean {

@@ -25,6 +25,19 @@ let _syncProgressGauge: Gauge;
 let _syncBacklogGauge: Gauge;
 let _blocksPerSecondGauge: Gauge;
 let _transactionsPerSecondGauge: Gauge;
+let _pipelineValidationQueueDepthGauge: Gauge;
+let _pipelineInflightBlocksGauge: Gauge;
+let _pipelineValidationBacklogGauge: Gauge;
+let _pipelineFrontierGauge: Gauge;
+let _pipelineValidatorWorkersGauge: Gauge;
+let _pipelineMaxInflightBlocksGauge: Gauge;
+let _pipelineBackpressureEventsCounter: Counter;
+let _pipelineBackpressureWaitHistogram: Histogram;
+let _pipelineBoundaryWaitDurationHistogram: Histogram;
+let _pipelineBoundaryWaitPollsHistogram: Histogram;
+let _receiptValidationDurationHistogram: Histogram;
+let _receiptValidationPollsHistogram: Histogram;
+let _receiptValidationTimeoutsCounter: Counter;
 let _madaraHealthStatusGauge: Gauge;
 let _madaraRecoveryCounter: Counter;
 let _madaraDowntimeHistogram: Histogram;
@@ -157,6 +170,108 @@ function initializeMetrics(): boolean {
     {
       description: "Current transactions processing rate",
       unit: "txs/s",
+    },
+  );
+
+  // Pipeline metrics
+  _pipelineValidationQueueDepthGauge = meter.createGauge(
+    "replay.pipeline.validation_queue_depth",
+    {
+      description: "Current number of validation jobs waiting in the queue",
+      unit: "1",
+    },
+  );
+
+  _pipelineInflightBlocksGauge = meter.createGauge(
+    "replay.pipeline.inflight_blocks",
+    {
+      description: "Current number of blocks between enqueue and boundary close",
+      unit: "1",
+    },
+  );
+
+  _pipelineValidationBacklogGauge = meter.createGauge(
+    "replay.pipeline.validation_backlog_blocks",
+    {
+      description: "Current number of blocks not fully validated yet",
+      unit: "1",
+    },
+  );
+
+  _pipelineFrontierGauge = meter.createGauge("replay.pipeline.frontier_block", {
+    description: "Current block frontier for each pipeline stage",
+    unit: "1",
+  });
+
+  _pipelineValidatorWorkersGauge = meter.createGauge(
+    "replay.pipeline.validator_workers",
+    {
+      description: "Configured and active validator workers",
+      unit: "1",
+    },
+  );
+
+  _pipelineMaxInflightBlocksGauge = meter.createGauge(
+    "replay.pipeline.max_inflight_blocks",
+    {
+      description: "Configured maximum number of inflight blocks",
+      unit: "1",
+    },
+  );
+
+  _pipelineBackpressureEventsCounter = meter.createCounter(
+    "replay.pipeline.backpressure_events_total",
+    {
+      description: "Number of times producer backpressure engaged",
+      unit: "1",
+    },
+  );
+
+  _pipelineBackpressureWaitHistogram = meter.createHistogram(
+    "replay.pipeline.backpressure_wait_seconds",
+    {
+      description: "Time spent waiting under producer backpressure",
+      unit: "s",
+    },
+  );
+
+  _pipelineBoundaryWaitDurationHistogram = meter.createHistogram(
+    "replay.pipeline.boundary_wait_duration_seconds",
+    {
+      description: "Time spent waiting for replay boundary close",
+      unit: "s",
+    },
+  );
+
+  _pipelineBoundaryWaitPollsHistogram = meter.createHistogram(
+    "replay.pipeline.boundary_wait_polls",
+    {
+      description: "Number of replay boundary status polls per block",
+      unit: "1",
+    },
+  );
+
+  _receiptValidationDurationHistogram = meter.createHistogram(
+    "replay.receipt_validation.duration_seconds",
+    {
+      description: "Duration of block receipt validation",
+      unit: "s",
+    },
+  );
+
+  _receiptValidationPollsHistogram = meter.createHistogram(
+    "replay.receipt_validation.polls",
+    {
+      description: "Number of getBlockWithReceipts polls per block validation",
+      unit: "1",
+    },
+  );
+
+  _receiptValidationTimeoutsCounter = meter.createCounter(
+    "replay.receipt_validation.timeouts_total",
+    {
+      description: "Number of receipt validation timeouts",
+      unit: "1",
     },
   );
 
@@ -341,6 +456,76 @@ export function updateThroughput(
   if (!initializeMetrics()) return;
   _blocksPerSecondGauge.record(blocksPerSecond, { metric: "blocks_rate" });
   _transactionsPerSecondGauge.record(txsPerSecond, { metric: "txs_rate" });
+}
+
+export function updatePipelineFrontier(
+  stage: "enqueued" | "closed" | "validated",
+  blockNumber: number,
+): void {
+  if (!initializeMetrics()) return;
+  _pipelineFrontierGauge.record(blockNumber, { stage });
+}
+
+export function updateValidationQueueDepth(depth: number): void {
+  if (!initializeMetrics()) return;
+  _pipelineValidationQueueDepthGauge.record(depth);
+}
+
+export function updatePipelineInflightBlocks(blocks: number): void {
+  if (!initializeMetrics()) return;
+  _pipelineInflightBlocksGauge.record(blocks);
+}
+
+export function updateValidationBacklogBlocks(blocks: number): void {
+  if (!initializeMetrics()) return;
+  _pipelineValidationBacklogGauge.record(blocks);
+}
+
+export function updateValidatorWorkers(
+  configured: number,
+  active: number,
+): void {
+  if (!initializeMetrics()) return;
+  _pipelineValidatorWorkersGauge.record(configured, { state: "configured" });
+  _pipelineValidatorWorkersGauge.record(active, { state: "active" });
+}
+
+export function updateMaxInflightBlocks(blocks: number): void {
+  if (!initializeMetrics()) return;
+  _pipelineMaxInflightBlocksGauge.record(blocks);
+}
+
+export function incrementBackpressureEvents(): void {
+  if (!initializeMetrics()) return;
+  _pipelineBackpressureEventsCounter.add(1);
+}
+
+export function recordBackpressureWait(durationSeconds: number): void {
+  if (!initializeMetrics()) return;
+  _pipelineBackpressureWaitHistogram.record(durationSeconds);
+}
+
+export function recordBoundaryWait(
+  durationSeconds: number,
+  pollCount: number,
+): void {
+  if (!initializeMetrics()) return;
+  _pipelineBoundaryWaitDurationHistogram.record(durationSeconds);
+  _pipelineBoundaryWaitPollsHistogram.record(pollCount);
+}
+
+export function recordReceiptValidation(
+  durationSeconds: number,
+  pollCount: number,
+): void {
+  if (!initializeMetrics()) return;
+  _receiptValidationDurationHistogram.record(durationSeconds);
+  _receiptValidationPollsHistogram.record(pollCount);
+}
+
+export function incrementReceiptValidationTimeouts(): void {
+  if (!initializeMetrics()) return;
+  _receiptValidationTimeoutsCounter.add(1);
 }
 
 export function updateMadaraHealthStatus(isHealthy: boolean): void {

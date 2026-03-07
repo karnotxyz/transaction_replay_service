@@ -2,6 +2,8 @@
 
 This document provides all the Grafana queries and panel configurations you need to create a comprehensive monitoring dashboard for the Transaction Replay Service.
 
+> For current pipelined deployments, import `grafana/replay-pipeline-dashboard.json` first. The sections below remain useful for ad hoc panels, but the checked-in dashboard JSON is the source-of-truth template for queue depth, worker activity, and pipeline-frontier visibility.
+
 ---
 
 ## Dashboard Layout Recommendation
@@ -192,9 +194,9 @@ Query B (Set Header):
 histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="set_header"}[5m]))
 ```
 
-Query C (Process Txs):
+Query C (Send Txs):
 ```promql
-histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="process_txs"}[5m]))
+histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="send_txs"}[5m]))
 ```
 
 Query D (Close Block):
@@ -205,6 +207,16 @@ histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{op
 Query E (Verify Hash):
 ```promql
 histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="verify_hash"}[5m]))
+```
+
+Query F (Boundary Wait):
+```promql
+histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="wait_boundary_close"}[5m]))
+```
+
+Query G (Validate Receipts):
+```promql
+histogram_quantile(0.95, rate(replay_block_processing_duration_seconds_bucket{operation="validate_receipts"}[5m]))
 ```
 
 **Display:**
@@ -394,8 +406,8 @@ replay_sync_progress_percent
 replay_sync_backlog_blocks
 ```
 **Display:**
-- Title: "Sync Backlog (Blocks Behind)"
-- Legend: "Blocks behind"
+- Title: "Target Backlog"
+- Legend: "Blocks remaining to requested target"
 - Y-axis: Blocks
 - Unit: None
 - Fill opacity: 30%
@@ -408,14 +420,9 @@ replay_sync_backlog_blocks
 **Type:** Stat
 **Queries:**
 
-Query A (Sequential):
+Query A (Sync):
 ```promql
-replay_sync_active_processes{sync_mode="sequential"}
-```
-
-Query B (Snap Sync):
-```promql
-replay_sync_active_processes{sync_mode="snap_sync"}
+replay_sync_active_processes{sync_mode="sync"}
 ```
 
 **Display:**
@@ -465,22 +472,20 @@ replay_madara_health_status
 
 ---
 
-### Panel 5.2: Redis Connection Status
+### Panel 5.2: Validation Queue Depth
 **Type:** Stat
 **Query:**
 ```promql
-replay_redis_connection_status
+replay_pipeline_validation_queue_depth
 ```
 **Display:**
-- Title: "Redis Connection"
+- Title: "Validation Queue Depth"
 - Value: Last (not null)
 - Unit: None
-- Value mappings:
-  - 0: "DISCONNECTED" (Red)
-  - 1: "CONNECTED" (Green)
 - Color:
-  - Red: = 0
-  - Green: = 1
+  - Green: < 4
+  - Yellow: 4-10
+  - Red: > 10
 
 ---
 

@@ -36,6 +36,9 @@ export interface SyncProcess {
   lastClosedBlock?: number;
   lastValidatedBlock?: number;
   validationQueueDepth?: number;
+  validationBacklogBlocks?: number;
+  activeValidatorWorkers?: number;
+  validatorWorkerCount?: number;
   maxInflightBlocks?: number;
 }
 

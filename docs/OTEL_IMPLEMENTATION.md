@@ -4,6 +4,8 @@
 
 OpenTelemetry metrics support has been successfully integrated into the Transaction Replay Service. All requested metrics and additional essential metrics are now being tracked and exported via OTLP.
 
+> Note: this document contains historical implementation notes. For the current pipelined replay model, use `docs/METRICS.md` and `grafana/replay-pipeline-dashboard.json` as the authoritative references. Older mentions of Redis-backed state or `process_txs` operation names no longer reflect the current service.
+
 ---
 
 ## ✅ Requested Metrics Implemented
