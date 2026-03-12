@@ -27,6 +27,7 @@ import {
   updateValidationBacklogBlocks,
   updateValidationQueueDepth,
   updateValidatorWorkers,
+  updateSyncingNodeBlockNumber,
 } from "./telemetry/metrics.js";
 import {
   throughputTracker,
@@ -616,6 +617,7 @@ async function runValidatorLoop(
       incrementBlocksProcessed();
       recordBlockStatus("success");
       throughputTracker.recordBlock(job.txCount);
+      updateSyncingNodeBlockNumber(job.blockNumber);
 
       advanceValidatedFrontier(pipeline, job.blockNumber);
       process.processedBlocks++;
