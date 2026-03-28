@@ -149,20 +149,29 @@ export class BlockProcessor {
           continue;
         }
 
-        // Check which transactions are missing
-        const missingTxHashes = expectedTxHashes.filter(
-          (txHash) => !pendingTxHashes.includes(txHash),
-        );
+        const sameLength = pendingTxHashes.length === expectedTxHashes.length;
+        const firstOrderMismatchIndex = sameLength
+          ? expectedTxHashes.findIndex(
+              (txHash, index) => pendingTxHashes[index] !== txHash,
+            )
+          : 0;
 
-        if (missingTxHashes.length === 0) {
+        if (sameLength && firstOrderMismatchIndex === -1) {
           logger.info(
             `✅ All ${expectedTxHashes.length} transactions confirmed in PRE_CONFIRMED block ${blockNumber}`,
           );
           return { success: true };
         }
 
+        const missingTxHashes = expectedTxHashes.filter(
+          (txHash) => !pendingTxHashes.includes(txHash),
+        );
+        const extraTxHashes = pendingTxHashes.filter(
+          (txHash) => !expectedSet.has(txHash),
+        );
+
         logger.debug(
-          `⏳ Attempt ${attempt}/${maxRetries}: ${missingTxHashes.length}/${expectedTxHashes.length} transactions still missing`,
+          `⏳ Attempt ${attempt}/${maxRetries}: preconfirmed block ${blockNumber} not aligned yet (missing=${missingTxHashes.length}, extra=${extraTxHashes.length}, pending=${pendingTxHashes.length}, expected=${expectedTxHashes.length}, first_order_mismatch=${firstOrderMismatchIndex})`,
         );
 
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
