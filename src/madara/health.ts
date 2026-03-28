@@ -1,8 +1,8 @@
-import axios from "axios";
 import logger from "../logger.js";
 import { config } from "../config.js";
 import { TimeoutConfig } from "../constants.js";
 import { MadaraDownError, isMadaraDownError } from "../errors/index.js";
+import { rpcHttpClient } from "../rpcClient.js";
 import {
   updateMadaraHealthStatus,
   incrementMadaraRecoveryEvents,
@@ -15,7 +15,7 @@ import {
 export async function checkMadaraHealth(): Promise<boolean> {
   try {
     const healthUrl = `${config.rpcUrlSyncingNode}/health`;
-    const response = await axios.get(healthUrl, {
+    const response = await rpcHttpClient.get(healthUrl, {
       timeout: TimeoutConfig.MADARA_HEALTH_CHECK_TIMEOUT,
     });
     const isHealthy = response.status === 200 && response.data === "OK";

@@ -1,11 +1,12 @@
 import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
-import { originalProvider_v9, syncingProvider_v9 } from "../providers.js";
+import { syncingProvider_v9 } from "../providers.js";
 import {
   setCustomHeader,
+  setReplayBoundary,
+  waitForReplayBoundaryClose,
   closeBlock,
   matchBlockHash,
-  getBlockWithTxs,
   getPreConfirmedBlock,
   getLatestBlockNumber,
 } from "../operations/blockOperations.js";
@@ -45,7 +46,7 @@ export class BlockProcessor {
    */
   async validateBlockReady(
     blockNumber: number,
-    process: SyncProcess,
+    process: SyncProcess
   ): Promise<BlockProcessResult> {
     const endTimer = startTimer();
     try {
@@ -60,7 +61,7 @@ export class BlockProcessor {
         },
         () => {
           process.status = ProcessStatus.FAILED;
-        },
+        }
       );
 
       recordBlockProcessingDuration("validate", endTimer());
@@ -76,7 +77,7 @@ export class BlockProcessor {
    */
   async setBlockHeaders(
     blockNumber: number,
-    process: SyncProcess,
+    process: SyncProcess
   ): Promise<BlockProcessResult> {
     try {
       await executeWithMadaraRecovery(
@@ -89,22 +90,108 @@ export class BlockProcessor {
           process.status = ProcessStatus.RUNNING;
 
           // Check PRE_CONFIRMED state after recovery
-          const preConfirmedBlock =
-            await getPreConfirmedBlock(syncingProvider_v9);
+          const preConfirmedBlock = await getPreConfirmedBlock(
+            syncingProvider_v9
+          );
           if (preConfirmedBlock.transactions.length > 0) {
             logger.info(
-              `⚠️  Block ${blockNumber} has ${preConfirmedBlock.transactions.length} txs in PRE_CONFIRMED after recovery`,
+              `⚠️  Block ${blockNumber} has ${preConfirmedBlock.transactions.length} txs in PRE_CONFIRMED after recovery`
             );
           }
         },
         () => {
           process.status = ProcessStatus.FAILED;
-        },
+        }
       );
 
       return { success: true };
     } catch (error) {
       logger.error(`Failed to set headers for block ${blockNumber}:`, error);
+      return { success: false, error: error as Error };
+    }
+  }
+
+  /**
+   * Set replay boundary metadata for a block.
+   */
+  async setReplayBoundary(
+    blockNumber: number,
+    orderedTxHashes: string[],
+    process: SyncProcess
+  ): Promise<BlockProcessResult> {
+    if (orderedTxHashes.length === 0) {
+      logger.info(
+        `⏭️ No replay boundary needed for empty block ${blockNumber}`
+      );
+      return { success: true };
+    }
+
+    const lastTxHash = orderedTxHashes[orderedTxHashes.length - 1];
+    const expectedTxCount = orderedTxHashes.length;
+
+    try {
+      await executeWithMadaraRecovery(
+        () => setReplayBoundary(blockNumber, expectedTxCount, lastTxHash),
+        `set replay boundary for block ${blockNumber}`,
+        () => {
+          process.status = ProcessStatus.RECOVERING;
+        },
+        () => {
+          process.status = ProcessStatus.RUNNING;
+        },
+        () => {
+          process.status = ProcessStatus.FAILED;
+        }
+      );
+
+      return { success: true };
+    } catch (error) {
+      logger.error(
+        `Failed to set replay boundary for block ${blockNumber}:`,
+        error
+      );
+      return { success: false, error: error as Error };
+    }
+  }
+
+  /**
+   * Wait until replay boundary reports that block is closed and boundary conditions are met.
+   */
+  async waitForReplayBoundaryClose(
+    blockNumber: number,
+    process: SyncProcess,
+    options?: {
+      maxAttempts?: number;
+      delayMs?: number;
+      shouldAbort?: () => boolean;
+    }
+  ): Promise<BlockProcessResult> {
+    try {
+      await executeWithMadaraRecovery(
+        () =>
+          waitForReplayBoundaryClose(
+            blockNumber,
+            options?.maxAttempts,
+            options?.delayMs,
+            options?.shouldAbort
+          ),
+        `wait replay boundary close for block ${blockNumber}`,
+        () => {
+          process.status = ProcessStatus.RECOVERING;
+        },
+        () => {
+          process.status = ProcessStatus.RUNNING;
+        },
+        () => {
+          process.status = ProcessStatus.FAILED;
+        }
+      );
+      return { success: true };
+    } catch (error) {
+      logger.error(
+        `Failed while waiting replay boundary close for block ${blockNumber}:`,
+        error
+      );
       return { success: false, error: error as Error };
     }
   }
@@ -118,7 +205,7 @@ export class BlockProcessor {
     expectedTxHashes: string[],
     process: SyncProcess,
     maxRetries: number = 500,
-    retryDelayMs: number = 200,
+    retryDelayMs: number = 200
   ): Promise<BlockProcessResult> {
     if (expectedTxHashes.length === 0) {
       logger.info(`⏭️ No transactions to validate for block ${blockNumber}`);
@@ -126,7 +213,7 @@ export class BlockProcessor {
     }
 
     logger.info(
-      `🔍 Validating ${expectedTxHashes.length} transactions are in PRE_CONFIRMED block before close...`,
+      `🔍 Validating ${expectedTxHashes.length} transactions are in PRE_CONFIRMED block before close...`
     );
 
     const expectedSet = new Set(expectedTxHashes);
@@ -136,14 +223,17 @@ export class BlockProcessor {
       attempt++;
 
       try {
-        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+        const preConfirmedBlock = await getPreConfirmedBlock(
+          syncingProvider_v9
+        );
         const preConfirmedBlockNumber = preConfirmedBlock.block_number;
-        const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
+        const pendingTxHashes = (preConfirmedBlock.transactions ||
+          []) as string[];
 
         // Verify we're looking at the right block
         if (preConfirmedBlockNumber !== blockNumber) {
           logger.warn(
-            `⚠️ PRE_CONFIRMED block is ${preConfirmedBlockNumber}, expected ${blockNumber}`,
+            `⚠️ PRE_CONFIRMED block is ${preConfirmedBlockNumber}, expected ${blockNumber}`
           );
           await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
           continue;
@@ -158,7 +248,7 @@ export class BlockProcessor {
 
         if (sameLength && firstOrderMismatchIndex === -1) {
           logger.info(
-            `✅ All ${expectedTxHashes.length} transactions confirmed in PRE_CONFIRMED block ${blockNumber}`,
+            `✅ All ${expectedTxHashes.length} transactions confirmed in PRE_CONFIRMED block ${blockNumber}`
           );
           return { success: true };
         }
@@ -180,7 +270,7 @@ export class BlockProcessor {
           throw error; // Propagate for recovery handling
         }
         logger.warn(
-          `⚠️ Error checking PRE_CONFIRMED block (attempt ${attempt}/${maxRetries}): ${error}`,
+          `⚠️ Error checking PRE_CONFIRMED block (attempt ${attempt}/${maxRetries}): ${error}`
         );
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       }
@@ -196,7 +286,7 @@ export class BlockProcessor {
    */
   async closeCurrentBlock(
     blockNumber: number,
-    process: SyncProcess,
+    process: SyncProcess
   ): Promise<BlockProcessResult> {
     try {
       await executeWithMadaraRecovery(
@@ -210,7 +300,7 @@ export class BlockProcessor {
         },
         () => {
           process.status = ProcessStatus.FAILED;
-        },
+        }
       );
 
       return { success: true };
@@ -226,10 +316,11 @@ export class BlockProcessor {
   async verifyBlockHash(
     blockNumber: number,
     process: SyncProcess,
+    shouldAbort?: () => boolean
   ): Promise<BlockProcessResult> {
     try {
       await executeWithMadaraRecovery(
-        () => matchBlockHash(blockNumber),
+        () => matchBlockHash(blockNumber, shouldAbort),
         `verify block hash for ${blockNumber}`,
         () => {
           process.status = ProcessStatus.RECOVERING;
@@ -239,7 +330,7 @@ export class BlockProcessor {
         },
         () => {
           process.status = ProcessStatus.FAILED;
-        },
+        }
       );
 
       logger.info(`✅ Block hash verified for block ${blockNumber}`);
@@ -272,16 +363,17 @@ export class BlockProcessor {
       // Get PRE_CONFIRMED block state
       const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
       const preConfirmedBlockNumber = preConfirmedBlock.block_number;
-      const preConfirmedTxHashes = (preConfirmedBlock.transactions || []) as string[];
+      const preConfirmedTxHashes = (preConfirmedBlock.transactions ||
+        []) as string[];
 
       logger.info(
-        `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxHashes.length}`,
+        `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxHashes.length}`
       );
 
       // Case 1: Madara has already completed the target block
       if (latestBlock >= targetBlockNumber) {
         logger.info(
-          `✅ Madara already at block ${latestBlock} >= target ${targetBlockNumber}, skipping to next`,
+          `✅ Madara already at block ${latestBlock} >= target ${targetBlockNumber}, skipping to next`
         );
         return { type: "skip_to_block", blockNumber: latestBlock + 1 };
       }
@@ -289,7 +381,9 @@ export class BlockProcessor {
       // Case 2: Madara is behind where we expected (e.g., restarted from earlier state)
       if (latestBlock < targetBlockNumber - 1) {
         logger.info(
-          `⚠️ Madara is at block ${latestBlock}, behind expected ${targetBlockNumber - 1}. Continuing from ${latestBlock + 1}`,
+          `⚠️ Madara is at block ${latestBlock}, behind expected ${
+            targetBlockNumber - 1
+          }. Continuing from ${latestBlock + 1}`
         );
         return { type: "skip_to_block", blockNumber: latestBlock + 1 };
       }
@@ -298,7 +392,7 @@ export class BlockProcessor {
       if (preConfirmedBlockNumber !== targetBlockNumber) {
         // PRE_CONFIRMED doesn't match - this means we need to start fresh
         logger.info(
-          `📭 PRE_CONFIRMED block ${preConfirmedBlockNumber} doesn't match target ${targetBlockNumber}, restarting block`,
+          `📭 PRE_CONFIRMED block ${preConfirmedBlockNumber} doesn't match target ${targetBlockNumber}, restarting block`
         );
         return { type: "restart_block", blockNumber: latestBlock + 1 };
       }
@@ -307,14 +401,14 @@ export class BlockProcessor {
       if (preConfirmedTxHashes.length === 0) {
         // Empty pending block - restart (headers may need to be set)
         logger.info(
-          `📭 PRE_CONFIRMED block ${targetBlockNumber} is empty, restarting block`,
+          `📭 PRE_CONFIRMED block ${targetBlockNumber} is empty, restarting block`
         );
         return { type: "restart_block", blockNumber: targetBlockNumber };
       }
 
       // Has some transactions - continue with remaining
       logger.info(
-        `📦 PRE_CONFIRMED block ${targetBlockNumber} has ${preConfirmedTxHashes.length} transactions, will send remaining`,
+        `📦 PRE_CONFIRMED block ${targetBlockNumber} has ${preConfirmedTxHashes.length} transactions, will send remaining`
       );
       return {
         type: "continue_block",
@@ -336,7 +430,7 @@ export class BlockProcessor {
    */
   async handleBlockRecovery(
     blockNumber: number,
-    process: SyncProcess,
+    process: SyncProcess
   ): Promise<{
     recovered: boolean;
     action: RecoveryAction;
@@ -350,7 +444,7 @@ export class BlockProcessor {
 
     if (!recovered) {
       logger.error(
-        `❌ Madara recovery failed - timeout exceeded (24 hours) at block ${blockNumber}`,
+        `❌ Madara recovery failed - timeout exceeded (24 hours) at block ${blockNumber}`
       );
       process.status = ProcessStatus.FAILED;
       process.error = "Madara recovery timeout - exceeded 24 hour wait period";

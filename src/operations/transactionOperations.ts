@@ -7,18 +7,25 @@ import {
 } from "../errors/index.js";
 import { RetryConfig, ReceiptValidationConfig } from "../constants.js";
 import { RetryOptions, BlockWithReceipts } from "../types.js";
-import axios, { AxiosResponse } from "axios";
+import { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
-import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
+import {
+  incrementTransactionReceiptRetries,
+  incrementReceiptValidationTimeouts,
+  recordBlockProcessingDuration,
+  recordReceiptValidation,
+} from "../telemetry/metrics.js";
 import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
+import { config } from "../config.js";
+import { rpcHttpClient } from "../rpcClient.js";
 
 /**
  * Get transaction receipt
  */
 export async function getTransactionReceipt(
   provider: RpcProvider,
-  transactionHash: string,
+  transactionHash: string
 ): Promise<GetTransactionReceiptResponse> {
   const nodeName = getNodeName(provider);
 
@@ -26,7 +33,10 @@ export async function getTransactionReceipt(
     const receipt = await provider.getTransactionReceipt(transactionHash);
     return receipt;
   } catch (error) {
-    throw wrapMadaraError(error, `getTransactionReceipt(${transactionHash}) [${nodeName}]`);
+    throw wrapMadaraError(
+      error,
+      `getTransactionReceipt(${transactionHash}) [${nodeName}]`
+    );
   }
 }
 
@@ -36,7 +46,7 @@ export async function getTransactionReceipt(
 export async function validateTransactionReceipt(
   provider: RpcProvider,
   txHash: string,
-  options: RetryOptions = {},
+  options: RetryOptions = {}
 ): Promise<void> {
   const nodeName = getNodeName(provider);
   const {
@@ -51,14 +61,18 @@ export async function validateTransactionReceipt(
   while (retryCount <= maxRetries) {
     try {
       logger.debug(
-        `Validating receipt for ${txHash} [${nodeName}] (attempt ${retryCount + 1}/${maxRetries + 1})`,
+        `Validating receipt for ${txHash} [${nodeName}] (attempt ${
+          retryCount + 1
+        }/${maxRetries + 1})`
       );
 
       const receipt = await getTransactionReceipt(provider, txHash);
 
       // Validate transaction status
       if (!receipt.isSuccess() && !receipt.isReverted()) {
-        throw new Error(`Transaction in unexpected state: ${txHash} [${nodeName}]`);
+        throw new Error(
+          `Transaction in unexpected state: ${txHash} [${nodeName}]`
+        );
       }
 
       // Success
@@ -67,7 +81,7 @@ export async function validateTransactionReceipt(
       // Check if this is a Madara down error - fail fast
       if (error instanceof MadaraDownError) {
         logger.warn(
-          `Madara connection error while validating receipt for ${txHash} [${nodeName}]`,
+          `Madara connection error while validating receipt for ${txHash} [${nodeName}]`
         );
         throw error;
       }
@@ -76,7 +90,7 @@ export async function validateTransactionReceipt(
       if (isMadaraDownError(error)) {
         consecutiveConnectionErrors++;
         logger.warn(
-          `Connection error ${consecutiveConnectionErrors}/${RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS} for ${txHash} [${nodeName}]`,
+          `Connection error ${consecutiveConnectionErrors}/${RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS} for ${txHash} [${nodeName}]`
         );
 
         if (
@@ -84,10 +98,10 @@ export async function validateTransactionReceipt(
           RetryConfig.MAX_CONSECUTIVE_CONNECTION_ERRORS
         ) {
           logger.error(
-            `Too many consecutive connection errors (${consecutiveConnectionErrors}) [${nodeName}]`,
+            `Too many consecutive connection errors (${consecutiveConnectionErrors}) [${nodeName}]`
           );
           throw new MadaraDownError(
-            `Madara down while validating receipt for ${txHash} [${nodeName}] after ${consecutiveConnectionErrors} connection errors`,
+            `Madara down while validating receipt for ${txHash} [${nodeName}] after ${consecutiveConnectionErrors} connection errors`
           );
         }
       } else {
@@ -125,7 +139,7 @@ export async function validateTransactionReceipt(
  */
 export async function postWithRetry(
   url: string,
-  data: Record<string, any>,
+  data: Record<string, any>
 ): Promise<AxiosResponse<any>> {
   const { checkMadaraHealth } = await import("../madara/index.js");
 
@@ -134,18 +148,22 @@ export async function postWithRetry(
 
   while (attempt <= maxAttempts) {
     try {
-      const result = await axios.post(url, data);
+      const result = await rpcHttpClient.post(url, data);
 
       // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
         if (attempt >= maxAttempts) {
           throw new Error(
-            `Account validation failed after ${maxAttempts + 1} attempts: ${result.data.error.message}`,
+            `Account validation failed after ${maxAttempts + 1} attempts: ${
+              result.data.error.message
+            }`
           );
         }
 
         logger.warn(
-          `⚠️  Account validation failed (attempt ${attempt + 1}/${maxAttempts + 1}), retrying: ${JSON.stringify(result.data)}`,
+          `⚠️  Account validation failed (attempt ${attempt + 1}/${
+            maxAttempts + 1
+          }), retrying: ${JSON.stringify(result.data)}`
         );
         attempt++;
         await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay for account validation
@@ -166,7 +184,9 @@ export async function postWithRetry(
         isMadaraDownError(wrappedError)
       ) {
         logger.warn(
-          `⚠️  POST ${url} failed (attempt ${attempt + 1}/${maxAttempts + 1}): ${wrappedError.message}`,
+          `⚠️  POST ${url} failed (attempt ${attempt + 1}/${
+            maxAttempts + 1
+          }): ${wrappedError.message}`
         );
 
         // Check Madara health immediately to distinguish between:
@@ -177,21 +197,23 @@ export async function postWithRetry(
 
         if (!isHealthy) {
           logger.warn(
-            `🚨 Madara is DOWN - propagating MadaraDownError for block-level recovery`,
+            `🚨 Madara is DOWN - propagating MadaraDownError for block-level recovery`
           );
           // Throw MadaraDownError to trigger block-level recovery
           // which will check PRE_CONFIRMED state and restart the block if needed
           throw new MadaraDownError(
-            `Madara down detected while posting transaction`,
+            `Madara down detected while posting transaction`
           );
         } else {
           logger.info(
-            `✅ Madara is healthy - treating as transient connection error`,
+            `✅ Madara is healthy - treating as transient connection error`
           );
 
           if (attempt >= maxAttempts) {
             throw new Error(
-              `POST ${url} failed after ${maxAttempts + 1} attempts: ${wrappedError.message}`,
+              `POST ${url} failed after ${maxAttempts + 1} attempts: ${
+                wrappedError.message
+              }`
             );
           }
 
@@ -237,30 +259,43 @@ export async function validateBlockReceipts(
   provider: RpcProvider,
   blockNumber: number,
   expectedTxHashes: string[],
+  shouldAbort?: () => boolean
 ): Promise<void> {
   const nodeName = getNodeName(provider);
   const startTime = Date.now();
   const timeout = ReceiptValidationConfig.TIMEOUT_MS;
 
   logger.info(
-    `Validating ${expectedTxHashes.length} receipts for block ${blockNumber} [${nodeName}]`,
+    `Validating ${expectedTxHashes.length} receipts for block ${blockNumber} [${nodeName}]`
   );
 
   // Initial delay before starting validation
-  await new Promise((resolve) =>
-    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
-  );
+  if (shouldAbort?.()) {
+    throw new Error(`Receipt validation aborted for block ${blockNumber}`);
+  }
+  if (config.receiptValidationInitialDelayMs > 0) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, config.receiptValidationInitialDelayMs)
+    );
+  }
 
   let pollCount = 0;
   let consecutiveErrors = 0;
   const maxConsecutiveErrors = 5;
 
   while (true) {
+    if (shouldAbort?.()) {
+      throw new Error(`Receipt validation aborted for block ${blockNumber}`);
+    }
+
     const elapsed = Date.now() - startTime;
 
     // Check timeout
     if (elapsed >= timeout) {
-      const errorMsg = `Receipt validation timed out after ${Math.round(elapsed / 1000)}s for block ${blockNumber} [${nodeName}]`;
+      incrementReceiptValidationTimeouts();
+      const errorMsg = `Receipt validation timed out after ${Math.round(
+        elapsed / 1000
+      )}s for block ${blockNumber} [${nodeName}]`;
       logger.error(errorMsg);
       throw new Error(errorMsg);
     }
@@ -269,12 +304,17 @@ export async function validateBlockReceipts(
     const interval = getPollingInterval(elapsed);
 
     try {
-      const blockWithReceipts = await getBlockWithReceipts(provider, blockNumber);
+      const blockWithReceipts = await getBlockWithReceipts(
+        provider,
+        blockNumber
+      );
 
       if (!blockWithReceipts) {
         // Block not ready yet, wait and retry
         logger.debug(
-          `Block ${blockNumber} not ready yet, retrying in ${interval}ms (poll #${pollCount}, ${Math.round(elapsed / 1000)}s elapsed)`,
+          `Block ${blockNumber} not ready yet, retrying in ${interval}ms (poll #${pollCount}, ${Math.round(
+            elapsed / 1000
+          )}s elapsed)`
         );
         consecutiveErrors = 0; // Reset on successful RPC (just no block yet)
         await new Promise((resolve) => setTimeout(resolve, interval));
@@ -287,7 +327,7 @@ export async function validateBlockReceipts(
         receipts.map((txWithReceipt) => [
           txWithReceipt.receipt.transaction_hash,
           txWithReceipt.receipt,
-        ]),
+        ])
       );
 
       // Check all expected transactions have receipts
@@ -307,41 +347,45 @@ export async function validateBlockReceipts(
           receipt.execution_status !== "SUCCEEDED" &&
           receipt.execution_status !== "REVERTED"
         ) {
-          failedTxs.push(
-            `${txHash} (status: ${receipt.execution_status})`,
-          );
+          failedTxs.push(`${txHash} (status: ${receipt.execution_status})`);
         }
       }
 
       if (missingTxs.length > 0) {
         // Some transactions not in block yet - this shouldn't happen if block is finalized
         logger.warn(
-          `Block ${blockNumber} missing ${missingTxs.length} expected transactions, retrying...`,
+          `Block ${blockNumber} missing ${missingTxs.length} expected transactions, retrying...`
         );
         await new Promise((resolve) => setTimeout(resolve, interval));
         continue;
       }
 
       if (failedTxs.length > 0) {
-        const errorMsg = `${failedTxs.length} transactions in unexpected state for block ${blockNumber}: ${failedTxs.join(", ")}`;
+        const errorMsg = `${
+          failedTxs.length
+        } transactions in unexpected state for block ${blockNumber}: ${failedTxs.join(
+          ", "
+        )}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
       }
 
       // All receipts validated successfully
       const duration = Date.now() - startTime;
+      recordBlockProcessingDuration("validate_receipts", duration / 1000);
+      recordReceiptValidation(duration / 1000, pollCount);
       logger.info(
-        `All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`,
+        `All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`
       );
       return;
     } catch (error) {
       // Check for Madara down
       if (error instanceof MadaraDownError || isMadaraDownError(error)) {
         logger.warn(
-          `Madara connection error during receipt validation for block ${blockNumber} [${nodeName}]`,
+          `Madara connection error during receipt validation for block ${blockNumber} [${nodeName}]`
         );
         throw new MadaraDownError(
-          `Madara down while validating receipts for block ${blockNumber}`,
+          `Madara down while validating receipts for block ${blockNumber}`
         );
       }
 
@@ -349,14 +393,14 @@ export async function validateBlockReceipts(
 
       if (consecutiveErrors >= maxConsecutiveErrors) {
         logger.error(
-          `Too many consecutive errors (${consecutiveErrors}) validating receipts for block ${blockNumber}`,
+          `Too many consecutive errors (${consecutiveErrors}) validating receipts for block ${blockNumber}`
         );
         throw error;
       }
 
       // Transient error, retry
       logger.warn(
-        `Error validating receipts (attempt ${pollCount}), retrying: ${error}`,
+        `Error validating receipts (attempt ${pollCount}), retrying: ${error}`
       );
       await new Promise((resolve) => setTimeout(resolve, interval));
     }

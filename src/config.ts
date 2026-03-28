@@ -26,6 +26,13 @@ interface EnvironmentConfig {
 
   // Features
   cleanSlate: boolean;
+
+  // Replay pipeline
+  maxInflightBlocks: number;
+  validatorWorkerCount: number;
+  validatorPollIntervalMs: number;
+  validatorCloseTimeoutMs: number;
+  receiptValidationInitialDelayMs: number;
 }
 
 class Config {
@@ -55,19 +62,19 @@ class Config {
 
     if (missing.length > 0) {
       throw new ConfigurationError(
-        `Missing required environment variables: ${missing.join(", ")}`,
+        `Missing required environment variables: ${missing.join(", ")}`
       );
     }
 
     // Validate URL formats
     this.validateUrl(
       process.env.RPC_URL_ORIGINAL_NODE!,
-      "RPC_URL_ORIGINAL_NODE",
+      "RPC_URL_ORIGINAL_NODE"
     );
     this.validateUrl(process.env.RPC_URL_SYNCING_NODE!, "RPC_URL_SYNCING_NODE");
     this.validateUrl(
       process.env.ADMIN_RPC_URL_SYNCING_NODE!,
-      "ADMIN_RPC_URL_SYNCING_NODE",
+      "ADMIN_RPC_URL_SYNCING_NODE"
     );
 
     const config: EnvironmentConfig = {
@@ -87,6 +94,33 @@ class Config {
 
       // Features
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
+
+      // Replay pipeline
+      maxInflightBlocks: this.parsePositiveInt(
+        process.env.MAX_INFLIGHT_BLOCKS,
+        15,
+        "MAX_INFLIGHT_BLOCKS"
+      ),
+      validatorWorkerCount: this.parsePositiveInt(
+        process.env.VALIDATOR_WORKER_COUNT,
+        2,
+        "VALIDATOR_WORKER_COUNT"
+      ),
+      validatorPollIntervalMs: this.parsePositiveInt(
+        process.env.VALIDATOR_POLL_INTERVAL_MS,
+        2000,
+        "VALIDATOR_POLL_INTERVAL_MS"
+      ),
+      validatorCloseTimeoutMs: this.parsePositiveInt(
+        process.env.VALIDATOR_CLOSE_TIMEOUT_MS,
+        15 * 60 * 1000,
+        "VALIDATOR_CLOSE_TIMEOUT_MS"
+      ),
+      receiptValidationInitialDelayMs: this.parseNonNegativeInt(
+        process.env.RECEIPT_VALIDATION_INITIAL_DELAY_MS,
+        100,
+        "RECEIPT_VALIDATION_INITIAL_DELAY_MS"
+      ),
     };
 
     this.logConfiguration(config);
@@ -107,11 +141,49 @@ class Config {
 
     if (isNaN(port) || port < 1 || port > 65535) {
       throw new ConfigurationError(
-        `Invalid PORT value: ${portStr}. Must be between 1 and 65535.`,
+        `Invalid PORT value: ${portStr}. Must be between 1 and 65535.`
       );
     }
 
     return port;
+  }
+
+  private parsePositiveInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a positive integer.`
+      );
+    }
+
+    return parsed;
+  }
+
+  private parseNonNegativeInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a non-negative integer.`
+      );
+    }
+
+    return parsed;
   }
 
   private logConfiguration(config: EnvironmentConfig): void {
@@ -119,15 +191,26 @@ class Config {
     logger.info(`  • Environment: ${config.nodeEnv}`);
     logger.info(`  • Port: ${config.port}`);
     logger.info(
-      `  • Original Node: ${this.maskUrl(config.rpcUrlOriginalNode)}`,
+      `  • Original Node: ${this.maskUrl(config.rpcUrlOriginalNode)}`
     );
     logger.info(`  • Syncing Node: ${this.maskUrl(config.rpcUrlSyncingNode)}`);
     logger.info(
-      `  • Admin RPC: ${this.maskUrl(config.adminRpcUrlSyncingNode)}`,
+      `  • Admin RPC: ${this.maskUrl(config.adminRpcUrlSyncingNode)}`
     );
     logger.info(`  • State File: ${config.stateFilePath}`);
     logger.info(
-      `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
+      `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`
+    );
+    logger.info(`  • Max Inflight Blocks: ${config.maxInflightBlocks}`);
+    logger.info(`  • Validator Workers: ${config.validatorWorkerCount}`);
+    logger.info(
+      `  • Validator Poll Interval: ${config.validatorPollIntervalMs}ms`
+    );
+    logger.info(
+      `  • Validator Close Timeout: ${config.validatorCloseTimeoutMs}ms`
+    );
+    logger.info(
+      `  • Receipt Validation Initial Delay: ${config.receiptValidationInitialDelayMs}ms`
     );
 
     // OpenTelemetry Configuration
@@ -185,6 +268,26 @@ class Config {
 
   public get cleanSlate(): boolean {
     return this.config.cleanSlate;
+  }
+
+  public get maxInflightBlocks(): number {
+    return this.config.maxInflightBlocks;
+  }
+
+  public get validatorPollIntervalMs(): number {
+    return this.config.validatorPollIntervalMs;
+  }
+
+  public get validatorWorkerCount(): number {
+    return this.config.validatorWorkerCount;
+  }
+
+  public get validatorCloseTimeoutMs(): number {
+    return this.config.validatorCloseTimeoutMs;
+  }
+
+  public get receiptValidationInitialDelayMs(): number {
+    return this.config.receiptValidationInitialDelayMs;
   }
 
   public get isDevelopment(): boolean {

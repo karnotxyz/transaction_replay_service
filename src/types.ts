@@ -32,6 +32,14 @@ export interface SyncProcess {
   completeCurrentBlock?: boolean;
   isContinuous?: boolean;
   originalTarget?: number;
+  lastEnqueuedBlock?: number;
+  lastClosedBlock?: number;
+  lastValidatedBlock?: number;
+  validationQueueDepth?: number;
+  validationBacklogBlocks?: number;
+  activeValidatorWorkers?: number;
+  validatorWorkerCount?: number;
+  maxInflightBlocks?: number;
 }
 
 /**
@@ -81,6 +89,25 @@ export interface MadaraRpcResponse {
     code: number;
     message: string;
   };
+}
+
+export interface ReplayBoundaryStatus {
+  block_n: number;
+  expected_tx_count: number;
+  dispatched_tx_count: number;
+  executed_tx_count: number;
+  last_executed_tx_hash: string | null;
+  reached_last_tx_hash: boolean;
+  boundary_met: boolean;
+  closed: boolean;
+  mismatch: string | null;
+}
+
+export interface ValidationJob {
+  blockNumber: number;
+  txHashes: string[];
+  txCount: number;
+  requiresBoundaryClose: boolean;
 }
 
 /**

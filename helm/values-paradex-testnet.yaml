@@ -17,6 +17,8 @@ transaction_syncing_service:
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-collector.otel-stack.svc.cluster.local:4318"
     OTEL_EXPORT_INTERVAL_MS: "3000"
     OTEL_SERVICE_NAME: "paradex-testnet-transaction-replay-service"
+    VALIDATOR_WORKER_COUNT: "2"
+    RECEIPT_VALIDATION_INITIAL_DELAY_MS: "100"
 # Deploy paradex-testnet instance
 # helm install paradex-testnet-replay ./helm -f ./helm/values-paradex-testnet.yaml -n madara-full-node
 # helm uninstall paradex-testnet-replay -n madara-full-node
