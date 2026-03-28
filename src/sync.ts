@@ -11,7 +11,7 @@ import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
-  getBlockWithTxs,
+  getOriginalBlockWithTxsAndProofFacts,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import {
@@ -231,7 +231,7 @@ async function processBlock(
   process: SyncProcess,
   existingTxHashes: string[] = [],
 ): Promise<ProcessBlockResult> {
-  const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
+  const blockWithTxs = await getOriginalBlockWithTxsAndProofFacts(blockNumber);
 
   let transactions = blockWithTxs.transactions as TransactionWithHash[];
   const totalTxCount = transactions.length;

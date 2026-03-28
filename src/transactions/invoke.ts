@@ -112,6 +112,7 @@ async function invokeV3(
     tip: string; // u64 is internally a string
     paymaster_data: starknet.FELT[];
     account_deployment_data: starknet.FELT[];
+    proof_facts?: starknet.FELT[];
     nonce_data_availability_mode: starknet.EDataAvailabilityMode;
     fee_data_availability_mode: starknet.EDataAvailabilityMode;
   };
@@ -134,6 +135,7 @@ async function invokeV3(
         tip: txn.tip,
         paymaster_data: txn.paymaster_data,
         account_deployment_data: txn.account_deployment_data,
+        proof_facts: txn.proof_facts,
         nonce_data_availability_mode: txn.nonce_data_availability_mode,
         fee_data_availability_mode: txn.fee_data_availability_mode,
       },

@@ -106,6 +106,8 @@ export type SyncModeType = (typeof SyncMode)[keyof typeof SyncMode];
  * RPC Versions
  */
 export const RpcVersion = {
+  V0_10_2: "0.10.2",
+  V0_10: "0.10",
   V0_8_1: "0.8.1",
   V0_9_0: "0.9.0",
 } as const;
@@ -116,6 +118,8 @@ export type RpcVersionType = (typeof RpcVersion)[keyof typeof RpcVersion];
  * RPC Version Paths
  */
 export const RpcVersionPaths: Record<RpcVersionType, string> = {
+  [RpcVersion.V0_10_2]: "/rpc/v0_10_2",
+  [RpcVersion.V0_10]: "/rpc/v0_10",
   [RpcVersion.V0_8_1]: "/rpc/v0_8_1",
   [RpcVersion.V0_9_0]: "/rpc/v0_9",
 } as const;
