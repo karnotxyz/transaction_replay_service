@@ -1,7 +1,11 @@
 import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
-import { originalProvider_v9, originalProvider_v8, syncingProvider_v9 } from "../providers.js";
+import {
+  getSyncingUserRpcUrl,
+  originalProvider_v9,
+  syncingProvider_v9,
+} from "../providers.js";
 
 /**
  * General declare transaction handler
@@ -47,7 +51,7 @@ async function declareV0(
 
   let txn = tx as unknown as DECLARE_TXN_V0;
 
-  const result = await postWithRetry(config.rpcUrlSyncingNode, {
+  const result = await postWithRetry(getSyncingUserRpcUrl(), {
     id: 1,
     jsonrpc: "2.0",
     method: "starknet_addDeclareTransaction",
@@ -126,7 +130,7 @@ async function declareV2(
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  let contract_class = await originalProvider_v8.getClassByHash(txn.class_hash);
+  let contract_class = await originalProvider_v9.getClassByHash(txn.class_hash);
 
   let contract_class_parsed = starknet.provider.parseContract({
     // @ts-ignore

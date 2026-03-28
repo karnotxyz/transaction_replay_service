@@ -39,7 +39,7 @@
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7",
-    "starknet": "^8.9.1",
+    "starknet": "^9.4.2",
     "uuid": "^11.1.0",
     "winston": "^3.17.0"
   },
