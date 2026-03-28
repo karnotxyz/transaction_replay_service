@@ -1,6 +1,6 @@
 import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
-import { getSyncingUserRpcUrl } from "../providers.js";
+import { config } from "../config.js";
 
 /**
  * General deploy account transaction handler
@@ -37,10 +37,10 @@ async function deployAccountV1(tx: starknet.TransactionWithHash) {
   };
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V1;
 
-  const result = await postWithRetry(getSyncingUserRpcUrl(), {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addDeployAccountTransaction",
+    method: "madara_V0_1_0_bypassAddDeployAccountTransaction",
     params: [
       {
         type: "DEPLOY_ACCOUNT",
@@ -76,10 +76,10 @@ async function deployAccountV3(tx: starknet.TransactionWithHash) {
 
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V3;
 
-  const result = await postWithRetry(getSyncingUserRpcUrl(), {
+  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
     id: 1,
     jsonrpc: "2.0",
-    method: "starknet_addDeployAccountTransaction",
+    method: "madara_V0_1_0_bypassAddDeployAccountTransaction",
     params: [
       {
         type: "DEPLOY_ACCOUNT",
