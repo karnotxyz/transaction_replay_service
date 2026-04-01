@@ -89,7 +89,11 @@ const defaultOps: ReconcileOps = {
   getSourceBlock: (blockNumber: number) =>
     getBlockWithTxHashes(originalProvider_v9, blockNumber),
   revertToAndShutdown,
-  waitForMadaraRecovery,
+  waitForMadaraRecovery: () =>
+    waitForMadaraRecovery({
+      requireObservedDown: true,
+      minHealthyChecks: 2,
+    }),
 };
 
 const defaultStateStore: ReconcileStateStore = {
@@ -279,6 +283,7 @@ export class ReconcileManager {
           result,
           shouldResumeAfterRepair,
           options.autoRestartIfIntended !== false,
+          state?.status === "reconcile_failed" ? "latest" : null,
         );
       }
 
@@ -314,6 +319,7 @@ export class ReconcileManager {
         repairResult,
         shouldResumeAfterRepair,
         options.autoRestartIfIntended !== false,
+        state?.status === "reconcile_failed" ? "latest" : null,
       );
     }
 
@@ -340,10 +346,12 @@ export class ReconcileManager {
       return true;
     }
 
+    if (state.status === "reconcile_failed") {
+      return true;
+    }
+
     return (
-      (state.status === "reconciling" ||
-        state.status === "reconcile_failed") &&
-      state.resumeAfterReconcile
+      state.status === "reconciling" && state.resumeAfterReconcile
     );
   }
 
@@ -649,6 +657,7 @@ export class ReconcileManager {
     result: ReconcileResult,
     shouldResumeAfterRepair: boolean,
     allowAutoRestart: boolean,
+    fallbackEndBlock: number | "latest" | null,
   ): Promise<void> {
     if (result.status === "failed") {
       this.stateStore.markReconcileFailed(shouldResumeAfterRepair);
@@ -665,12 +674,12 @@ export class ReconcileManager {
     }
 
     const intended = this.stateStore.getIntendedTarget();
+    const restartTarget = intended?.syncTo ?? fallbackEndBlock;
     const shouldRestart =
       allowAutoRestart &&
       shouldResumeAfterRepair &&
       result.resumeFrom !== undefined &&
-      intended !== null &&
-      intended.syncTo !== null;
+      restartTarget !== null;
 
     if (!shouldRestart) {
       this.stateStore.restoreIdleAfterReconcile();
@@ -682,7 +691,10 @@ export class ReconcileManager {
       return;
     }
 
-    const endBlock = intended.isContinuous ? "latest" : intended.syncTo;
+    const endBlock =
+      restartTarget === "latest" || intended?.isContinuous
+        ? "latest"
+        : restartTarget;
     this.stateStore.patchState({
       status: "reconciling",
       resumeAfterReconcile: true,

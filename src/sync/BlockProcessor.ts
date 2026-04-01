@@ -347,7 +347,10 @@ export class BlockProcessor {
     process.status = ProcessStatus.RECOVERING;
 
     const { waitForMadaraRecovery } = await import("../madara/index.js");
-    const recovered = await waitForMadaraRecovery();
+    const recovered = await waitForMadaraRecovery({
+      requireObservedDown: true,
+      minHealthyChecks: 2,
+    });
 
     if (!recovered) {
       logger.error(

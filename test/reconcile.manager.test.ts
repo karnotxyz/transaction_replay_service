@@ -335,6 +335,38 @@ test("scheduled reconcile still runs after reconcile_failed and can restart inte
   assert.equal(harness.calls.starts[0].options?.startBlock, 91);
 });
 
+test("scheduled reconcile restarts latest sync after repairing a failed lane with no saved target", async () => {
+  const harness = createHarness({
+    localHead: 101,
+    state: {
+      status: "reconcile_failed",
+      syncTo: null,
+      isContinuous: false,
+      resumeAfterReconcile: false,
+    },
+    localBlocks: new Map([
+      [99, createBlock("0x99", 1)],
+      [100, createBlock("0x100", 1)],
+      [101, createBlock("0x101-local", 0)],
+    ]),
+    sourceBlocks: new Map([
+      [99, createBlock("0x99", 1)],
+      [100, createBlock("0x100", 1)],
+      [101, createBlock("0x101-source", 0)],
+    ]),
+    onRevert: (_hash, currentHarness) => {
+      currentHarness.setLocalHead(100);
+    },
+  });
+
+  const result = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+
+  assert.equal(result.status, "repaired");
+  assert.equal(harness.calls.starts.length, 1);
+  assert.equal(harness.calls.starts[0].endBlock, "latest");
+  assert.equal(harness.calls.starts[0].options?.startBlock, 101);
+});
+
 test("startup recovery reuses reconcile logic and restarts from the reconciled boundary", async () => {
   const harness = createHarness({
     localHead: 52,

@@ -9,6 +9,16 @@ import {
   recordMadaraDowntime,
 } from "../telemetry/metrics.js";
 
+export interface MadaraRecoveryOptions {
+  requireObservedDown?: boolean;
+  minHealthyChecks?: number;
+  healthyCheckDelayMs?: number;
+  checkHealth?: () => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  maxWaitMs?: number;
+}
+
 /**
  * Check if Madara node is healthy
  */
@@ -31,50 +41,85 @@ export async function checkMadaraHealth(): Promise<boolean> {
  * Wait for Madara to recover with exponential backoff
  * @returns true if recovered, false if timeout exceeded
  */
-export async function waitForMadaraRecovery(): Promise<boolean> {
-  const startTime = Date.now();
+export async function waitForMadaraRecovery(
+  options: MadaraRecoveryOptions = {},
+): Promise<boolean> {
+  const {
+    requireObservedDown = false,
+    minHealthyChecks = 1,
+    healthyCheckDelayMs = 1000,
+    checkHealth = checkMadaraHealth,
+    sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = () => Date.now(),
+    maxWaitMs = TimeoutConfig.MADARA_RECOVERY_MAX_WAIT,
+  } = options;
+
+  const startTime = now();
   let attempt = 0;
+  let observedDown = !requireObservedDown;
+  let consecutiveHealthyChecks = 0;
 
   logger.warn("🚨 Madara node is down - starting recovery wait...");
   logger.info(
-    `⏳ Maximum wait time: ${TimeoutConfig.MADARA_RECOVERY_MAX_WAIT / (60 * 60 * 1000)} hours`,
+    `⏳ Maximum wait time: ${maxWaitMs / (60 * 60 * 1000)} hours`,
   );
 
-  while (Date.now() - startTime < TimeoutConfig.MADARA_RECOVERY_MAX_WAIT) {
+  while (now() - startTime < maxWaitMs) {
     attempt++;
-    const elapsedMinutes = Math.floor((Date.now() - startTime) / 60000);
+    const elapsedMinutes = Math.floor((now() - startTime) / 60000);
 
     logger.info(
       `🔍 Recovery attempt ${attempt} (elapsed: ${elapsedMinutes}m)...`,
     );
 
-    const isHealthy = await checkMadaraHealth();
+    const isHealthy = await checkHealth();
 
     if (isHealthy) {
-      const recoveryTime = Date.now() - startTime;
-      const recoveryMinutes = Math.floor(recoveryTime / 60000);
-      const recoverySeconds = Math.floor((recoveryTime % 60000) / 1000);
+      if (!observedDown) {
+        logger.info(
+          "⏳ Madara is still responding after shutdown request - waiting for the node to go down before accepting recovery",
+        );
+      } else {
+        consecutiveHealthyChecks += 1;
 
-      logger.info(
-        `✅ Madara recovered! (downtime: ${recoveryMinutes}m ${recoverySeconds}s)`,
-      );
+        if (consecutiveHealthyChecks >= minHealthyChecks) {
+          const recoveryTime = now() - startTime;
+          const recoveryMinutes = Math.floor(recoveryTime / 60000);
+          const recoverySeconds = Math.floor((recoveryTime % 60000) / 1000);
 
-      // Record recovery metrics
-      incrementMadaraRecoveryEvents();
-      recordMadaraDowntime(recoveryTime / 1000); // Convert to seconds
+          logger.info(
+            `✅ Madara recovered! (downtime: ${recoveryMinutes}m ${recoverySeconds}s)`,
+          );
 
-      return true;
+          incrementMadaraRecoveryEvents();
+          recordMadaraDowntime(recoveryTime / 1000);
+
+          return true;
+        }
+
+        logger.info(
+          `🔍 Madara health probe ${consecutiveHealthyChecks}/${minHealthyChecks} passed - waiting for stable recovery...`,
+        );
+      }
+    } else {
+      consecutiveHealthyChecks = 0;
+      if (!observedDown) {
+        logger.info("📉 Observed Madara go down after the shutdown request");
+      }
+      observedDown = true;
     }
 
-    // Exponential backoff capped at 5 minutes
-    const delay = Math.min(Math.pow(2, Math.min(attempt, 8)) * 1000, 300000);
+    const delay =
+      observedDown && consecutiveHealthyChecks > 0
+        ? healthyCheckDelayMs
+        : Math.min(Math.pow(2, Math.min(attempt, 8)) * 1000, 300000);
     logger.debug(`⏸️  Madara still down, retrying in ${delay / 1000}s...`);
 
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await sleep(delay);
   }
 
   logger.error(
-    `❌ Madara recovery timeout - exceeded ${TimeoutConfig.MADARA_RECOVERY_MAX_WAIT / (60 * 60 * 1000)} hour wait period`,
+    `❌ Madara recovery timeout - exceeded ${maxWaitMs / (60 * 60 * 1000)} hour wait period`,
   );
   return false;
 }
@@ -100,7 +145,10 @@ export async function executeWithMadaraRecovery<T>(
         onRecoveryStart();
       }
 
-      const recovered = await waitForMadaraRecovery();
+      const recovered = await waitForMadaraRecovery({
+        requireObservedDown: true,
+        minHealthyChecks: 2,
+      });
 
       if (!recovered) {
         if (onRecoveryFailure) {
