@@ -87,8 +87,10 @@ export class RetryExecutor {
           logger.error(
             `❌ ${operationName} failed after ${attempt + 1} attempts. Last error: ${lastError.message}`,
           );
-          throw new Error(
-            `${operationName} failed after ${attempt + 1} attempts: ${lastError.message}`,
+          throw this.annotateTerminalError(
+            lastError,
+            operationName,
+            attempt + 1,
           );
         }
 
@@ -119,6 +121,22 @@ export class RetryExecutor {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private annotateTerminalError(
+    error: Error | undefined,
+    operationName: string,
+    attempts: number,
+  ): Error {
+    const message = `${operationName} failed after ${attempts} attempts`;
+
+    if (!error) {
+      return new Error(message);
+    }
+
+    const annotatedMessage = `${message}: ${error.message}`;
+    error.message = annotatedMessage;
+    return error;
   }
 }
 
