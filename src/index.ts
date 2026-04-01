@@ -11,10 +11,9 @@ import {
   syncEndpoint,
   cancelSync,
   getSyncStatus,
-  startSync,
 } from "./sync.js";
 import { metricsMiddleware } from "./telemetry/middleware.js";
-import { BlockHashMismatchError } from "./errors/index.js";
+import { reconcileManager } from "./reconcile/index.js";
 
 const app = express();
 app.use(express.json());
@@ -88,47 +87,14 @@ async function recoverOnStartup(): Promise<void> {
       return;
     }
 
-    if (state.status !== "running") {
+    if (!persistence.shouldAutoResumeOnStartup()) {
       logger.info(`✅ State file shows status="${state.status}" - waiting for RPC call to start sync`);
       return;
     }
 
-    // State says we should be running - validate and recover
-    logger.info("🔍 Found running state - validating chain integrity...");
-
-    try {
-      const recovery = await persistence.validateAndGetResumePoint();
-
-      logger.info(`✅ Chain integrity validated`);
-      logger.info(`🔄 Resuming sync from block ${recovery.resumeFrom}`);
-
-      const mode = recovery.isContinuous ? "CONTINUOUS" : "FIXED";
-      logger.info(`📋 Mode: ${mode}, Target: ${recovery.syncTo}`);
-
-      // Start sync from recovery point
-      const result = await startSync(
-        recovery.isContinuous ? "latest" : recovery.syncTo,
-      );
-
-      if (result.alreadyComplete) {
-        logger.info("✅ Sync already complete - marking as idle");
-        persistence.stopSync();
-      } else {
-        logger.info(`✅ Successfully recovered sync process ${result.processId}`);
-      }
-    } catch (error) {
-      if (error instanceof BlockHashMismatchError) {
-        logger.error("❌ FATAL: Block hash mismatch detected!");
-        logger.error("❌ Chain integrity compromised - cannot recover safely");
-        logger.error("❌ Exiting with error code 1");
-        process.exit(1);
-      }
-      throw error;
-    }
+    await reconcileManager.recoverOnStartup();
   } catch (error) {
     logger.error("❌ Error during recovery:", error);
-    // For non-hash-mismatch errors, mark as idle and let operator investigate
-    persistence.stopSync();
     throw error;
   }
 }
@@ -142,6 +108,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   try {
     // Stop all probes
     await syncStateManager.shutdown();
+    reconcileManager.stop();
 
     // Shutdown OpenTelemetry
     await shutdownTelemetry();
@@ -166,6 +133,8 @@ async function main() {
       await handleCleanSlate();
 
       logger.info("🚀 Starting Transaction Replay Service");
+
+      reconcileManager.start();
 
       // Recover any incomplete sync
       await recoverOnStartup();

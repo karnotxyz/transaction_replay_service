@@ -69,6 +69,25 @@ export class InvalidBlockError extends AppError {
 }
 
 /**
+ * Local block alignment is inconsistent with the next block to replay
+ */
+export class BlockAlignmentError extends AppError {
+  public readonly currentBlock: number;
+  public readonly latestBlock: number;
+
+  constructor(currentBlock: number, latestBlock: number) {
+    super(
+      `Sync block ${currentBlock} is not 1 + ${latestBlock}`,
+      ErrorCode.BLOCK_ALIGNMENT,
+      500,
+      true,
+    );
+    this.currentBlock = currentBlock;
+    this.latestBlock = latestBlock;
+  }
+}
+
+/**
  * Block hash mismatch
  */
 export class BlockHashMismatchError extends AppError {

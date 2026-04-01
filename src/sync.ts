@@ -28,13 +28,31 @@ import {
   SyncInProgressError,
   InvalidBlockError,
   MadaraDownError,
+  BlockAlignmentError,
+  BlockHashMismatchError,
 } from "./errors/index.js";
+import { reconcileManager } from "./reconcile/index.js";
+
+interface StartSyncOptions {
+  startBlock?: number;
+  skipReconcile?: boolean;
+}
+
+class SyncInterruptedForReconcileError extends Error {
+  constructor() {
+    super("Sync interrupted for reconcile");
+    this.name = "SyncInterruptedForReconcileError";
+  }
+}
 
 /**
  * Start a sync process (for auto-resume and API)
  */
-export async function startSync(endBlock: BlockIdentifier) {
-  if (syncStateManager.isSyncRunning()) {
+export async function startSync(
+  endBlock: BlockIdentifier,
+  options: StartSyncOptions = {},
+) {
+  if (syncStateManager.hasActiveProcess()) {
     const currentProcess = syncStateManager.getProcess()!;
     throw new SyncInProgressError(
       `Sync already in progress. Process ID: ${currentProcess.id}, Current block: ${currentProcess.currentBlock}, Target: ${currentProcess.syncTo}`,
@@ -52,10 +70,27 @@ export async function startSync(endBlock: BlockIdentifier) {
   const isContinuous =
     endBlock === BlockTag.LATEST || endBlock === "latest" || endBlock === null;
 
+  let preflightHead: number | null = null;
+  if (!options.skipReconcile) {
+    const reconcileResult = await reconcileManager.ensureHealthyBeforeSync();
+
+    if (
+      reconcileResult.status !== "healthy" &&
+      reconcileResult.status !== "repaired"
+    ) {
+      throw new Error(
+        `Unable to start sync until reconcile succeeds: ${reconcileResult.error || reconcileResult.status}`,
+      );
+    }
+
+    preflightHead = reconcileResult.localHead;
+  }
+
   const targetBlock = await getTargetBlock(endBlock);
 
-  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider_v9);
-  const startBlock = syncingNodeLatestBlock + 1;
+  const syncingNodeLatestBlock =
+    preflightHead ?? await getLatestBlockNumber(syncingProvider_v9);
+  const startBlock = options.startBlock ?? (syncingNodeLatestBlock + 1);
 
   if (startBlock > targetBlock) {
     return {
@@ -83,12 +118,19 @@ export async function startSync(endBlock: BlockIdentifier) {
     cancelRequested: false,
     isContinuous,
     originalTarget: isContinuous ? targetBlock : undefined,
+    reconcileRequested: false,
+    lastVerifiedBlock: null,
+    lastVerifiedHash: null,
   };
 
   syncStateManager.setProcess(newProcess);
 
   // Save state to file
-  persistence.startSync(isContinuous ? "latest" : targetBlock, isContinuous);
+  persistence.startSync(
+    isContinuous ? "latest" : targetBlock,
+    isContinuous,
+    startBlock,
+  );
 
   const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
   logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
@@ -109,7 +151,10 @@ export async function startSync(endBlock: BlockIdentifier) {
   // Mark sync as active
   updateActiveSyncProcessCount("sync", true);
 
-  syncBlocksAsync(newProcess).catch(async (error) => {
+  const runPromise = syncBlocksAsync(newProcess);
+  syncStateManager.setRunPromise(runPromise);
+
+  runPromise.catch(async (error) => {
     logger.error(`❌ Sync process ${processId} failed:`, error);
     if (newProcess.isContinuous) {
       syncStateManager.stopProbe();
@@ -117,7 +162,13 @@ export async function startSync(endBlock: BlockIdentifier) {
     syncStateManager.clearProcess();
     updateActiveSyncProcessCount("sync", false);
     // Mark sync as stopped on failure
-    persistence.stopSync();
+    const state = persistence.readState();
+    if (
+      !state ||
+      (state.status !== "reconciling" && state.status !== "reconcile_failed")
+    ) {
+      persistence.stopSync();
+    }
   });
 
   return {
@@ -128,6 +179,12 @@ export async function startSync(endBlock: BlockIdentifier) {
     estimatedBlocks: newProcess.totalBlocks,
     isContinuous,
   };
+}
+
+function throwIfReconcileRequested(process: SyncProcess): void {
+  if (process.reconcileRequested) {
+    throw new SyncInterruptedForReconcileError();
+  }
 }
 
 /**
@@ -316,6 +373,44 @@ function handleRecoveryAction(
   }
 }
 
+async function recoverFromMadaraOutage(
+  currentBlock: number,
+  process: SyncProcess,
+): Promise<{ newBlock: number; existingTxHashes: string[] }> {
+  const recoveryResult = await blockProcessor.handleBlockRecovery(
+    currentBlock,
+    process,
+  );
+
+  if (!recoveryResult.recovered) {
+    throw new Error(`Madara recovery failed at block ${currentBlock}`);
+  }
+
+  const handled = handleRecoveryAction(recoveryResult.action, currentBlock);
+
+  if (recoveryResult.action.type === "skip_to_block") {
+    const reconcileResult = await reconcileManager.handleRuntimeFault(
+      Math.max(0, handled.newBlock - 1),
+    );
+
+    if (
+      reconcileResult.status !== "healthy" &&
+      reconcileResult.status !== "repaired"
+    ) {
+      throw new Error(
+        `Reconcile after Madara recovery failed: ${reconcileResult.error || reconcileResult.status}`,
+      );
+    }
+
+    return {
+      newBlock: reconcileResult.resumeFrom ?? (reconcileResult.localHead + 1),
+      existingTxHashes: [],
+    };
+  }
+
+  return handled;
+}
+
 /**
  * Async function to process blocks
  */
@@ -343,6 +438,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         return;
       }
 
+      throwIfReconcileRequested(process);
+
       // For continuous sync: if caught up, wait for new blocks
       if (process.isContinuous && currentBlock > process.syncTo) {
         logger.info(
@@ -353,10 +450,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         await new Promise((resolve) =>
           setTimeout(resolve, ProbeConfig.CAUGHT_UP_WAIT_MS),
         );
+        throwIfReconcileRequested(process);
         continue;
       }
 
       process.currentBlock = currentBlock;
+      persistence.markCurrentBlock(currentBlock);
 
       // Update current block metric
       updateCurrentBlock(currentBlock);
@@ -366,6 +465,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       try {
         // Validate block (unless we're continuing with existing txs - block is already set up)
         if (existingTxHashes.length === 0) {
+          throwIfReconcileRequested(process);
           const validateResult = await blockProcessor.validateBlockReady(
             currentBlock,
             process,
@@ -375,6 +475,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
 
           // Set custom headers
+          throwIfReconcileRequested(process);
           const headersResult = await blockProcessor.setBlockHeaders(
             currentBlock,
             process,
@@ -391,30 +492,17 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Process block: send transactions (receipt validation happens after closeBlock)
         let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
         try {
+          throwIfReconcileRequested(process);
           blockResult = await processBlock(currentBlock, process, existingTxHashes);
           // Clear existing tx hashes after successful processing
           existingTxHashes = [];
         } catch (error) {
           if (error instanceof MadaraDownError) {
-            // Handle Madara recovery - STATELESS approach
             logger.warn(
               `🚨 Madara down detected during transaction sending at block ${currentBlock}`,
             );
-
-            const recoveryResult = await blockProcessor.handleBlockRecovery(
-              currentBlock,
-              process,
-            );
-
-            if (!recoveryResult.recovered) {
-              throw new Error(
-                `Madara recovery failed at block ${currentBlock}`,
-              );
-            }
-
-            // Handle the recovery action
             const { newBlock, existingTxHashes: recoveredTxHashes } =
-              handleRecoveryAction(recoveryResult.action, currentBlock);
+              await recoverFromMadaraOutage(currentBlock, process);
             currentBlock = newBlock;
             existingTxHashes = recoveredTxHashes;
             continue;
@@ -426,6 +514,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Validate all transactions are in PRE_CONFIRMED block before closing
         if (blockResult.txHashes.length > 0) {
           try {
+            throwIfReconcileRequested(process);
             const validateTxResult = await blockProcessor.validateTransactionsBeforeClose(
               currentBlock,
               blockResult.txHashes,
@@ -440,19 +529,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
                 `🚨 Madara down detected during pre-close validation at block ${currentBlock}`,
               );
 
-              const recoveryResult = await blockProcessor.handleBlockRecovery(
-                currentBlock,
-                process,
-              );
-
-              if (!recoveryResult.recovered) {
-                throw new Error(
-                  `Madara recovery failed at block ${currentBlock}`,
-                );
-              }
-
               const { newBlock, existingTxHashes: recoveredTxHashes } =
-                handleRecoveryAction(recoveryResult.action, currentBlock);
+                await recoverFromMadaraOutage(currentBlock, process);
               currentBlock = newBlock;
               existingTxHashes = recoveredTxHashes;
               continue;
@@ -464,6 +542,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Close the block (must happen before receipt validation)
         let closeResult;
         try {
+          throwIfReconcileRequested(process);
           closeResult = await blockProcessor.closeCurrentBlock(
             currentBlock,
             process,
@@ -473,25 +552,11 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
         } catch (error) {
           if (error instanceof MadaraDownError) {
-            // Handle Madara recovery during closeBlock - STATELESS approach
             logger.warn(
               `🚨 Madara down detected during closeBlock at block ${currentBlock}`,
             );
-
-            const recoveryResult = await blockProcessor.handleBlockRecovery(
-              currentBlock,
-              process,
-            );
-
-            if (!recoveryResult.recovered) {
-              throw new Error(
-                `Madara recovery failed at block ${currentBlock}`,
-              );
-            }
-
-            // Handle the recovery action
             const { newBlock, existingTxHashes: recoveredTxHashes } =
-              handleRecoveryAction(recoveryResult.action, currentBlock);
+              await recoverFromMadaraOutage(currentBlock, process);
             currentBlock = newBlock;
             existingTxHashes = recoveredTxHashes;
             continue;
@@ -502,31 +567,18 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Validate receipts AFTER block is closed
         if (blockResult.txHashes.length > 0) {
           try {
+            throwIfReconcileRequested(process);
             await parallelTransactionProcessor.validateReceipts(
               currentBlock,
               blockResult.txHashes,
             );
           } catch (error) {
             if (error instanceof MadaraDownError) {
-              // Handle Madara recovery during receipt validation - STATELESS approach
               logger.warn(
                 `🚨 Madara down detected during receipt validation at block ${currentBlock}`,
               );
-
-              const recoveryResult = await blockProcessor.handleBlockRecovery(
-                currentBlock,
-                process,
-              );
-
-              if (!recoveryResult.recovered) {
-                throw new Error(
-                  `Madara recovery failed at block ${currentBlock}`,
-                );
-              }
-
-              // Handle the recovery action
               const { newBlock, existingTxHashes: recoveredTxHashes } =
-                handleRecoveryAction(recoveryResult.action, currentBlock);
+                await recoverFromMadaraOutage(currentBlock, process);
               currentBlock = newBlock;
               existingTxHashes = recoveredTxHashes;
               continue;
@@ -538,6 +590,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Verify block hash
         let verifyResult;
         try {
+          throwIfReconcileRequested(process);
           verifyResult = await blockProcessor.verifyBlockHash(
             currentBlock,
             process,
@@ -547,25 +600,11 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
         } catch (error) {
           if (error instanceof MadaraDownError) {
-            // Handle Madara recovery during hash verification - STATELESS approach
             logger.warn(
               `🚨 Madara down detected during hash verification at block ${currentBlock}`,
             );
-
-            const recoveryResult = await blockProcessor.handleBlockRecovery(
-              currentBlock,
-              process,
-            );
-
-            if (!recoveryResult.recovered) {
-              throw new Error(
-                `Madara recovery failed at block ${currentBlock}`,
-              );
-            }
-
-            // Handle the recovery action
             const { newBlock, existingTxHashes: recoveredTxHashes } =
-              handleRecoveryAction(recoveryResult.action, currentBlock);
+              await recoverFromMadaraOutage(currentBlock, process);
             currentBlock = newBlock;
             existingTxHashes = recoveredTxHashes;
             continue;
@@ -581,6 +620,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         throughputTracker.recordBlock(blockResult.txCount);
 
         process.processedBlocks++;
+        process.lastVerifiedBlock = currentBlock;
+        process.lastVerifiedHash = verifyResult.blockHash ?? null;
+
+        if (process.lastVerifiedHash) {
+          persistence.markBlockVerified(currentBlock, process.lastVerifiedHash);
+        }
 
         // Update sync progress metrics
         // Use known values instead of making redundant RPC calls:
@@ -600,6 +645,48 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
+        if (error instanceof SyncInterruptedForReconcileError) {
+          process.status = ProcessStatus.RECONCILING;
+          syncStateManager.stopProbe();
+          syncStateManager.clearProcess();
+          updateActiveSyncProcessCount("sync", false);
+          logger.info(
+            `⏸️ Sync process ${process.id} yielded for reconcile at block ${currentBlock}`,
+          );
+          return;
+        }
+
+        if (
+          error instanceof BlockHashMismatchError ||
+          error instanceof BlockAlignmentError
+        ) {
+          const anchorBlock =
+            error instanceof BlockAlignmentError
+              ? Math.max(error.currentBlock, error.latestBlock)
+              : error.blockNumber;
+          const reconcileResult = await reconcileManager.handleRuntimeFault(
+            anchorBlock,
+          );
+
+          if (
+            reconcileResult.status === "healthy" ||
+            reconcileResult.status === "repaired"
+          ) {
+            existingTxHashes = [];
+            currentBlock =
+              reconcileResult.resumeFrom ?? (reconcileResult.localHead + 1);
+            process.reconcileRequested = false;
+            process.status = ProcessStatus.RUNNING;
+            continue;
+          }
+
+          if (reconcileResult.status === "failed") {
+            persistence.markReconcileFailed(true);
+          } else if (reconcileResult.status === "deferred") {
+            persistence.markReconciling(true);
+          }
+        }
+
         // Record failed block processing metric
         recordBlockStatus("failed");
 
@@ -703,6 +790,26 @@ export const getSyncStatus = async (req: Request, res: Response) => {
     const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
+      const state = persistence.readState();
+      if (
+        state &&
+        (state.status === "reconciling" || state.status === "reconcile_failed")
+      ) {
+        return res.json({
+          message:
+            state.status === "reconciling"
+              ? "Replay is currently reconciling the confirmed head"
+              : "Replay reconcile is in a failed state",
+          reconcile: {
+            status: state.status,
+            currentBlock: state.currentBlock,
+            lastVerifiedBlock: state.lastVerifiedBlock,
+            resumeAfterReconcile: state.resumeAfterReconcile,
+            endBlock: state.syncTo,
+          },
+        });
+      }
+
       return res.json({
         message: "No sync process currently running",
       });
@@ -760,3 +867,5 @@ export const getSyncStatus = async (req: Request, res: Response) => {
     });
   }
 };
+
+reconcileManager.registerStartSyncHandler(startSync);

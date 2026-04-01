@@ -3,29 +3,21 @@ import path from "path";
 import logger from "./logger.js";
 import { SyncState } from "./types.js";
 import { config } from "./config.js";
-import { ProcessStatus, ProcessStatusType } from "./constants.js";
-import {
-  getLatestBlockNumber,
-  getBlockWithTxHashes,
-} from "./operations/blockOperations.js";
-import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
-import { BlockHashMismatchError } from "./errors/index.js";
+import { ProcessStatus } from "./constants.js";
+
+type PersistedStatus = SyncState["status"];
 
 /**
- * File-based persistence layer for sync state
- * Replaces Redis with a simple JSON file
+ * File-based persistence layer for sync state.
  */
 class PersistenceLayer {
-  private filePath: string;
+  private readonly filePath: string;
 
   constructor() {
     this.filePath = config.stateFilePath;
     this.ensureDirectoryExists();
   }
 
-  /**
-   * Ensure the directory for the state file exists
-   */
   private ensureDirectoryExists(): void {
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
@@ -34,9 +26,45 @@ class PersistenceLayer {
     }
   }
 
-  /**
-   * Read the current sync state from file
-   */
+  private createDefaultState(): SyncState {
+    return {
+      status: "idle",
+      syncTo: null,
+      isContinuous: false,
+      currentBlock: null,
+      lastVerifiedBlock: null,
+      lastVerifiedHash: null,
+      resumeAfterReconcile: false,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private normalizeState(rawState: Partial<SyncState>): SyncState {
+    const defaultState = this.createDefaultState();
+
+    return {
+      status: rawState.status ?? defaultState.status,
+      syncTo:
+        rawState.syncTo === undefined ? defaultState.syncTo : rawState.syncTo,
+      isContinuous: rawState.isContinuous ?? defaultState.isContinuous,
+      currentBlock:
+        rawState.currentBlock === undefined
+          ? defaultState.currentBlock
+          : rawState.currentBlock,
+      lastVerifiedBlock:
+        rawState.lastVerifiedBlock === undefined
+          ? defaultState.lastVerifiedBlock
+          : rawState.lastVerifiedBlock,
+      lastVerifiedHash:
+        rawState.lastVerifiedHash === undefined
+          ? defaultState.lastVerifiedHash
+          : rawState.lastVerifiedHash,
+      resumeAfterReconcile:
+        rawState.resumeAfterReconcile ?? defaultState.resumeAfterReconcile,
+      updatedAt: rawState.updatedAt ?? defaultState.updatedAt,
+    };
+  }
+
   public readState(): SyncState | null {
     try {
       if (!fs.existsSync(this.filePath)) {
@@ -44,27 +72,20 @@ class PersistenceLayer {
       }
 
       const content = fs.readFileSync(this.filePath, "utf-8");
-      const state = JSON.parse(content) as SyncState;
-      return state;
+      const parsed = JSON.parse(content) as Partial<SyncState>;
+      return this.normalizeState(parsed);
     } catch (error) {
       logger.error(`❌ Failed to read state file: ${error}`);
       return null;
     }
   }
 
-  /**
-   * Write sync state to file atomically
-   * Uses write-to-temp-then-rename pattern for safety
-   */
   public writeState(state: SyncState): void {
     try {
       const tempPath = `${this.filePath}.tmp`;
       const content = JSON.stringify(state, null, 2);
 
-      // Write to temp file first
       fs.writeFileSync(tempPath, content, "utf-8");
-
-      // Atomic rename
       fs.renameSync(tempPath, this.filePath);
 
       logger.info(`💾 State saved: status=${state.status}`);
@@ -74,16 +95,10 @@ class PersistenceLayer {
     }
   }
 
-  /**
-   * Check if state file exists
-   */
   public stateExists(): boolean {
     return fs.existsSync(this.filePath);
   }
 
-  /**
-   * Delete state file
-   */
   public clearState(): void {
     try {
       if (fs.existsSync(this.filePath)) {
@@ -96,151 +111,158 @@ class PersistenceLayer {
     }
   }
 
-  /**
-   * Mark sync as running
-   */
-  public startSync(syncTo: number | "latest", isContinuous: boolean): void {
-    const state: SyncState = {
+  public patchState(patch: Partial<SyncState>): SyncState | null {
+    const currentState = this.readState() ?? this.createDefaultState();
+    const nextState = this.normalizeState({
+      ...currentState,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    });
+
+    this.writeState(nextState);
+    return nextState;
+  }
+
+  public startSync(
+    syncTo: number | "latest",
+    isContinuous: boolean,
+    currentBlock: number,
+  ): void {
+    const currentState = this.readState();
+    const defaultLastVerifiedBlock =
+      currentBlock > 0 ? currentBlock - 1 : null;
+
+    const state: SyncState = this.normalizeState({
       status: ProcessStatus.RUNNING,
       syncTo,
       isContinuous,
-      updatedAt: new Date().toISOString(),
-    };
+      currentBlock,
+      lastVerifiedBlock:
+        currentState?.lastVerifiedBlock ?? defaultLastVerifiedBlock,
+      lastVerifiedHash: currentState?.lastVerifiedHash ?? null,
+      resumeAfterReconcile: false,
+    });
+
     this.writeState(state);
   }
 
-  /**
-   * Mark sync as idle (stopped/completed)
-   */
   public stopSync(): void {
-    const state: SyncState = {
+    const currentState = this.readState();
+    const state: SyncState = this.normalizeState({
       status: "idle",
       syncTo: null,
       isContinuous: false,
-      updatedAt: new Date().toISOString(),
-    };
+      currentBlock: null,
+      lastVerifiedBlock: currentState?.lastVerifiedBlock ?? null,
+      lastVerifiedHash: currentState?.lastVerifiedHash ?? null,
+      resumeAfterReconcile: false,
+    });
+
     this.writeState(state);
   }
 
-  /**
-   * Update sync target (for continuous sync)
-   */
   public updateSyncTarget(newTarget: number): void {
     const currentState = this.readState();
     if (currentState && currentState.status === ProcessStatus.RUNNING) {
-      currentState.syncTo = newTarget;
-      currentState.updatedAt = new Date().toISOString();
-      this.writeState(currentState);
+      this.patchState({ syncTo: newTarget });
     }
   }
 
-  /**
-   * Check if we should be running based on state file
-   */
+  public markCurrentBlock(currentBlock: number): void {
+    const currentState = this.readState();
+    if (!currentState) {
+      return;
+    }
+
+    this.patchState({ currentBlock });
+  }
+
+  public markBlockVerified(blockNumber: number, blockHash: string): void {
+    const currentState = this.readState();
+    if (!currentState) {
+      return;
+    }
+
+    this.patchState({
+      currentBlock: blockNumber + 1,
+      lastVerifiedBlock: blockNumber,
+      lastVerifiedHash: blockHash,
+    });
+  }
+
+  public markReconciling(resumeAfterReconcile: boolean): void {
+    this.patchState({
+      status: "reconciling",
+      resumeAfterReconcile,
+    });
+  }
+
+  public markReconcileFailed(resumeAfterReconcile: boolean): void {
+    this.patchState({
+      status: "reconcile_failed",
+      resumeAfterReconcile,
+    });
+  }
+
+  public restoreIdleAfterReconcile(): void {
+    const currentState = this.readState();
+    if (!currentState) {
+      this.stopSync();
+      return;
+    }
+
+    this.patchState({
+      status: "idle",
+      syncTo: null,
+      isContinuous: false,
+      currentBlock: currentState.lastVerifiedBlock === null
+        ? null
+        : currentState.lastVerifiedBlock + 1,
+      resumeAfterReconcile: false,
+    });
+  }
+
   public shouldBeRunning(): boolean {
     const state = this.readState();
     return state !== null && state.status === ProcessStatus.RUNNING;
   }
 
-  /**
-   * Validate chain integrity and get resume point
-   * Returns the block number to resume from, or throws on mismatch
-   */
-  public async validateAndGetResumePoint(): Promise<{
-    resumeFrom: number;
-    syncTo: number | "latest";
-    isContinuous: boolean;
-  }> {
+  public shouldAutoResumeOnStartup(): boolean {
     const state = this.readState();
-
-    if (!state || state.status !== ProcessStatus.RUNNING) {
-      throw new Error("No running sync state found");
+    if (!state) {
+      return false;
     }
 
-    logger.info("🔍 Validating chain integrity before resume...");
-
-    // Get syncing node's latest block
-    const syncingLatest = await getLatestBlockNumber(syncingProvider_v9);
-    logger.info(`📊 Syncing node latest block: ${syncingLatest}`);
-
-    // Get the block from syncing node
-    const syncingBlock = await getBlockWithTxHashes(
-      syncingProvider_v9,
-      syncingLatest,
-    );
-
-    // Get the same block from original node
-    const originalBlock = await getBlockWithTxHashes(
-      originalProvider_v9,
-      syncingLatest,
-    );
-
-    // Extract hashes - handle both confirmed and pending blocks
-    const syncingBlockHash =
-      "block_hash" in syncingBlock ? syncingBlock.block_hash : null;
-    const originalBlockHash =
-      "block_hash" in originalBlock ? originalBlock.block_hash : null;
-    const syncingParentHash =
-      "parent_hash" in syncingBlock ? syncingBlock.parent_hash : null;
-    const originalParentHash =
-      "parent_hash" in originalBlock ? originalBlock.parent_hash : null;
-
-    logger.info(`🔗 Syncing block ${syncingLatest}:`);
-    logger.info(`   block_hash: ${syncingBlockHash}`);
-    logger.info(`   parent_hash: ${syncingParentHash}`);
-    logger.info(`🔗 Original block ${syncingLatest}:`);
-    logger.info(`   block_hash: ${originalBlockHash}`);
-    logger.info(`   parent_hash: ${originalParentHash}`);
-
-    // Validate block hash
-    if (syncingBlockHash && originalBlockHash) {
-      if (syncingBlockHash !== originalBlockHash) {
-        logger.error(
-          `❌ Block hash mismatch at block ${syncingLatest}!`,
-        );
-        logger.error(`   Syncing:  ${syncingBlockHash}`);
-        logger.error(`   Original: ${originalBlockHash}`);
-        throw new BlockHashMismatchError(
-          syncingLatest,
-          originalBlockHash,
-          syncingBlockHash,
-        );
-      }
-      logger.info(`✅ Block hash matches`);
+    if (state.status === ProcessStatus.RUNNING) {
+      return true;
     }
 
-    // Validate parent hash
-    if (syncingParentHash && originalParentHash) {
-      if (syncingParentHash !== originalParentHash) {
-        logger.error(
-          `❌ Parent hash mismatch at block ${syncingLatest}!`,
-        );
-        logger.error(`   Syncing:  ${syncingParentHash}`);
-        logger.error(`   Original: ${originalParentHash}`);
-        throw new BlockHashMismatchError(
-          syncingLatest - 1,
-          originalParentHash,
-          syncingParentHash,
-        );
-      }
-      logger.info(`✅ Parent hash matches`);
-    }
+    return state.status === "reconciling" && state.resumeAfterReconcile;
+  }
 
-    logger.info(`✅ Chain integrity validated - safe to resume`);
+  public isHardReconcileFailure(): boolean {
+    const state = this.readState();
+    return state?.status === "reconcile_failed";
+  }
 
-    // Determine sync target
-    let syncTo: number | "latest" = state.syncTo ?? "latest";
-    if (state.isContinuous) {
-      syncTo = "latest";
+  public getIntendedTarget(): {
+    syncTo: number | "latest" | null;
+    isContinuous: boolean;
+    resumeAfterReconcile: boolean;
+    status: PersistedStatus;
+  } | null {
+    const state = this.readState();
+    if (!state) {
+      return null;
     }
 
     return {
-      resumeFrom: syncingLatest + 1,
-      syncTo,
+      syncTo: state.syncTo,
       isContinuous: state.isContinuous,
+      resumeAfterReconcile: state.resumeAfterReconcile,
+      status: state.status,
     };
   }
 }
 
-// Singleton instance
 export const persistence = new PersistenceLayer();

@@ -42,6 +42,15 @@ export const ProbeConfig = {
 } as const;
 
 /**
+ * Reconcile Configuration
+ */
+export const ReconcileConfig = {
+  INTERVAL_MS: 2 * 60 * 1000, // 2 minutes
+  MIN_SCAN_DEPTH: 3,
+  MAX_SCAN_DEPTH: 5,
+} as const;
+
+/**
  * Receipt Validation Configuration
  * Uses phased polling: fast initially, then slower over time
  */
@@ -86,6 +95,7 @@ export const ProcessStatus = {
   CANCELLED: "cancelled",
   FAILED: "failed",
   RECOVERING: "recovering",
+  RECONCILING: "reconciling",
 } as const;
 
 export type ProcessStatusType =
@@ -170,6 +180,7 @@ export const ErrorCode = {
   INVALID_BLOCK_NUMBER: "INVALID_BLOCK_NUMBER",
   INVALID_BLOCK_IDENTIFIER: "INVALID_BLOCK_IDENTIFIER",
   INVALID_BLOCK_TYPE: "INVALID_BLOCK_TYPE",
+  BLOCK_ALIGNMENT: "BLOCK_ALIGNMENT",
   BLOCK_NUMBER_TOO_LARGE: "BLOCK_NUMBER_TOO_LARGE",
   MADARA_DOWN: "MADARA_DOWN",
   CONFIGURATION_ERROR: "CONFIGURATION_ERROR",

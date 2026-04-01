@@ -13,6 +13,7 @@ export class SyncStateManager {
   // Sync state
   private currentProcess: SyncProcess | null = null;
   private probeInterval: NodeJS.Timeout | null = null;
+  private runPromise: Promise<void> | null = null;
 
   private constructor() {
     // Private constructor for singleton
@@ -37,6 +38,13 @@ export class SyncStateManager {
   }
 
   /**
+   * Whether any sync process is currently registered
+   */
+  public hasActiveProcess(): boolean {
+    return this.currentProcess !== null;
+  }
+
+  /**
    * Set current sync process
    */
   public setProcess(process: SyncProcess | null): void {
@@ -48,6 +56,28 @@ export class SyncStateManager {
       );
     } else {
       logger.info("📝 Sync process cleared");
+    }
+  }
+
+  /**
+   * Track the active run promise for cooperative shutdown/reconcile waits
+   */
+  public setRunPromise(runPromise: Promise<void> | null): void {
+    this.runPromise = runPromise;
+  }
+
+  /**
+   * Wait for the current run promise to finish, if any
+   */
+  public async waitForRunToFinish(): Promise<void> {
+    if (!this.runPromise) {
+      return;
+    }
+
+    try {
+      await this.runPromise;
+    } catch {
+      // The caller only needs to know the loop stopped.
     }
   }
 
@@ -79,7 +109,24 @@ export class SyncStateManager {
    */
   public clearProcess(): void {
     this.currentProcess = null;
+    this.runPromise = null;
     this.stopProbe();
+  }
+
+  /**
+   * Request that the current process yields for reconcile at the next phase boundary
+   */
+  public requestReconcileStop(): boolean {
+    if (!this.currentProcess) {
+      return false;
+    }
+
+    this.currentProcess.reconcileRequested = true;
+    this.currentProcess.status = ProcessStatus.RECONCILING;
+    logger.info(
+      `🛑 Reconcile stop requested for sync process ${this.currentProcess.id}`,
+    );
+    return true;
   }
 
   /**

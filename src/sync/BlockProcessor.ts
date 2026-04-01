@@ -25,6 +25,7 @@ export interface BlockProcessResult {
   success: boolean;
   needsRestart?: boolean;
   error?: Error;
+  blockHash?: string;
 }
 
 /**
@@ -228,7 +229,7 @@ export class BlockProcessor {
     process: SyncProcess,
   ): Promise<BlockProcessResult> {
     try {
-      await executeWithMadaraRecovery(
+      const blockHash = await executeWithMadaraRecovery(
         () => matchBlockHash(blockNumber),
         `verify block hash for ${blockNumber}`,
         () => {
@@ -243,7 +244,7 @@ export class BlockProcessor {
       );
 
       logger.info(`✅ Block hash verified for block ${blockNumber}`);
-      return { success: true };
+      return { success: true, blockHash };
     } catch (error) {
       logger.error(`Failed to verify block hash for ${blockNumber}:`, error);
       return { success: false, error: error as Error };

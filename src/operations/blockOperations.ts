@@ -443,9 +443,42 @@ export async function closeBlock(): Promise<void> {
 }
 
 /**
+ * Revert Madara to a confirmed block hash and trigger shutdown/restart.
+ */
+export async function revertToAndShutdown(blockHash: string): Promise<void> {
+  try {
+    const response = await axios.post<MadaraRpcResponse>(
+      config.adminRpcUrlSyncingNode,
+      {
+        jsonrpc: "2.0",
+        method: "madara_revertToAndShutdown",
+        id: 1,
+        params: [blockHash],
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
+    if (response.data.error) {
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
+    }
+
+    logger.warn(`↩️  Issued revertToAndShutdown to hash ${blockHash}`);
+  } catch (error) {
+    incrementErrors("revert_to_and_shutdown_error", "revertToAndShutdown");
+    throw wrapMadaraError(error, `revertToAndShutdown(${blockHash}) [syncing]`);
+  }
+}
+
+/**
  * Match block hashes between original and syncing nodes
  */
-export async function matchBlockHash(blockNumber: number): Promise<void> {
+export async function matchBlockHash(blockNumber: number): Promise<string> {
   const endTimer = startTimer();
 
   // Use retry logic with special handling for hash mismatch
@@ -491,7 +524,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
       }
 
       recordBlockProcessingDuration("verify_hash", endTimer());
-      return;
+      return syncingHash;
     } catch (error) {
       // If it's a hash mismatch error, don't retry
       if (error instanceof BlockHashMismatchError) {

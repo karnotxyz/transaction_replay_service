@@ -2,6 +2,7 @@ import logger from "../logger.js";
 import { getLatestBlockNumber } from "../operations/blockOperations.js";
 import { syncingProvider_v9 } from "../providers.js";
 import { blockValidationRetry } from "../retry/index.js";
+import { BlockAlignmentError } from "../errors/index.js";
 
 /**
  * Validate that a block is ready to be synced
@@ -12,9 +13,7 @@ export async function validateBlock(currentBlock: number): Promise<void> {
     const latestBlockNumber = await getLatestBlockNumber(syncingProvider_v9);
 
     if (latestBlockNumber + 1 !== currentBlock) {
-      throw new Error(
-        `Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`,
-      );
+      throw new BlockAlignmentError(currentBlock, latestBlockNumber);
     }
 
     logger.debug(

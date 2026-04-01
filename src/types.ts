@@ -32,6 +32,9 @@ export interface SyncProcess {
   completeCurrentBlock?: boolean;
   isContinuous?: boolean;
   originalTarget?: number;
+  reconcileRequested?: boolean;
+  lastVerifiedBlock?: number | null;
+  lastVerifiedHash?: string | null;
 }
 
 /**
@@ -39,9 +42,13 @@ export interface SyncProcess {
  * Minimal state - recovery queries syncing node for current position
  */
 export interface SyncState {
-  status: "running" | "idle";
+  status: "running" | "idle" | "reconciling" | "reconcile_failed";
   syncTo: number | "latest" | null;
   isContinuous: boolean;
+  currentBlock: number | null;
+  lastVerifiedBlock: number | null;
+  lastVerifiedHash: string | null;
+  resumeAfterReconcile: boolean;
   updatedAt: string;
 }
 
