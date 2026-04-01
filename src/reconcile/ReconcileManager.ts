@@ -244,14 +244,6 @@ export class ReconcileManager {
   private async runReconcile(options: ReconcileOptions): Promise<ReconcileResult> {
     const state = this.stateStore.readState();
 
-    if (state?.status === "reconcile_failed" && !options.allowHardRetry) {
-      return {
-        status: "failed",
-        localHead: state.lastVerifiedBlock ?? -1,
-        error: "Reconcile is hard-failed; waiting for an explicit retry trigger",
-      };
-    }
-
     logger.info(`🩺 Reconcile started [trigger=${options.trigger}]`);
 
     const shouldResumeAfterRepair = this.shouldResumeAfterRepair(state, options);
@@ -348,7 +340,11 @@ export class ReconcileManager {
       return true;
     }
 
-    return state.status === "reconciling" && state.resumeAfterReconcile;
+    return (
+      (state.status === "reconciling" ||
+        state.status === "reconcile_failed") &&
+      state.resumeAfterReconcile
+    );
   }
 
   private async stopActiveSyncIfNeeded(): Promise<void> {
@@ -382,7 +378,13 @@ export class ReconcileManager {
     }
 
     const anchor = Math.max(0, localHead);
-    const scanPlans = [buildScanPlan(anchor), buildScanPlan(anchor, true)];
+    const maxDepth = Math.min(ReconcileConfig.MAX_SCAN_DEPTH, anchor + 1);
+    const scanDepths = Array.from(
+      new Set(
+        ReconcileConfig.SCAN_DEPTHS.map((depth) => Math.min(depth, maxDepth)),
+      ),
+    );
+    const scanPlans = scanDepths.map((depth) => buildScanPlan(anchor, depth));
 
     for (const plan of scanPlans) {
       const comparisons = await this.fetchComparisons(
@@ -400,7 +402,18 @@ export class ReconcileManager {
       }
 
       const scan = evaluateBoundaryWindow(comparisons);
-      if (scan.status !== "unrecoverable" || plan.extended) {
+      const hasMoreDepth = plan.depth < maxDepth;
+      const needsExtendedRetryContext =
+        scan.status === "repairable" &&
+        !scan.deeperCandidate &&
+        hasMoreDepth &&
+        (scan.lastGood?.blockNumber ?? 0) > 0;
+
+      if (needsExtendedRetryContext) {
+        continue;
+      }
+
+      if (scan.status !== "unrecoverable" || !hasMoreDepth) {
         return { localHead, scan };
       }
     }
@@ -507,6 +520,9 @@ export class ReconcileManager {
 
       const verification = await this.verifyRepair(targetGood, scan.firstBad!);
       if (verification.status === "deferred") {
+        logger.warn(
+          `⚠️ Reconcile verification deferred after revert to ${targetGood.blockNumber}: ${verification.error}`,
+        );
         return verification;
       }
 
@@ -532,6 +548,10 @@ export class ReconcileManager {
         );
         return result;
       }
+
+      logger.warn(
+        `⚠️ Reconcile verification failed after revert to ${targetGood.blockNumber}: ${verification.error}`,
+      );
 
       if (!deeperRetryUsed && deeperCandidate?.source.blockHash) {
         logger.warn(
@@ -650,8 +670,7 @@ export class ReconcileManager {
       shouldResumeAfterRepair &&
       result.resumeFrom !== undefined &&
       intended !== null &&
-      intended.syncTo !== null &&
-      intended.status !== "reconcile_failed";
+      intended.syncTo !== null;
 
     if (!shouldRestart) {
       this.stateStore.restoreIdleAfterReconcile();

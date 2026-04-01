@@ -18,7 +18,7 @@ export interface BlockComparison {
 export interface ScanPlan {
   rangeStart: number;
   rangeEnd: number;
-  extended: boolean;
+  depth: number;
 }
 
 export interface BoundaryScanResult {
@@ -31,17 +31,14 @@ export interface BoundaryScanResult {
 
 export function buildScanPlan(
   anchorBlock: number,
-  extended: boolean = false,
+  depth: number = ReconcileConfig.SCAN_DEPTHS[0],
 ): ScanPlan {
-  const depth = extended
-    ? ReconcileConfig.MAX_SCAN_DEPTH
-    : ReconcileConfig.MIN_SCAN_DEPTH;
   const rangeStart = Math.max(0, anchorBlock - depth + 1);
 
   return {
     rangeStart,
     rangeEnd: anchorBlock,
-    extended,
+    depth,
   };
 }
 

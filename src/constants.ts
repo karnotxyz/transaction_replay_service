@@ -46,8 +46,8 @@ export const ProbeConfig = {
  */
 export const ReconcileConfig = {
   INTERVAL_MS: 2 * 60 * 1000, // 2 minutes
-  MIN_SCAN_DEPTH: 3,
-  MAX_SCAN_DEPTH: 5,
+  SCAN_DEPTHS: [3, 5, 10, 25, 50, 100],
+  MAX_SCAN_DEPTH: 100,
 } as const;
 
 /**

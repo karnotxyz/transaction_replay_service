@@ -302,6 +302,39 @@ test("source unreachability defers reconcile without stopping active replay", as
   assert.equal(harness.calls.reverts.length, 0);
 });
 
+test("scheduled reconcile still runs after reconcile_failed and can restart intended sync", async () => {
+  const harness = createHarness({
+    localHead: 91,
+    state: {
+      status: "reconcile_failed",
+      syncTo: "latest",
+      isContinuous: true,
+      resumeAfterReconcile: true,
+    },
+    localBlocks: new Map([
+      [89, createBlock("0x89", 1)],
+      [90, createBlock("0x90", 1)],
+      [91, createBlock("0x91-local", 0)],
+    ]),
+    sourceBlocks: new Map([
+      [89, createBlock("0x89", 1)],
+      [90, createBlock("0x90", 1)],
+      [91, createBlock("0x91-source", 0)],
+    ]),
+    onRevert: (_hash, currentHarness) => {
+      currentHarness.setLocalHead(90);
+    },
+  });
+
+  const result = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+
+  assert.equal(result.status, "repaired");
+  assert.deepEqual(harness.calls.reverts, ["0x90"]);
+  assert.equal(harness.calls.starts.length, 1);
+  assert.equal(harness.calls.starts[0].endBlock, "latest");
+  assert.equal(harness.calls.starts[0].options?.startBlock, 91);
+});
+
 test("startup recovery reuses reconcile logic and restarts from the reconciled boundary", async () => {
   const harness = createHarness({
     localHead: 52,
@@ -389,6 +422,44 @@ test("scheduled reconcile extends the scan window from 3 to 5 blocks when needed
   assert.equal(result.status, "repaired");
   assert.deepEqual(harness.calls.reverts, ["0x67"]);
   assert.deepEqual(harness.calls.localBlocks, [68, 69, 70, 66, 67, 68, 69, 70, 67]);
+});
+
+test("scheduled reconcile extends a repairable boundary to keep a deeper retry available", async () => {
+  const harness = createHarness({
+    localHead: 53,
+    localBlocks: new Map([
+      [49, createBlock("0x49", 1)],
+      [50, createBlock("0x50", 0)],
+      [51, createBlock("0x51", 2)],
+      [52, createBlock("0x52-local", 0)],
+      [53, createBlock("0x53-local", 1)],
+    ]),
+    sourceBlocks: new Map([
+      [49, createBlock("0x49", 1)],
+      [50, createBlock("0x50", 0)],
+      [51, createBlock("0x51", 2)],
+      [52, createBlock("0x52-source", 0)],
+      [53, createBlock("0x53-source", 1)],
+    ]),
+    onRevert: (hash, currentHarness) => {
+      if (hash === "0x51") {
+        currentHarness.setLocalHead(52);
+        return;
+      }
+
+      if (hash === "0x50") {
+        currentHarness.setLocalHead(50);
+      }
+    },
+  });
+
+  const result = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+
+  assert.equal(result.status, "repaired");
+  assert.deepEqual(harness.calls.reverts, ["0x51", "0x50"]);
+  assert.equal(result.resumeFrom, 51);
+  assert.ok(harness.calls.localBlocks.includes(49));
+  assert.ok(harness.calls.sourceBlocks.includes(49));
 });
 
 test("reconcile performs exactly one one-block-deeper retry when the first repair is insufficient", async () => {
