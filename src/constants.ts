@@ -48,6 +48,7 @@ export const ReconcileConfig = {
   INTERVAL_MS: 2 * 60 * 1000, // 2 minutes
   SCAN_DEPTHS: [3, 5, 10, 25, 50, 100],
   MAX_SCAN_DEPTH: 100,
+  MAX_SAME_BLOCK_FAILURES: 10,
 } as const;
 
 /**

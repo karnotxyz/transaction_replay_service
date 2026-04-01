@@ -176,14 +176,24 @@ export class ReconcileManager {
       return;
     }
 
-    if (!this.stateStore.shouldAutoResumeOnStartup()) {
+    const shouldBootstrapLatest = this.shouldBootstrapLatest(state);
+
+    if (!this.stateStore.shouldAutoResumeOnStartup() && !shouldBootstrapLatest) {
       logger.info(
         `✅ State file shows status="${state.status}" - waiting for RPC call to start sync`,
       );
       return;
     }
 
-    logger.info("🔍 Startup reconcile: validating confirmed head before resume...");
+    if (shouldBootstrapLatest) {
+      logger.info(
+        "🔍 Startup reconcile: recovered idle lane detected, validating head before bootstrapping latest sync...",
+      );
+    } else {
+      logger.info(
+        "🔍 Startup reconcile: validating confirmed head before resume...",
+      );
+    }
 
     const outcome = await this.ensureHealthyHead({
       trigger: "startup",
@@ -251,15 +261,14 @@ export class ReconcileManager {
     logger.info(`🩺 Reconcile started [trigger=${options.trigger}]`);
 
     const shouldResumeAfterRepair = this.shouldResumeAfterRepair(state, options);
+    const fallbackEndBlock = this.getFallbackRestartTarget(state);
     const scanResult = await this.scanHead(options.anchorBlock);
 
     if ("error" in scanResult) {
       if (!options.inline && !this.syncController.hasActiveProcess()) {
-        if (scanResult.hardFailure) {
-          this.stateStore.markReconcileFailed(shouldResumeAfterRepair);
-        } else {
-          this.stateStore.markReconciling(shouldResumeAfterRepair);
-        }
+        this.stateStore.markReconciling(shouldResumeAfterRepair);
+      } else if (options.inline) {
+        this.stateStore.markReconciling(shouldResumeAfterRepair);
       }
 
       return {
@@ -278,12 +287,16 @@ export class ReconcileManager {
         resumeFrom: localHead + 1,
       };
 
+      if (options.inline) {
+        this.clearFailureStreak();
+      }
+
       if (!options.inline) {
         await this.finishServiceReconcile(
           result,
           shouldResumeAfterRepair,
           options.autoRestartIfIntended !== false,
-          state?.status === "reconcile_failed" ? "latest" : null,
+          fallbackEndBlock,
         );
       }
 
@@ -292,14 +305,19 @@ export class ReconcileManager {
     }
 
     if (scan.status === "unrecoverable" || !scan.lastGood || !scan.firstBad) {
-      if (!options.inline) {
-        this.stateStore.markReconcileFailed(shouldResumeAfterRepair);
-      }
-
-      return {
+      const result: ReconcileResult = {
         status: "failed",
         localHead,
         error: "Could not identify a last good block inside the scan window",
+        firstBadBlock: scan.firstBad?.blockNumber,
+      };
+
+      if (options.inline) {
+        this.persistFailedReconcileResult(result, shouldResumeAfterRepair);
+      }
+
+      return {
+        ...result,
       };
     }
 
@@ -319,8 +337,12 @@ export class ReconcileManager {
         repairResult,
         shouldResumeAfterRepair,
         options.autoRestartIfIntended !== false,
-        state?.status === "reconcile_failed" ? "latest" : null,
+        fallbackEndBlock,
       );
+    } else if (repairResult.status === "failed") {
+      this.persistFailedReconcileResult(repairResult, shouldResumeAfterRepair);
+    } else if (repairResult.status === "deferred") {
+      this.stateStore.markReconciling(shouldResumeAfterRepair);
     }
 
     return repairResult;
@@ -350,9 +372,92 @@ export class ReconcileManager {
       return true;
     }
 
-    return (
-      state.status === "reconciling" && state.resumeAfterReconcile
+    if (this.shouldBootstrapLatest(state)) {
+      return true;
+    }
+
+    return state.status === "reconciling" && state.resumeAfterReconcile;
+  }
+
+  private clearFailureStreak(): void {
+    this.stateStore.patchState({
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
+    });
+  }
+
+  private persistFailedReconcileResult(
+    result: ReconcileResult,
+    shouldResumeAfterRepair: boolean,
+  ): void {
+    if (result.firstBadBlock !== undefined) {
+      this.recordBlockFailure(result.firstBadBlock, shouldResumeAfterRepair);
+      return;
+    }
+
+    this.stateStore.markReconciling(shouldResumeAfterRepair);
+  }
+
+  private recordBlockFailure(
+    blockNumber: number,
+    shouldResumeAfterRepair: boolean,
+  ): void {
+    const state = this.stateStore.readState();
+    const nextCount =
+      state?.reconcileFailureBlock === blockNumber
+        ? state.reconcileFailureCount + 1
+        : 1;
+    const reachedLimit =
+      nextCount >= ReconcileConfig.MAX_SAME_BLOCK_FAILURES;
+
+    this.stateStore.patchState({
+      status: reachedLimit ? "reconcile_failed" : "reconciling",
+      resumeAfterReconcile: reachedLimit ? false : shouldResumeAfterRepair,
+      reconcileFailureBlock: blockNumber,
+      reconcileFailureCount: nextCount,
+    });
+
+    if (reachedLimit) {
+      logger.error(
+        `🛑 Reconcile hit the same bad block ${blockNumber} ${nextCount} times in a row - stopping automatic sync continuation`,
+      );
+      return;
+    }
+
+    logger.warn(
+      `🔁 Reconcile failed on block ${blockNumber} (${nextCount}/${ReconcileConfig.MAX_SAME_BLOCK_FAILURES}); will retry on the next scheduled loop`,
     );
+  }
+
+  private shouldBootstrapLatest(state: SyncState | null): boolean {
+    if (!state) {
+      return false;
+    }
+
+    return (
+      state.status === "idle" &&
+      state.syncTo === null &&
+      state.currentBlock !== null &&
+      state.lastVerifiedBlock !== null
+    );
+  }
+
+  private getFallbackRestartTarget(
+    state: SyncState | null,
+  ): number | "latest" | null {
+    if (!state) {
+      return null;
+    }
+
+    if (state.status === "reconcile_failed") {
+      return "latest";
+    }
+
+    if (this.shouldBootstrapLatest(state)) {
+      return "latest";
+    }
+
+    return null;
   }
 
   private async stopActiveSyncIfNeeded(): Promise<void> {
@@ -554,6 +659,11 @@ export class ReconcileManager {
         logger.info(
           `✅ Reconcile repaired dirty head. Resume from block ${result.resumeFrom}`,
         );
+
+        if (options.inline) {
+          this.clearFailureStreak();
+        }
+
         return result;
       }
 
@@ -569,10 +679,6 @@ export class ReconcileManager {
         targetGood = deeperCandidate;
         deeperCandidate = undefined;
         continue;
-      }
-
-      if (!options.inline) {
-        this.stateStore.markReconcileFailed(shouldResumeAfterRepair);
       }
 
       return {
@@ -660,7 +766,7 @@ export class ReconcileManager {
     fallbackEndBlock: number | "latest" | null,
   ): Promise<void> {
     if (result.status === "failed") {
-      this.stateStore.markReconcileFailed(shouldResumeAfterRepair);
+      this.persistFailedReconcileResult(result, shouldResumeAfterRepair);
       return;
     }
 
@@ -668,6 +774,8 @@ export class ReconcileManager {
       this.stateStore.markReconciling(shouldResumeAfterRepair);
       return;
     }
+
+    this.clearFailureStreak();
 
     if (this.syncController.hasActiveProcess()) {
       return;

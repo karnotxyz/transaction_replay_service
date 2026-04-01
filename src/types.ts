@@ -49,6 +49,8 @@ export interface SyncState {
   lastVerifiedBlock: number | null;
   lastVerifiedHash: string | null;
   resumeAfterReconcile: boolean;
+  reconcileFailureBlock: number | null;
+  reconcileFailureCount: number;
   updatedAt: string;
 }
 

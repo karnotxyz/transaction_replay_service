@@ -64,6 +64,8 @@ function createHarness(options?: {
     lastVerifiedBlock: null,
     lastVerifiedHash: null,
     resumeAfterReconcile: false,
+    reconcileFailureBlock: null,
+    reconcileFailureCount: 0,
     updatedAt: new Date().toISOString(),
     ...options?.state,
   };
@@ -335,6 +337,37 @@ test("scheduled reconcile still runs after reconcile_failed and can restart inte
   assert.equal(harness.calls.starts[0].options?.startBlock, 91);
 });
 
+test("scheduled reconcile bootstraps latest sync from a recovered idle lane", async () => {
+  const harness = createHarness({
+    localHead: 111,
+    state: {
+      status: "idle",
+      syncTo: null,
+      isContinuous: false,
+      currentBlock: 112,
+      lastVerifiedBlock: 111,
+      lastVerifiedHash: "0x111",
+    },
+    localBlocks: new Map([
+      [109, createBlock("0x109", 1)],
+      [110, createBlock("0x110", 0)],
+      [111, createBlock("0x111", 2)],
+    ]),
+    sourceBlocks: new Map([
+      [109, createBlock("0x109", 1)],
+      [110, createBlock("0x110", 0)],
+      [111, createBlock("0x111", 2)],
+    ]),
+  });
+
+  const result = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+
+  assert.equal(result.status, "healthy");
+  assert.equal(harness.calls.starts.length, 1);
+  assert.equal(harness.calls.starts[0].endBlock, "latest");
+  assert.equal(harness.calls.starts[0].options?.startBlock, 112);
+});
+
 test("scheduled reconcile restarts latest sync after repairing a failed lane with no saved target", async () => {
   const harness = createHarness({
     localHead: 101,
@@ -365,6 +398,78 @@ test("scheduled reconcile restarts latest sync after repairing a failed lane wit
   assert.equal(harness.calls.starts.length, 1);
   assert.equal(harness.calls.starts[0].endBlock, "latest");
   assert.equal(harness.calls.starts[0].options?.startBlock, 101);
+});
+
+test("same bad block must fail 10 times in a row before reconcile becomes terminal", async () => {
+  const harness = createHarness({
+    localHead: 141,
+    state: {
+      status: "running",
+      syncTo: "latest",
+      isContinuous: true,
+    },
+    localBlocks: new Map([
+      [139, createBlock("0x139", 1)],
+      [140, createBlock("0x140", 1)],
+      [141, createBlock("0x141-local", 0)],
+    ]),
+    sourceBlocks: new Map([
+      [139, createBlock("0x139", 1)],
+      [140, createBlock("0x140", 1)],
+      [141, createBlock("0x141-source", 0)],
+    ]),
+    onRevert: (_hash, currentHarness) => {
+      currentHarness.setLocalHead(141);
+      currentHarness.localBlocks.set(141, createBlock("0x141-still-bad", 0));
+    },
+  });
+
+  for (let attempt = 1; attempt <= 9; attempt++) {
+    const result = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+    assert.equal(result.status, "failed");
+    assert.equal(harness.state.status, "reconciling");
+    assert.equal(harness.state.resumeAfterReconcile, true);
+    assert.equal(harness.state.reconcileFailureBlock, 141);
+    assert.equal(harness.state.reconcileFailureCount, attempt);
+  }
+
+  const terminalResult = await harness.manager.ensureHealthyHead({ trigger: "scheduled" });
+
+  assert.equal(terminalResult.status, "failed");
+  assert.equal(harness.state.status, "reconcile_failed");
+  assert.equal(harness.state.resumeAfterReconcile, false);
+  assert.equal(harness.state.reconcileFailureBlock, 141);
+  assert.equal(harness.state.reconcileFailureCount, 10);
+});
+
+test("startup recovery bootstraps latest sync from a recovered idle lane", async () => {
+  const harness = createHarness({
+    localHead: 121,
+    state: {
+      status: "idle",
+      syncTo: null,
+      isContinuous: false,
+      currentBlock: 122,
+      lastVerifiedBlock: 121,
+      lastVerifiedHash: "0x121",
+    },
+    localBlocks: new Map([
+      [119, createBlock("0x119", 1)],
+      [120, createBlock("0x120", 1)],
+      [121, createBlock("0x121", 0)],
+    ]),
+    sourceBlocks: new Map([
+      [119, createBlock("0x119", 1)],
+      [120, createBlock("0x120", 1)],
+      [121, createBlock("0x121", 0)],
+    ]),
+  });
+
+  await harness.manager.recoverOnStartup();
+
+  assert.equal(harness.calls.starts.length, 1);
+  assert.equal(harness.calls.starts[0].endBlock, "latest");
+  assert.equal(harness.calls.starts[0].options?.startBlock, 122);
 });
 
 test("startup recovery reuses reconcile logic and restarts from the reconciled boundary", async () => {

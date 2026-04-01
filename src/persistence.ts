@@ -35,6 +35,8 @@ class PersistenceLayer {
       lastVerifiedBlock: null,
       lastVerifiedHash: null,
       resumeAfterReconcile: false,
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -61,6 +63,14 @@ class PersistenceLayer {
           : rawState.lastVerifiedHash,
       resumeAfterReconcile:
         rawState.resumeAfterReconcile ?? defaultState.resumeAfterReconcile,
+      reconcileFailureBlock:
+        rawState.reconcileFailureBlock === undefined
+          ? defaultState.reconcileFailureBlock
+          : rawState.reconcileFailureBlock,
+      reconcileFailureCount:
+        rawState.reconcileFailureCount === undefined
+          ? defaultState.reconcileFailureCount
+          : rawState.reconcileFailureCount,
       updatedAt: rawState.updatedAt ?? defaultState.updatedAt,
     };
   }
@@ -141,6 +151,8 @@ class PersistenceLayer {
         currentState?.lastVerifiedBlock ?? defaultLastVerifiedBlock,
       lastVerifiedHash: currentState?.lastVerifiedHash ?? null,
       resumeAfterReconcile: false,
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
     });
 
     this.writeState(state);
@@ -156,6 +168,8 @@ class PersistenceLayer {
       lastVerifiedBlock: currentState?.lastVerifiedBlock ?? null,
       lastVerifiedHash: currentState?.lastVerifiedHash ?? null,
       resumeAfterReconcile: false,
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
     });
 
     this.writeState(state);
@@ -187,6 +201,8 @@ class PersistenceLayer {
       currentBlock: blockNumber + 1,
       lastVerifiedBlock: blockNumber,
       lastVerifiedHash: blockHash,
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
     });
   }
 
@@ -219,6 +235,8 @@ class PersistenceLayer {
         ? null
         : currentState.lastVerifiedBlock + 1,
       resumeAfterReconcile: false,
+      reconcileFailureBlock: null,
+      reconcileFailureCount: 0,
     });
   }
 

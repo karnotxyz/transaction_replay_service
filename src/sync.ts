@@ -680,10 +680,18 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
             continue;
           }
 
-          if (reconcileResult.status === "failed") {
-            persistence.markReconcileFailed(true);
-          } else if (reconcileResult.status === "deferred") {
-            persistence.markReconciling(true);
+          if (
+            reconcileResult.status === "failed" ||
+            reconcileResult.status === "deferred"
+          ) {
+            const state = persistence.readState();
+            if (
+              !state ||
+              (state.status !== "reconciling" &&
+                state.status !== "reconcile_failed")
+            ) {
+              persistence.markReconciling(true);
+            }
           }
         }
 
@@ -806,6 +814,8 @@ export const getSyncStatus = async (req: Request, res: Response) => {
             lastVerifiedBlock: state.lastVerifiedBlock,
             resumeAfterReconcile: state.resumeAfterReconcile,
             endBlock: state.syncTo,
+            failureBlock: state.reconcileFailureBlock,
+            failureCount: state.reconcileFailureCount,
           },
         });
       }
