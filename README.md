@@ -71,13 +71,12 @@ RPC_URL_ORIGINAL_NODE=<original_node_url>
 RPC_URL_SYNCING_NODE=<syncing_node_url>
 ADMIN_RPC_URL_SYNCING_NODE=<admin_rpc_url>
 
-# Redis
-REDIS_URL=redis://localhost:6379
-
 # Optional
 PORT=3000
 NODE_ENV=development
+STATE_FILE_PATH=./sync-state.json
 CLEAN_SLATE=false
+MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
 ```
 
@@ -86,6 +85,7 @@ LOG_LEVEL=info
 - **Type-safe configuration**: All config values are validated on startup
 - **URL validation**: Ensures all RPC URLs are valid
 - **Sensible defaults**: Falls back to defaults for optional values
+- **Protocol guard**: Can stop replay before processing blocks above a configured Starknet version
 - **Masked logging**: Sensitive data is masked in logs
 
 ## API Endpoints
