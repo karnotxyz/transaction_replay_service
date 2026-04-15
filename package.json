@@ -10,6 +10,7 @@
     "dev": "ts-node src/index.ts",
     "check": "tsc --noEmit",
     "test": "npm run build && node --test dist/starknetVersion.test.js",
+    "test:live-boundary": "npm run build && node dist/starknetVersion.boundary.live.js",
     "test:live-parser": "npm run build && node dist/starknetVersion.live.js",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""

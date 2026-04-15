@@ -1,6 +1,5 @@
 import { config } from "../config.js";
-import { UnsupportedStarknetVersionError } from "../errors/index.js";
-import { compareStarknetVersions } from "../starknetVersion.js";
+import { assertBlockVersionSupported } from "../blockVersionGuard.js";
 
 export function assertSupportedBlockVersion(
   blockNumber: number,
@@ -12,21 +11,9 @@ export function assertSupportedBlockVersion(
     return;
   }
 
-  if (!starknetVersion) {
-    throw new UnsupportedStarknetVersionError(
-      blockNumber,
-      null,
-      maxSupportedVersion,
-    );
-  }
-
-  if (
-    compareStarknetVersions(starknetVersion, maxSupportedVersion) > 0
-  ) {
-    throw new UnsupportedStarknetVersionError(
-      blockNumber,
-      starknetVersion,
-      maxSupportedVersion,
-    );
-  }
+  assertBlockVersionSupported(
+    blockNumber,
+    starknetVersion,
+    maxSupportedVersion,
+  );
 }

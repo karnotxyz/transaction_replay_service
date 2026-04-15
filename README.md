@@ -243,6 +243,7 @@ npm run check
 
 ```bash
 npm test
+npm run test:live-boundary
 npm run test:live-parser
 ```
 
