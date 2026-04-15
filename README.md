@@ -239,6 +239,15 @@ npm run dev
 npm run check
 ```
 
+### Tests
+
+```bash
+npm test
+npm run test:live-parser
+```
+
+`test:live-parser` defaults to `https://pathfinder-sepolia.d.karnot.xyz` and can be pointed elsewhere with `LIVE_STARKNET_RPC_URL`.
+
 ## Monitoring
 
 ### Logs
