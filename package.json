@@ -9,9 +9,9 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "check": "tsc --noEmit",
-    "test": "npm run build && node --test dist/starknetVersion.test.js",
-    "test:live-boundary": "npm run build && node dist/starknetVersion.boundary.live.js",
-    "test:live-parser": "npm run build && node dist/starknetVersion.live.js",
+    "test": "npm run build && node --loader ts-node/esm --test test/starknetVersion.test.ts",
+    "test:live-boundary": "npm run build && node --loader ts-node/esm scripts/starknetVersion.boundary.live.ts",
+    "test:live-parser": "npm run build && node --loader ts-node/esm scripts/starknetVersion.live.ts",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import axios from "axios";
-import { assertBlockVersionSupported } from "./blockVersionGuard.js";
+import { assertBlockVersionSupported } from "../src/blockVersionGuard.js";
 
 interface JsonRpcError {
   code: number;

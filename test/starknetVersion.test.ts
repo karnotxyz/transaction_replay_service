@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   compareStarknetVersions,
   normalizeStarknetVersion,
-} from "./starknetVersion.js";
+} from "../src/starknetVersion.js";
 
 test("normalizeStarknetVersion strips prefixes and suffixes", () => {
   assert.equal(normalizeStarknetVersion("0.14.1"), "0.14.1");

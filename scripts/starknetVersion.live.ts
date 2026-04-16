@@ -3,7 +3,7 @@ import axios from "axios";
 import {
   compareStarknetVersions,
   normalizeStarknetVersion,
-} from "./starknetVersion.js";
+} from "../src/starknetVersion.js";
 
 interface JsonRpcError {
   code: number;
