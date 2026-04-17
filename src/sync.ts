@@ -14,6 +14,7 @@ import {
   getBlockWithTxs,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
+import { assertSupportedBlockVersion } from "./validation/index.js";
 import {
   incrementBlocksProcessed,
   recordBlockStatus,
@@ -226,13 +227,17 @@ interface ProcessBlockResult {
   txHashes: string[];
 }
 
+interface SourceBlockWithTxs {
+  starknet_version?: string;
+  transactions: TransactionWithHash[];
+}
+
 async function processBlock(
   blockNumber: number,
   process: SyncProcess,
+  blockWithTxs: SourceBlockWithTxs,
   existingTxHashes: string[] = [],
 ): Promise<ProcessBlockResult> {
-  const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
-
   let transactions = blockWithTxs.transactions as TransactionWithHash[];
   const totalTxCount = transactions.length;
 
@@ -364,6 +369,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
+        const sourceBlock = await getBlockWithTxs(
+          originalProvider_v9,
+          currentBlock,
+        ) as SourceBlockWithTxs;
+        assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
+
         // Validate block (unless we're continuing with existing txs - block is already set up)
         if (existingTxHashes.length === 0) {
           const validateResult = await blockProcessor.validateBlockReady(
@@ -391,7 +402,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // Process block: send transactions (receipt validation happens after closeBlock)
         let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
         try {
-          blockResult = await processBlock(currentBlock, process, existingTxHashes);
+          blockResult = await processBlock(
+            currentBlock,
+            process,
+            sourceBlock,
+            existingTxHashes,
+          );
           // Clear existing tx hashes after successful processing
           existingTxHashes = [];
         } catch (error) {
