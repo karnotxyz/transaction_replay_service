@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
+import { normalizeStarknetVersion } from "./starknetVersion.js";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ interface EnvironmentConfig {
 
   // Features
   cleanSlate: boolean;
+  maxSupportedStarknetVersion?: string;
 }
 
 class Config {
@@ -70,6 +72,12 @@ class Config {
       "ADMIN_RPC_URL_SYNCING_NODE",
     );
 
+    const maxSupportedStarknetVersion =
+      this.parseOptionalStarknetVersion(
+        process.env.MAX_SUPPORTED_STARKNET_VERSION,
+        "MAX_SUPPORTED_STARKNET_VERSION",
+      );
+
     const config: EnvironmentConfig = {
       // Server
       port: this.parsePort(process.env.PORT),
@@ -87,6 +95,7 @@ class Config {
 
       // Features
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
+      maxSupportedStarknetVersion,
     };
 
     this.logConfiguration(config);
@@ -114,6 +123,23 @@ class Config {
     return port;
   }
 
+  private parseOptionalStarknetVersion(
+    version: string | undefined,
+    varName: string,
+  ): string | undefined {
+    if (!version) {
+      return undefined;
+    }
+
+    try {
+      return normalizeStarknetVersion(version);
+    } catch {
+      throw new ConfigurationError(
+        `Invalid ${varName} value: ${version}. Expected a dotted numeric Starknet version such as 0.14.1.`,
+      );
+    }
+  }
+
   private logConfiguration(config: EnvironmentConfig): void {
     logger.info("📋 Configuration loaded:");
     logger.info(`  • Environment: ${config.nodeEnv}`);
@@ -128,6 +154,9 @@ class Config {
     logger.info(`  • State File: ${config.stateFilePath}`);
     logger.info(
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
+      `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
     );
 
     // OpenTelemetry Configuration
@@ -185,6 +214,10 @@ class Config {
 
   public get cleanSlate(): boolean {
     return this.config.cleanSlate;
+  }
+
+  public get maxSupportedStarknetVersion(): string | undefined {
+    return this.config.maxSupportedStarknetVersion;
   }
 
   public get isDevelopment(): boolean {
