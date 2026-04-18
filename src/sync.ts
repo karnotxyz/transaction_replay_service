@@ -238,8 +238,6 @@ async function processBlock(
   blockWithTxs: SourceBlockWithTxs,
   existingTxHashes: string[] = [],
 ): Promise<ProcessBlockResult> {
-  const blockWithTxs = await getOriginalBlockWithTxsAndProofFacts(blockNumber);
-
   let transactions = blockWithTxs.transactions as TransactionWithHash[];
   const totalTxCount = transactions.length;
 
@@ -371,10 +369,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        const sourceBlock = await getBlockWithTxs(
-          originalProvider_v9,
-          currentBlock,
-        ) as SourceBlockWithTxs;
+        const sourceBlock =
+          await getOriginalBlockWithTxsAndProofFacts(currentBlock);
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
 
         // Validate block (unless we're continuing with existing txs - block is already set up)
