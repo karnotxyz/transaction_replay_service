@@ -11,7 +11,7 @@ import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
-  getBlockWithTxs,
+  getOriginalBlockWithTxsAndProofFacts,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import { assertSupportedBlockVersion } from "./validation/index.js";
@@ -369,10 +369,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        const sourceBlock = await getBlockWithTxs(
-          originalProvider_v9,
-          currentBlock,
-        ) as SourceBlockWithTxs;
+        const sourceBlock =
+          await getOriginalBlockWithTxsAndProofFacts(currentBlock);
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
 
         // Validate block (unless we're continuing with existing txs - block is already set up)

@@ -14,6 +14,8 @@ import {
   originalProvider_v9,
   syncingProvider_v9,
   getNodeName,
+  getOriginalUserRpcUrl,
+  getSyncingUserRpcUrl,
 } from "../providers.js";
 import {
   recordBlockProcessingDuration,
@@ -114,6 +116,45 @@ export async function getBlockWithTxs(
 }
 
 /**
+ * Get original block with transaction details and proof facts from the v0.10 route.
+ */
+export async function getOriginalBlockWithTxsAndProofFacts(
+  blockNumber: number,
+): Promise<any> {
+  const rpcUrl = getOriginalUserRpcUrl();
+
+  return blockFetchRetry.execute(async () => {
+    try {
+      const response = await axios.post(
+        rpcUrl,
+        {
+          jsonrpc: "2.0",
+          method: "starknet_getBlockWithTxs",
+          params: [{ block_number: blockNumber }, ["INCLUDE_PROOF_FACTS"]],
+          id: 1,
+        },
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+
+      if (response.data.error) {
+        throw new Error(
+          `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+        );
+      }
+
+      return response.data.result;
+    } catch (error) {
+      throw wrapMadaraError(
+        error,
+        `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`,
+      );
+    }
+  }, `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`);
+}
+
+/**
  * Get block with all transaction receipts (single RPC call)
  * This is much more efficient than fetching individual receipts
  */
@@ -127,8 +168,8 @@ export async function getBlockWithReceipts(
     // Get the RPC URL from the provider
     const rpcUrl =
       provider === syncingProvider_v9
-        ? config.rpcUrlSyncingNode
-        : config.rpcUrlOriginalNode;
+        ? getSyncingUserRpcUrl()
+        : getOriginalUserRpcUrl();
 
     const response = await axios.post(
       rpcUrl,
