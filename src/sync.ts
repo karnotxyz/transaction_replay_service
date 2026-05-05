@@ -30,6 +30,7 @@ import {
   InvalidBlockError,
   MadaraDownError,
 } from "./errors/index.js";
+import { config } from "./config.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -96,7 +97,10 @@ export async function startSync(endBlock: BlockIdentifier) {
   logger.info(
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
   );
-  logger.info(`⚡ Mode: SEQUENTIAL sending, PARALLEL receipt validation`);
+  const txMode = config.sequentialValidation
+    ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+    : "SEQUENTIAL sending, PARALLEL receipt validation";
+  logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
     logger.info(
@@ -440,7 +444,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         }
 
         // Validate all transactions are in PRE_CONFIRMED block before closing
-        if (blockResult.txHashes.length > 0) {
+        // (skipped when sequential validation is enabled — each tx was already confirmed)
+        if (blockResult.txHashes.length > 0 && !config.sequentialValidation) {
           try {
             const validateTxResult = await blockProcessor.validateTransactionsBeforeClose(
               currentBlock,
