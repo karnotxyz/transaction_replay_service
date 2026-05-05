@@ -3,12 +3,14 @@ import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
 import { validateBlockReceipts } from "../operations/transactionOperations.js";
 import { syncingProvider_v9 } from "../providers.js";
+import { getPreConfirmedBlock } from "../operations/blockOperations.js";
 import { MadaraDownError } from "../errors/index.js";
 import { TransactionResult, SendTransactionsResult } from "../types.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
 } from "../telemetry/metrics.js";
+import { config } from "../config.js";
 
 /**
  * Process transactions for a block
@@ -16,7 +18,9 @@ import {
  */
 export class ParallelTransactionProcessor {
   /**
-   * Send transactions sequentially (no receipt validation - that happens after closeBlock)
+   * Send transactions sequentially.
+   * When SEQUENTIAL_VALIDATION is enabled, each transaction is confirmed
+   * in the PRE_CONFIRMED block before the next one is sent.
    */
   async sendTransactions(
     transactions: TransactionWithHash[],
@@ -26,8 +30,10 @@ export class ParallelTransactionProcessor {
       return { txResults: [], txHashes: [], sendDuration: 0 };
     }
 
+    const sequentialValidation = config.sequentialValidation;
+    const mode = sequentialValidation ? "send-and-validate" : "fire-and-forget";
     logger.info(
-      `Sending ${transactions.length} transactions sequentially...`,
+      `Sending ${transactions.length} transactions sequentially (${mode})...`,
     );
 
     const startTime = Date.now();
@@ -35,7 +41,6 @@ export class ParallelTransactionProcessor {
     const txResults: TransactionResult[] = [];
     const txHashes: string[] = [];
 
-    // SEQUENTIAL SENDING
     for (let index = 0; index < transactions.length; index++) {
       const tx = transactions[index];
 
@@ -49,6 +54,10 @@ export class ParallelTransactionProcessor {
 
         await processTx(tx, blockNumber);
 
+        if (sequentialValidation) {
+          await this.waitForTxInPreConfirmed(txHash, blockNumber, index + 1, transactions.length);
+        }
+
         txResults.push({
           txHash,
           success: true,
@@ -58,7 +67,7 @@ export class ParallelTransactionProcessor {
           logger.warn(
             `Madara down while sending transaction ${index + 1}/${transactions.length}`,
           );
-          throw error; // Propagate to caller for recovery handling
+          throw error;
         }
 
         logger.error(
@@ -74,7 +83,6 @@ export class ParallelTransactionProcessor {
     const sendDuration = Date.now() - startTime;
     logger.info(`All ${transactions.length} transactions sent in ${sendDuration}ms`);
 
-    // Record transaction sending duration
     recordBlockProcessingDuration("send_txs", endTimer());
 
     return {
@@ -82,6 +90,51 @@ export class ParallelTransactionProcessor {
       txHashes,
       sendDuration,
     };
+  }
+
+  /**
+   * Poll PRE_CONFIRMED block until the given transaction hash appears.
+   */
+  private async waitForTxInPreConfirmed(
+    txHash: string,
+    blockNumber: number,
+    txIndex: number,
+    totalTxs: number,
+    maxRetries: number = 500,
+    retryDelayMs: number = 200,
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+        const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
+
+        if (pendingTxHashes.includes(txHash)) {
+          logger.debug(
+            `  [${txIndex}/${totalTxs}] Tx ${txHash} confirmed in PRE_CONFIRMED (attempt ${attempt})`,
+          );
+          return;
+        }
+
+        if (attempt % 50 === 0) {
+          logger.info(
+            `  [${txIndex}/${totalTxs}] Still waiting for tx ${txHash} in PRE_CONFIRMED (attempt ${attempt}/${maxRetries})`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error;
+        }
+        logger.warn(
+          `  [${txIndex}/${totalTxs}] Error polling PRE_CONFIRMED (attempt ${attempt}/${maxRetries}): ${error}`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+
+    throw new Error(
+      `Transaction ${txHash} not found in PRE_CONFIRMED block ${blockNumber} after ${maxRetries} attempts`,
+    );
   }
 
   /**

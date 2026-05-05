@@ -27,6 +27,7 @@ interface EnvironmentConfig {
 
   // Features
   cleanSlate: boolean;
+  sequentialValidation: boolean;
   maxSupportedStarknetVersion?: string;
 }
 
@@ -95,6 +96,8 @@ class Config {
 
       // Features
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
+      sequentialValidation:
+        process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
       maxSupportedStarknetVersion,
     };
 
@@ -156,6 +159,9 @@ class Config {
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
     );
     logger.info(
+      `  • Sequential Validation: ${config.sequentialValidation ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
       `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
     );
 
@@ -214,6 +220,10 @@ class Config {
 
   public get cleanSlate(): boolean {
     return this.config.cleanSlate;
+  }
+
+  public get sequentialValidation(): boolean {
+    return this.config.sequentialValidation;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {
