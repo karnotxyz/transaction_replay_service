@@ -11,8 +11,8 @@ import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
 import {
-  originalProvider_v9,
-  syncingProvider_v9,
+  originalProvider,
+  syncingProvider,
   getNodeName,
   getOriginalUserRpcUrl,
   getSyncingUserRpcUrl,
@@ -40,9 +40,9 @@ export async function getLatestBlockNumber(
       const blockNumber = latestBlock.block_number;
 
       // Update metrics based on which provider this is
-      if (provider === originalProvider_v9) {
+      if (provider === originalProvider) {
         updateOriginalNodeBlockNumber(blockNumber);
-      } else if (provider === syncingProvider_v9) {
+      } else if (provider === syncingProvider) {
         updateSyncingNodeBlockNumber(blockNumber);
       }
 
@@ -167,7 +167,7 @@ export async function getBlockWithReceipts(
   try {
     // Get the RPC URL from the provider
     const rpcUrl =
-      provider === syncingProvider_v9
+      provider === syncingProvider
         ? getSyncingUserRpcUrl()
         : getOriginalUserRpcUrl();
 
@@ -326,7 +326,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
   const endTimer = startTimer();
   try {
     // Single fetch for all block data (was 3 separate calls before)
-    const block = await getBlockWithTxHashes(originalProvider_v9, currentBlock);
+    const block = await getBlockWithTxHashes(originalProvider, currentBlock);
 
     // Extract timestamp
     const timestamp = "timestamp" in block ? block.timestamp : null;
@@ -460,7 +460,7 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
       // Exponential backoff with cap to prevent overflow
       const delay = Math.min(Math.pow(2, attempts - 1) * 100, maxDelayMs);
       logger.info(
-        `Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`,
+        `🔁 Retrying block hash match in ${delay}ms... (attempt ${attempts}/${maxAttempts})`,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -468,11 +468,11 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
     try {
       // Fetch both hashes in parallel for better performance
       const [originalHash, syncingHash] = await Promise.all([
-        getBlockHash(originalProvider_v9, blockNumber),
-        getBlockHash(syncingProvider_v9, blockNumber),
+        getBlockHash(originalProvider, blockNumber),
+        getBlockHash(syncingProvider, blockNumber),
       ]);
-      logger.info(`Original node block hash: ${originalHash}`);
-      logger.info(`Syncing node block hash: ${syncingHash}`);
+      logger.info(`🔗 Original node block hash: ${originalHash}`);
+      logger.info(`🔗 Syncing node block hash: ${syncingHash}`);
 
       // Check if we failed to fetch either hash
       if (!originalHash || !syncingHash) {

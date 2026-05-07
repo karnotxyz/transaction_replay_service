@@ -1,6 +1,6 @@
 import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
-import { originalProvider_v9, syncingProvider_v9 } from "../providers.js";
+import { originalProvider, syncingProvider } from "../providers.js";
 import {
   setCustomHeader,
   closeBlock,
@@ -90,7 +90,7 @@ export class BlockProcessor {
 
           // Check PRE_CONFIRMED state after recovery
           const preConfirmedBlock =
-            await getPreConfirmedBlock(syncingProvider_v9);
+            await getPreConfirmedBlock(syncingProvider);
           if (preConfirmedBlock.transactions.length > 0) {
             logger.info(
               `⚠️  Block ${blockNumber} has ${preConfirmedBlock.transactions.length} txs in PRE_CONFIRMED after recovery`,
@@ -136,7 +136,7 @@ export class BlockProcessor {
       attempt++;
 
       try {
-        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
         const preConfirmedBlockNumber = preConfirmedBlock.block_number;
         const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
 
@@ -266,11 +266,11 @@ export class BlockProcessor {
   async queryMadaraState(targetBlockNumber: number): Promise<RecoveryAction> {
     try {
       // Get Madara's latest completed block
-      const latestBlock = await getLatestBlockNumber(syncingProvider_v9);
+      const latestBlock = await getLatestBlockNumber(syncingProvider);
       logger.info(`📊 Madara latest completed block: ${latestBlock}`);
 
       // Get PRE_CONFIRMED block state
-      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
       const preConfirmedBlockNumber = preConfirmedBlock.block_number;
       const preConfirmedTxHashes = (preConfirmedBlock.transactions || []) as string[];
 

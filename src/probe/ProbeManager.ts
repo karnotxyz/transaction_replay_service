@@ -2,7 +2,7 @@ import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
 import { persistence } from "../persistence.js";
 import { getLatestBlockNumber } from "../operations/blockOperations.js";
-import { originalProvider_v9 } from "../providers.js";
+import { originalProvider } from "../providers.js";
 import { ProbeConfig } from "../constants.js";
 import {
   incrementProbeChecks,
@@ -39,7 +39,7 @@ export class ProbeManager {
 
     while (retryCount < this.maxRetries) {
       try {
-        const latestBlock = await getLatestBlockNumber(originalProvider_v9);
+        const latestBlock = await getLatestBlockNumber(originalProvider);
 
         if (latestBlock > process.syncTo) {
           const oldTarget = process.syncTo;
