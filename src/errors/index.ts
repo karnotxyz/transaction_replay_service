@@ -152,9 +152,9 @@ export function isMadaraDownError(error: any): boolean {
     return true;
   }
 
-  const errorMessage = error?.message?.toLowerCase() || "";
-  const errorCode = error?.code?.toLowerCase() || "";
-  const errorCause = error?.cause?.code?.toLowerCase() || "";
+  const errorMessage = String(error?.message ?? "").toLowerCase();
+  const errorCode = String(error?.code ?? "").toLowerCase();
+  const errorCause = String(error?.cause?.code ?? "").toLowerCase();
 
   return (
     errorMessage.includes("econnrefused") ||

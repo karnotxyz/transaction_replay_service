@@ -243,7 +243,7 @@ export async function validateBlockReceipts(
   const timeout = ReceiptValidationConfig.TIMEOUT_MS;
 
   logger.info(
-    `Validating ${expectedTxHashes.length} receipts for block ${blockNumber} [${nodeName}]`,
+    `🧾 Validating ${expectedTxHashes.length} receipts for block ${blockNumber} [${nodeName}]`,
   );
 
   // Initial delay before starting validation
@@ -331,7 +331,7 @@ export async function validateBlockReceipts(
       // All receipts validated successfully
       const duration = Date.now() - startTime;
       logger.info(
-        `All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`,
+        `✅ All ${expectedTxHashes.length} receipts validated for block ${blockNumber} in ${duration}ms (${pollCount} polls) [${nodeName}]`,
       );
       return;
     } catch (error) {

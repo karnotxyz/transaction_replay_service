@@ -2,7 +2,7 @@ import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
 import { validateBlockReceipts } from "../operations/transactionOperations.js";
-import { syncingProvider_v9 } from "../providers.js";
+import { syncingProvider } from "../providers.js";
 import { getPreConfirmedBlock } from "../operations/blockOperations.js";
 import { MadaraDownError } from "../errors/index.js";
 import { TransactionResult, SendTransactionsResult } from "../types.js";
@@ -33,7 +33,7 @@ export class ParallelTransactionProcessor {
     const sequentialValidation = config.sequentialValidation;
     const mode = sequentialValidation ? "send-and-validate" : "fire-and-forget";
     logger.info(
-      `Sending ${transactions.length} transactions sequentially (${mode})...`,
+      `📤 Sending ${transactions.length} transactions sequentially (${mode})...`,
     );
 
     const startTime = Date.now();
@@ -81,7 +81,7 @@ export class ParallelTransactionProcessor {
     }
 
     const sendDuration = Date.now() - startTime;
-    logger.info(`All ${transactions.length} transactions sent in ${sendDuration}ms`);
+    logger.info(`✅ All ${transactions.length} transactions sent in ${sendDuration}ms`);
 
     recordBlockProcessingDuration("send_txs", endTimer());
 
@@ -105,7 +105,7 @@ export class ParallelTransactionProcessor {
   ): Promise<void> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
         const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
 
         if (pendingTxHashes.includes(txHash)) {
@@ -149,13 +149,13 @@ export class ParallelTransactionProcessor {
     }
 
     logger.info(
-      `Validating ${txHashes.length} receipts using getBlockWithReceipts...`,
+      `🧾 Validating ${txHashes.length} receipts using getBlockWithReceipts...`,
     );
 
     const startTime = Date.now();
 
     try {
-      await validateBlockReceipts(syncingProvider_v9, blockNumber, txHashes);
+      await validateBlockReceipts(syncingProvider, blockNumber, txHashes);
     } catch (error: any) {
       if (error instanceof MadaraDownError) {
         logger.warn(`Madara down detected during receipt validation`);
@@ -165,7 +165,7 @@ export class ParallelTransactionProcessor {
     }
 
     const duration = Date.now() - startTime;
-    logger.info(`All receipts validated in ${duration}ms`);
+    logger.info(`✅ All receipts validated in ${duration}ms`);
   }
 }
 

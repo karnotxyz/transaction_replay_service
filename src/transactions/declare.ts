@@ -3,8 +3,8 @@ import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 import {
   getSyncingUserRpcUrl,
-  originalProvider_v9,
-  syncingProvider_v9,
+  originalProvider,
+  syncingProvider,
 } from "../providers.js";
 
 /**
@@ -85,7 +85,7 @@ async function declareV1(
 
   let txn = tx as unknown as DECLARE_TXN_V1;
 
-  let contractClass = await originalProvider_v9.getClassByHash(txn.class_hash);
+  let contractClass = await originalProvider.getClassByHash(txn.class_hash);
 
   contractClass.entry_points_by_type.EXTERNAL.forEach((entry) => {
     let typedEntry = entry as starknet.ContractEntryPointFields;
@@ -106,7 +106,7 @@ async function declareV1(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingProvider_v9.declareContract(
+  let declareTransactionResult = await syncingProvider.declareContract(
     transaction,
     invocationDetails,
   );
@@ -130,7 +130,7 @@ async function declareV2(
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  let contract_class = await originalProvider_v9.getClassByHash(txn.class_hash);
+  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
 
   let contract_class_parsed = starknet.provider.parseContract({
     // @ts-ignore
@@ -170,7 +170,7 @@ async function declareV2(
     version: txn.version,
   };
 
-  let declareTransactionResult = await syncingProvider_v9.declareContract(
+  let declareTransactionResult = await syncingProvider.declareContract(
     transaction,
     invocationDetails,
   );
@@ -199,7 +199,7 @@ async function declareV3(
 
   let txn = tx as unknown as DECLARE_TXN_V3;
 
-  let contract_class = await originalProvider_v9.getClassByHash(txn.class_hash);
+  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
   // Ensure tip is a hex string (NumAsHex expects hex string)
   let tipValue = txn.tip;
   if (typeof tipValue !== "string") {
@@ -214,7 +214,7 @@ async function declareV3(
   const nonceDataAvailabilityMode = String(txn.nonce_data_availability_mode);
 
   const dummyAccount = new starknet.Account({
-    provider: syncingProvider_v9,
+    provider: syncingProvider,
     address: txn.sender_address,
     signer: '0x123',
     transactionVersion: '0x3',
@@ -274,7 +274,7 @@ async function declareV3(
         nonceDataAvailabilityMode: nonceDataAvailabilityMode as starknet.EDataAvailabilityMode,
         feeDataAvailabilityMode: feeDataAvailabilityMode as starknet.EDataAvailabilityMode,
         walletAddress: txn.sender_address,
-        chainId: await syncingProvider_v9.getChainId(),
+        chainId: await syncingProvider.getChainId(),
       }
     );
   } catch (error) {

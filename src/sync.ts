@@ -2,7 +2,11 @@ import { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 import { BlockIdentifier, TransactionWithHash, BlockTag } from "starknet";
-import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
+import {
+  originalProvider,
+  syncingProvider,
+  supportsProofFacts,
+} from "./providers.js";
 import { SyncProcess } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
@@ -11,6 +15,7 @@ import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
+  getBlockWithTxs,
   getOriginalBlockWithTxsAndProofFacts,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
@@ -56,7 +61,7 @@ export async function startSync(endBlock: BlockIdentifier) {
 
   const targetBlock = await getTargetBlock(endBlock);
 
-  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider_v9);
+  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider);
   const startBlock = syncingNodeLatestBlock + 1;
 
   if (startBlock > targetBlock) {
@@ -200,7 +205,7 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
   }
 
   if (endBlock === BlockTag.LATEST || endBlock === "latest") {
-    const latestBlock = await getLatestBlockNumber(originalProvider_v9);
+    const latestBlock = await getLatestBlockNumber(originalProvider);
     return latestBlock;
   }
 
@@ -332,7 +337,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
   try {
     const mode = process.isContinuous ? "CONTINUOUS" : "FIXED";
     logger.info(
-      `Starting sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
+      `🚀 Starting sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
     );
 
     let currentBlock = process.currentBlock;
@@ -373,8 +378,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        const sourceBlock =
-          await getOriginalBlockWithTxsAndProofFacts(currentBlock);
+        const sourceBlock = supportsProofFacts()
+          ? await getOriginalBlockWithTxsAndProofFacts(currentBlock)
+          : (await getBlockWithTxs(originalProvider, currentBlock) as SourceBlockWithTxs);
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
 
         // Validate block (unless we're continuing with existing txs - block is already set up)

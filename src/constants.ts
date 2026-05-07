@@ -103,26 +103,38 @@ export const SyncMode = {
 export type SyncModeType = (typeof SyncMode)[keyof typeof SyncMode];
 
 /**
- * RPC Versions
- */
-export const RpcVersion = {
-  V0_10_2: "0.10.2",
-  V0_10: "0.10",
-  V0_8_1: "0.8.1",
-  V0_9_0: "0.9.0",
-} as const;
-
-export type RpcVersionType = (typeof RpcVersion)[keyof typeof RpcVersion];
-
-/**
  * RPC Version Paths
  */
-export const RpcVersionPaths: Record<RpcVersionType, string> = {
-  [RpcVersion.V0_10_2]: "/rpc/v0_10_2",
-  [RpcVersion.V0_10]: "/rpc/v0_10",
-  [RpcVersion.V0_8_1]: "/rpc/v0_8_1",
-  [RpcVersion.V0_9_0]: "/rpc/v0_9",
+export const RpcVersionPaths = {
+  V0_10_2: "/rpc/v0_10_2",
+  V0_10: "/rpc/v0_10",
 } as const;
+
+/**
+ * Starknet version → RPC capabilities mapping.
+ * Keyed by the MAX_SUPPORTED_STARKNET_VERSION value.
+ */
+export interface StarknetRpcProfile {
+  originalNodeRpcPath: string;
+  syncingNodeRpcPath: string;
+  supportsProofFacts: boolean;
+}
+
+export const StarknetRpcProfiles: Record<string, StarknetRpcProfile> = {
+  "0.14.2": {
+    originalNodeRpcPath: RpcVersionPaths.V0_10,
+    syncingNodeRpcPath: RpcVersionPaths.V0_10_2,
+    supportsProofFacts: true,
+  },
+  "0.14.1": {
+    originalNodeRpcPath: RpcVersionPaths.V0_10,
+    syncingNodeRpcPath: RpcVersionPaths.V0_10,
+    supportsProofFacts: false,
+  },
+} as const;
+
+export const DEFAULT_RPC_PROFILE: StarknetRpcProfile =
+  StarknetRpcProfiles["0.14.2"];
 
 /**
  * HTTP Status Codes
