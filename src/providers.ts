@@ -6,6 +6,7 @@ import {
   StarknetRpcProfile,
 } from "./constants.js";
 import logger from "./logger.js";
+import { resolveRpcUrl } from "./rpcUrl.js";
 
 type NodeType = "Original" | "Syncing";
 
@@ -27,16 +28,18 @@ logger.info(
   `📡 RPC profile: original=${rpcProfile.originalNodeRpcPath}, syncing=${rpcProfile.syncingNodeRpcPath}, proofFacts=${rpcProfile.supportsProofFacts}`,
 );
 
-function joinRpcUrl(baseUrl: string, path: string): string {
-  return `${baseUrl.replace(/\/$/, "")}${path}`;
-}
-
 export function getOriginalUserRpcUrl(): string {
-  return joinRpcUrl(config.rpcUrlOriginalNode, rpcProfile.originalNodeRpcPath);
+  return resolveRpcUrl(
+    config.rpcUrlOriginalNode,
+    rpcProfile.originalNodeRpcPath,
+  );
 }
 
 export function getSyncingUserRpcUrl(): string {
-  return joinRpcUrl(config.rpcUrlSyncingNode, rpcProfile.syncingNodeRpcPath);
+  return resolveRpcUrl(
+    config.rpcUrlSyncingNode,
+    rpcProfile.syncingNodeRpcPath,
+  );
 }
 
 export function supportsProofFacts(): boolean {
