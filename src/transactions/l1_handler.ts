@@ -23,7 +23,7 @@ export async function l1_handler_message(tx: starknet.TransactionWithHash) {
 
   type L1_HANDLER_MESSAGE = {
     tx: L1_HANDLER_TXN_SEND;
-    paid_fee_on_l1: number;
+    paid_fee_on_l1: string;
   };
 
   // Extract the transaction data and convert to the required format
@@ -37,7 +37,7 @@ export async function l1_handler_message(tx: starknet.TransactionWithHash) {
       entry_point_selector: txn.entry_point_selector,
       calldata: txn.calldata,
     },
-    paid_fee_on_l1: L1HandlerConfig.DEFAULT_PAID_FEE,
+    paid_fee_on_l1: L1HandlerConfig.DEFAULT_PAID_FEE_HEX,
   };
 
   const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
