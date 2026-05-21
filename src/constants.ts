@@ -206,4 +206,5 @@ export const LogConfig = {
  */
 export const L1HandlerConfig = {
   DEFAULT_PAID_FEE: 128328,
+  DEFAULT_PAID_FEE_HEX: "0x1f548",
 } as const;

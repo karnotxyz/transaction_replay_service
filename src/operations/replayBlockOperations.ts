@@ -373,7 +373,7 @@ function buildL1HandlerReplayTransaction(
         entry_point_selector: txn.entry_point_selector,
         calldata: txn.calldata,
       },
-      paid_fee_on_l1: L1HandlerConfig.DEFAULT_PAID_FEE,
+      paid_fee_on_l1: L1HandlerConfig.DEFAULT_PAID_FEE_HEX,
     },
   };
 }
