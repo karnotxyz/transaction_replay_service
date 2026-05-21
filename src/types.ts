@@ -1,4 +1,4 @@
-import { BlockIdentifier } from "starknet";
+import { BlockIdentifier, TransactionWithHash } from "starknet";
 import { ProcessStatusType } from "./constants.js";
 
 /**
@@ -68,6 +68,21 @@ export interface GasPrices {
     price_in_fri: string;
     price_in_wei: string;
   };
+}
+
+/**
+ * Source block payload returned by the original Starknet RPC.
+ * Reused across replay stages to avoid refetching the same block data.
+ */
+export interface SourceBlockWithTxs {
+  block_hash?: string;
+  block_number?: number;
+  timestamp?: number;
+  l1_data_gas_price: GasPrices["l1_data_gas_price"];
+  l1_gas_price: GasPrices["l1_gas_price"];
+  l2_gas_price: GasPrices["l2_gas_price"];
+  starknet_version?: string;
+  transactions: TransactionWithHash[];
 }
 
 /**

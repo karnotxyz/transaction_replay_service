@@ -5,7 +5,12 @@ import {
   BlockTag,
 } from "starknet";
 import logger from "../logger.js";
-import { GasPrices, MadaraRpcResponse, BlockWithReceipts } from "../types.js";
+import {
+  GasPrices,
+  MadaraRpcResponse,
+  BlockWithReceipts,
+  SourceBlockWithTxs,
+} from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
@@ -16,6 +21,7 @@ import {
   getNodeName,
   getOriginalUserRpcUrl,
   getSyncingUserRpcUrl,
+  supportsProofFacts,
 } from "../providers.js";
 import {
   recordBlockProcessingDuration,
@@ -25,6 +31,7 @@ import {
   recordBlockStatus,
   incrementErrors,
 } from "../telemetry/metrics.js";
+import { rpcHttpClient } from "../rpcHttpClient.js";
 
 /**
  * Get latest block number from provider
@@ -99,7 +106,7 @@ export async function getPreConfirmedBlock(
 export async function getBlockWithTxs(
   provider: RpcProvider,
   blockNumber: number,
-): Promise<any> {
+): Promise<SourceBlockWithTxs> {
   const nodeName = getNodeName(provider);
 
   return blockFetchRetry.execute(async () => {
@@ -120,21 +127,18 @@ export async function getBlockWithTxs(
  */
 export async function getOriginalBlockWithTxsAndProofFacts(
   blockNumber: number,
-): Promise<any> {
+): Promise<SourceBlockWithTxs> {
   const rpcUrl = getOriginalUserRpcUrl();
 
   return blockFetchRetry.execute(async () => {
     try {
-      const response = await axios.post(
+      const response = await rpcHttpClient.post(
         rpcUrl,
         {
           jsonrpc: "2.0",
           method: "starknet_getBlockWithTxs",
           params: [{ block_number: blockNumber }, ["INCLUDE_PROOF_FACTS"]],
           id: 1,
-        },
-        {
-          headers: { "Content-Type": "application/json" },
         },
       );
 
@@ -155,6 +159,17 @@ export async function getOriginalBlockWithTxsAndProofFacts(
 }
 
 /**
+ * Fetch a source block once and reuse it across the replay pipeline.
+ */
+export async function getSourceBlockWithTxs(
+  blockNumber: number,
+): Promise<SourceBlockWithTxs> {
+  return supportsProofFacts()
+    ? getOriginalBlockWithTxsAndProofFacts(blockNumber)
+    : getBlockWithTxs(originalProvider, blockNumber);
+}
+
+/**
  * Get block with all transaction receipts (single RPC call)
  * This is much more efficient than fetching individual receipts
  */
@@ -171,16 +186,13 @@ export async function getBlockWithReceipts(
         ? getSyncingUserRpcUrl()
         : getOriginalUserRpcUrl();
 
-    const response = await axios.post(
+    const response = await rpcHttpClient.post(
       rpcUrl,
       {
         jsonrpc: "2.0",
         method: "starknet_getBlockWithReceipts",
         params: [{ block_number: blockNumber }],
         id: 1,
-      },
-      {
-        headers: { "Content-Type": "application/json" },
       },
     );
 
@@ -322,11 +334,13 @@ export async function getBlockHash(
  * Set custom block header (Madara-specific)
  * Optimized to fetch block data once instead of 3 separate calls
  */
-export async function setCustomHeader(currentBlock: number): Promise<void> {
+export async function setCustomHeader(
+  currentBlock: number,
+  sourceBlock?: SourceBlockWithTxs,
+): Promise<void> {
   const endTimer = startTimer();
   try {
-    // Single fetch for all block data (was 3 separate calls before)
-    const block = await getBlockWithTxHashes(originalProvider, currentBlock);
+    const block = sourceBlock ?? (await getSourceBlockWithTxs(currentBlock));
 
     // Extract timestamp
     const timestamp = "timestamp" in block ? block.timestamp : null;
@@ -347,7 +361,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
       l2_gas_price: block.l2_gas_price,
     };
 
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",
@@ -387,11 +401,6 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
           },
         ],
       },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      },
     );
 
     if (response.data.error) {
@@ -414,17 +423,12 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
 export async function closeBlock(): Promise<void> {
   const endTimer = startTimer();
   try {
-    const response = await axios.post<MadaraRpcResponse>(
+    const response = await rpcHttpClient.post<MadaraRpcResponse>(
       config.adminRpcUrlSyncingNode,
       {
         jsonrpc: "2.0",
         method: "madara_V0_1_0_closeBlock",
         id: 1,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
       },
     );
 
@@ -445,7 +449,10 @@ export async function closeBlock(): Promise<void> {
 /**
  * Match block hashes between original and syncing nodes
  */
-export async function matchBlockHash(blockNumber: number): Promise<void> {
+export async function matchBlockHash(
+  blockNumber: number,
+  expectedOriginalHash?: string,
+): Promise<void> {
   const endTimer = startTimer();
 
   // Use retry logic with special handling for hash mismatch
@@ -466,11 +473,10 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
     }
 
     try {
-      // Fetch both hashes in parallel for better performance
-      const [originalHash, syncingHash] = await Promise.all([
-        getBlockHash(originalProvider, blockNumber),
-        getBlockHash(syncingProvider, blockNumber),
-      ]);
+      const originalHash =
+        expectedOriginalHash ??
+        (await getBlockHash(originalProvider, blockNumber));
+      const syncingHash = await getBlockHash(syncingProvider, blockNumber);
       logger.info(`🔗 Original node block hash: ${originalHash}`);
       logger.info(`🔗 Syncing node block hash: ${syncingHash}`);
 

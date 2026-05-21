@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
+import { resolveReplayTimingConfig } from "./replayTiming.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
 
 dotenv.config();
@@ -29,6 +30,11 @@ interface EnvironmentConfig {
   cleanSlate: boolean;
   sequentialValidation: boolean;
   maxSupportedStarknetVersion?: string;
+  preConfirmedPollIntervalMs: number;
+  preConfirmedValidationTimeoutMs: number;
+  receiptValidationInitialDelayMs: number;
+  receiptValidationPhase1IntervalMs: number;
+  sourceBlockPrefetchCount: number;
 }
 
 class Config {
@@ -78,6 +84,7 @@ class Config {
         process.env.MAX_SUPPORTED_STARKNET_VERSION,
         "MAX_SUPPORTED_STARKNET_VERSION",
       );
+    const replayTiming = this.parseReplayTiming();
 
     const config: EnvironmentConfig = {
       // Server
@@ -99,6 +106,14 @@ class Config {
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
       maxSupportedStarknetVersion,
+      preConfirmedPollIntervalMs: replayTiming.preConfirmedPollIntervalMs,
+      preConfirmedValidationTimeoutMs:
+        replayTiming.preConfirmedValidationTimeoutMs,
+      receiptValidationInitialDelayMs:
+        replayTiming.receiptValidationInitialDelayMs,
+      receiptValidationPhase1IntervalMs:
+        replayTiming.receiptValidationPhase1IntervalMs,
+      sourceBlockPrefetchCount: replayTiming.sourceBlockPrefetchCount,
     };
 
     this.logConfiguration(config);
@@ -143,6 +158,17 @@ class Config {
     }
   }
 
+  private parseReplayTiming() {
+    try {
+      return resolveReplayTimingConfig(process.env);
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new ConfigurationError(error.message);
+      }
+      throw error;
+    }
+  }
+
   private logConfiguration(config: EnvironmentConfig): void {
     logger.info("📋 Configuration loaded:");
     logger.info(`  • Environment: ${config.nodeEnv}`);
@@ -163,6 +189,21 @@ class Config {
     );
     logger.info(
       `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
+    );
+    logger.info(
+      `  • PRE_CONFIRMED Poll Interval: ${config.preConfirmedPollIntervalMs}ms`,
+    );
+    logger.info(
+      `  • PRE_CONFIRMED Validation Timeout: ${config.preConfirmedValidationTimeoutMs}ms`,
+    );
+    logger.info(
+      `  • Receipt Validation Initial Delay: ${config.receiptValidationInitialDelayMs}ms`,
+    );
+    logger.info(
+      `  • Receipt Validation Phase-1 Interval: ${config.receiptValidationPhase1IntervalMs}ms`,
+    );
+    logger.info(
+      `  • Source Block Prefetch Count: ${config.sourceBlockPrefetchCount}`,
     );
 
     // OpenTelemetry Configuration
@@ -228,6 +269,26 @@ class Config {
 
   public get maxSupportedStarknetVersion(): string | undefined {
     return this.config.maxSupportedStarknetVersion;
+  }
+
+  public get preConfirmedPollIntervalMs(): number {
+    return this.config.preConfirmedPollIntervalMs;
+  }
+
+  public get preConfirmedValidationTimeoutMs(): number {
+    return this.config.preConfirmedValidationTimeoutMs;
+  }
+
+  public get receiptValidationInitialDelayMs(): number {
+    return this.config.receiptValidationInitialDelayMs;
+  }
+
+  public get receiptValidationPhase1IntervalMs(): number {
+    return this.config.receiptValidationPhase1IntervalMs;
+  }
+
+  public get sourceBlockPrefetchCount(): number {
+    return this.config.sourceBlockPrefetchCount;
   }
 
   public get isDevelopment(): boolean {

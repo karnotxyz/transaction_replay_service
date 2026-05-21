@@ -7,6 +7,35 @@ import {
   syncingProvider,
 } from "../providers.js";
 
+const classByHashCache = new Map<string, Promise<any>>();
+let syncingChainIdPromise: Promise<any> | null = null;
+
+async function getCachedClassByHash(classHash: string): Promise<any> {
+  const cached = classByHashCache.get(classHash);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = originalProvider.getClassByHash(classHash).catch((error) => {
+    classByHashCache.delete(classHash);
+    throw error;
+  });
+
+  classByHashCache.set(classHash, promise);
+  return promise;
+}
+
+async function getCachedSyncingChainId(): Promise<any> {
+  if (!syncingChainIdPromise) {
+    syncingChainIdPromise = syncingProvider.getChainId().catch((error) => {
+      syncingChainIdPromise = null;
+      throw error;
+    });
+  }
+
+  return syncingChainIdPromise;
+}
+
 /**
  * General declare transaction handler
  */
@@ -85,9 +114,9 @@ async function declareV1(
 
   let txn = tx as unknown as DECLARE_TXN_V1;
 
-  let contractClass = await originalProvider.getClassByHash(txn.class_hash);
+  let contractClass = await getCachedClassByHash(txn.class_hash);
 
-  contractClass.entry_points_by_type.EXTERNAL.forEach((entry) => {
+  contractClass.entry_points_by_type.EXTERNAL.forEach((entry: unknown) => {
     let typedEntry = entry as starknet.ContractEntryPointFields;
     if (typeof typedEntry.offset === "number") {
       typedEntry.offset = "0x" + typedEntry.offset.toString(16);
@@ -130,7 +159,7 @@ async function declareV2(
 
   let txn = tx as unknown as DECLARE_TXN_V2;
 
-  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
+  let contract_class = await getCachedClassByHash(txn.class_hash);
 
   let contract_class_parsed = starknet.provider.parseContract({
     // @ts-ignore
@@ -199,7 +228,7 @@ async function declareV3(
 
   let txn = tx as unknown as DECLARE_TXN_V3;
 
-  let contract_class = await originalProvider.getClassByHash(txn.class_hash);
+  let contract_class = await getCachedClassByHash(txn.class_hash);
   // Ensure tip is a hex string (NumAsHex expects hex string)
   let tipValue = txn.tip;
   if (typeof tipValue !== "string") {
@@ -274,8 +303,8 @@ async function declareV3(
         nonceDataAvailabilityMode: nonceDataAvailabilityMode as starknet.EDataAvailabilityMode,
         feeDataAvailabilityMode: feeDataAvailabilityMode as starknet.EDataAvailabilityMode,
         walletAddress: txn.sender_address,
-        chainId: await syncingProvider.getChainId(),
-      }
+        chainId: await getCachedSyncingChainId(),
+      } as any
     );
   } catch (error) {
     console.error("Error in buildDeclarePayload:", error);

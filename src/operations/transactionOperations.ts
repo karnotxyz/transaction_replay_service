@@ -1,5 +1,6 @@
 import { GetTransactionReceiptResponse, RpcProvider } from "starknet";
 import logger from "../logger.js";
+import { config } from "../config.js";
 import {
   wrapMadaraError,
   MadaraDownError,
@@ -12,6 +13,7 @@ import { transactionPostRetry } from "../retry/index.js";
 import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
 import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
+import { rpcHttpClient } from "../rpcHttpClient.js";
 
 /**
  * Get transaction receipt
@@ -134,7 +136,7 @@ export async function postWithRetry(
 
   while (attempt <= maxAttempts) {
     try {
-      const result = await axios.post(url, data);
+      const result = await rpcHttpClient.post(url, data);
 
       // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
@@ -220,7 +222,7 @@ export async function postWithRetry(
  */
 function getPollingInterval(elapsedMs: number): number {
   if (elapsedMs < ReceiptValidationConfig.PHASE1_DURATION_MS) {
-    return ReceiptValidationConfig.PHASE1_INTERVAL_MS;
+    return config.receiptValidationPhase1IntervalMs;
   }
   if (elapsedMs < ReceiptValidationConfig.PHASE2_DURATION_MS) {
     return ReceiptValidationConfig.PHASE2_INTERVAL_MS;
@@ -248,7 +250,7 @@ export async function validateBlockReceipts(
 
   // Initial delay before starting validation
   await new Promise((resolve) =>
-    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
+    setTimeout(resolve, config.receiptValidationInitialDelayMs),
   );
 
   let pollCount = 0;
