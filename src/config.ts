@@ -37,6 +37,7 @@ interface EnvironmentConfig {
   sequentialValidation: boolean;
   replayMode: ReplayModeType;
   validateBlockHash: boolean;
+  replayBlockRpcEnabled: boolean;
   maxSupportedStarknetVersion?: string;
   mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
@@ -119,6 +120,8 @@ class Config {
         replayMode,
         process.env.VALIDATE_BLOCK_HASH,
       ),
+      replayBlockRpcEnabled:
+        process.env.REPLAY_BLOCK_RPC_ENABLED?.toLowerCase() === "true",
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
         process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
@@ -272,6 +275,9 @@ class Config {
       `  • Validate Block Hash: ${config.validateBlockHash ? "ENABLED" : "disabled"}`,
     );
     logger.info(
+      `  • Replay Block RPC: ${config.replayBlockRpcEnabled ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
       `  • Max Supported Starknet Version: ${
         config.maxSupportedStarknetVersion || "not set"
       }`,
@@ -372,6 +378,10 @@ class Config {
 
   public get shouldValidateBlockHash(): boolean {
     return this.config.validateBlockHash;
+  }
+
+  public get replayBlockRpcEnabled(): boolean {
+    return this.config.replayBlockRpcEnabled;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {
