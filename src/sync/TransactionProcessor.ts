@@ -100,8 +100,14 @@ export class ParallelTransactionProcessor {
     blockNumber: number,
     txIndex: number,
     totalTxs: number,
-    maxRetries: number = 500,
-    retryDelayMs: number = 200,
+    maxRetries: number = Math.max(
+      1,
+      Math.ceil(
+        config.preConfirmedValidationTimeoutMs /
+          config.preConfirmedPollIntervalMs,
+      ),
+    ),
+    retryDelayMs: number = config.preConfirmedPollIntervalMs,
   ): Promise<void> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {

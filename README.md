@@ -78,6 +78,9 @@ STATE_FILE_PATH=./sync-state.json
 CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
+PRE_CONFIRMED_POLL_INTERVAL_MS=100
+PRE_CONFIRMED_VALIDATION_TIMEOUT_MS=100000
+RECEIPT_VALIDATION_INITIAL_DELAY_MS=100
 ```
 
 ### Configuration Features
@@ -87,6 +90,7 @@ LOG_LEVEL=info
 - **Sensible defaults**: Falls back to defaults for optional values
 - **Protocol guard**: Can stop replay before processing blocks above a configured Starknet version
 - **Masked logging**: Sensitive data is masked in logs
+- **Replay timing knobs**: Polling latency for PRE_CONFIRMED and receipt validation can be tuned per deployment
 
 ## API Endpoints
 

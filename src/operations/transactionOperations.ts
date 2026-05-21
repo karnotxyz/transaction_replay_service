@@ -1,5 +1,6 @@
 import { GetTransactionReceiptResponse, RpcProvider } from "starknet";
 import logger from "../logger.js";
+import { config } from "../config.js";
 import {
   wrapMadaraError,
   MadaraDownError,
@@ -248,7 +249,7 @@ export async function validateBlockReceipts(
 
   // Initial delay before starting validation
   await new Promise((resolve) =>
-    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
+    setTimeout(resolve, config.receiptValidationInitialDelayMs),
   );
 
   let pollCount = 0;

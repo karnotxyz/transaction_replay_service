@@ -61,7 +61,16 @@ export const ReceiptValidationConfig = {
   PHASE3_INTERVAL_MS: 2000, // 2 seconds between polls
 
   // Initial delay before starting validation
-  INITIAL_DELAY_MS: 500, // Wait 500ms before first poll
+  INITIAL_DELAY_MS: 100, // Wait 100ms before first poll
+} as const;
+
+/**
+ * PRE_CONFIRMED validation configuration
+ */
+export const PreConfirmedValidationConfig = {
+  // Maintain the previous ~100s total wait budget while polling more often.
+  TIMEOUT_MS: 100 * 1000,
+  POLL_INTERVAL_MS: 100,
 } as const;
 
 /**

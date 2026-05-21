@@ -1,6 +1,7 @@
 import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
 import { originalProvider, syncingProvider } from "../providers.js";
+import { config } from "../config.js";
 import {
   setCustomHeader,
   closeBlock,
@@ -117,8 +118,14 @@ export class BlockProcessor {
     blockNumber: number,
     expectedTxHashes: string[],
     process: SyncProcess,
-    maxRetries: number = 500,
-    retryDelayMs: number = 200,
+    maxRetries: number = Math.max(
+      1,
+      Math.ceil(
+        config.preConfirmedValidationTimeoutMs /
+          config.preConfirmedPollIntervalMs,
+      ),
+    ),
+    retryDelayMs: number = config.preConfirmedPollIntervalMs,
   ): Promise<BlockProcessResult> {
     if (expectedTxHashes.length === 0) {
       logger.info(`⏭️ No transactions to validate for block ${blockNumber}`);
