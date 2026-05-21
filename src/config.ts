@@ -33,6 +33,8 @@ interface EnvironmentConfig {
   preConfirmedPollIntervalMs: number;
   preConfirmedValidationTimeoutMs: number;
   receiptValidationInitialDelayMs: number;
+  receiptValidationPhase1IntervalMs: number;
+  sourceBlockPrefetchCount: number;
 }
 
 class Config {
@@ -109,6 +111,9 @@ class Config {
         replayTiming.preConfirmedValidationTimeoutMs,
       receiptValidationInitialDelayMs:
         replayTiming.receiptValidationInitialDelayMs,
+      receiptValidationPhase1IntervalMs:
+        replayTiming.receiptValidationPhase1IntervalMs,
+      sourceBlockPrefetchCount: replayTiming.sourceBlockPrefetchCount,
     };
 
     this.logConfiguration(config);
@@ -194,6 +199,12 @@ class Config {
     logger.info(
       `  • Receipt Validation Initial Delay: ${config.receiptValidationInitialDelayMs}ms`,
     );
+    logger.info(
+      `  • Receipt Validation Phase-1 Interval: ${config.receiptValidationPhase1IntervalMs}ms`,
+    );
+    logger.info(
+      `  • Source Block Prefetch Count: ${config.sourceBlockPrefetchCount}`,
+    );
 
     // OpenTelemetry Configuration
     const otelEnabled = process.env.OTEL_ENABLED !== "false";
@@ -270,6 +281,14 @@ class Config {
 
   public get receiptValidationInitialDelayMs(): number {
     return this.config.receiptValidationInitialDelayMs;
+  }
+
+  public get receiptValidationPhase1IntervalMs(): number {
+    return this.config.receiptValidationPhase1IntervalMs;
+  }
+
+  public get sourceBlockPrefetchCount(): number {
+    return this.config.sourceBlockPrefetchCount;
   }
 
   public get isDevelopment(): boolean {

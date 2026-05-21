@@ -1,12 +1,15 @@
 import {
   PreConfirmedValidationConfig,
   ReceiptValidationConfig,
+  SourceBlockPrefetchConfig,
 } from "./constants.js";
 
 export interface ReplayTimingConfig {
   preConfirmedPollIntervalMs: number;
   preConfirmedValidationTimeoutMs: number;
   receiptValidationInitialDelayMs: number;
+  receiptValidationPhase1IntervalMs: number;
+  sourceBlockPrefetchCount: number;
 }
 
 function parsePositiveInteger(
@@ -65,6 +68,16 @@ export function resolveReplayTimingConfig(
       env.RECEIPT_VALIDATION_INITIAL_DELAY_MS,
       ReceiptValidationConfig.INITIAL_DELAY_MS,
       "RECEIPT_VALIDATION_INITIAL_DELAY_MS",
+    ),
+    receiptValidationPhase1IntervalMs: parsePositiveInteger(
+      env.RECEIPT_VALIDATION_PHASE1_INTERVAL_MS,
+      ReceiptValidationConfig.PHASE1_INTERVAL_MS,
+      "RECEIPT_VALIDATION_PHASE1_INTERVAL_MS",
+    ),
+    sourceBlockPrefetchCount: parseNonNegativeInteger(
+      env.SOURCE_BLOCK_PREFETCH_COUNT,
+      SourceBlockPrefetchConfig.PREFETCH_COUNT,
+      "SOURCE_BLOCK_PREFETCH_COUNT",
     ),
   };
 }

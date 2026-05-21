@@ -2,12 +2,8 @@ import { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 import { BlockIdentifier, TransactionWithHash, BlockTag } from "starknet";
-import {
-  originalProvider,
-  syncingProvider,
-  supportsProofFacts,
-} from "./providers.js";
-import { SyncProcess } from "./types.js";
+import { originalProvider, syncingProvider } from "./providers.js";
+import { SyncProcess, SourceBlockWithTxs } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
@@ -15,8 +11,7 @@ import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
-  getBlockWithTxs,
-  getOriginalBlockWithTxsAndProofFacts,
+  getSourceBlockWithTxs,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import { assertSupportedBlockVersion } from "./validation/index.js";
@@ -36,6 +31,7 @@ import {
   MadaraDownError,
 } from "./errors/index.js";
 import { config } from "./config.js";
+import { SourceBlockPrefetcher } from "./sync/SourceBlockPrefetcher.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -236,11 +232,6 @@ interface ProcessBlockResult {
   txHashes: string[];
 }
 
-interface SourceBlockWithTxs {
-  starknet_version?: string;
-  transactions: TransactionWithHash[];
-}
-
 async function processBlock(
   blockNumber: number,
   process: SyncProcess,
@@ -343,6 +334,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     let currentBlock = process.currentBlock;
     // Track existing tx hashes for recovery scenarios (continue_block action)
     let existingTxHashes: string[] = [];
+    const sourceBlockPrefetcher = new SourceBlockPrefetcher(
+      getSourceBlockWithTxs,
+      config.sourceBlockPrefetchCount,
+    );
 
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
@@ -378,9 +373,11 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(`⚡ SYNCING Block ${currentBlock}`);
 
       try {
-        const sourceBlock = supportsProofFacts()
-          ? await getOriginalBlockWithTxsAndProofFacts(currentBlock)
-          : (await getBlockWithTxs(originalProvider, currentBlock) as SourceBlockWithTxs);
+        sourceBlockPrefetcher.prime(currentBlock, process.syncTo);
+        const sourceBlock = await sourceBlockPrefetcher.take(
+          currentBlock,
+          process.syncTo,
+        );
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
 
         // Validate block (unless we're continuing with existing txs - block is already set up)
@@ -397,6 +394,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           const headersResult = await blockProcessor.setBlockHeaders(
             currentBlock,
             process,
+            sourceBlock,
           );
           if (!headersResult.success) {
             throw headersResult.error;
@@ -566,6 +564,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           verifyResult = await blockProcessor.verifyBlockHash(
             currentBlock,
             process,
+            sourceBlock.block_hash,
           );
           if (!verifyResult.success) {
             throw verifyResult.error;

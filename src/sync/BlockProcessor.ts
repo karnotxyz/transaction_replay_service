@@ -1,12 +1,11 @@
 import logger from "../logger.js";
-import { SyncProcess } from "../types.js";
-import { originalProvider, syncingProvider } from "../providers.js";
+import { SyncProcess, SourceBlockWithTxs } from "../types.js";
+import { syncingProvider } from "../providers.js";
 import { config } from "../config.js";
 import {
   setCustomHeader,
   closeBlock,
   matchBlockHash,
-  getBlockWithTxs,
   getPreConfirmedBlock,
   getLatestBlockNumber,
 } from "../operations/blockOperations.js";
@@ -78,10 +77,11 @@ export class BlockProcessor {
   async setBlockHeaders(
     blockNumber: number,
     process: SyncProcess,
+    sourceBlock?: SourceBlockWithTxs,
   ): Promise<BlockProcessResult> {
     try {
       await executeWithMadaraRecovery(
-        () => setCustomHeader(blockNumber),
+        () => setCustomHeader(blockNumber, sourceBlock),
         `set headers for block ${blockNumber}`,
         () => {
           process.status = ProcessStatus.RECOVERING;
@@ -233,10 +233,11 @@ export class BlockProcessor {
   async verifyBlockHash(
     blockNumber: number,
     process: SyncProcess,
+    expectedOriginalHash?: string,
   ): Promise<BlockProcessResult> {
     try {
       await executeWithMadaraRecovery(
-        () => matchBlockHash(blockNumber),
+        () => matchBlockHash(blockNumber, expectedOriginalHash),
         `verify block hash for ${blockNumber}`,
         () => {
           process.status = ProcessStatus.RECOVERING;

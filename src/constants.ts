@@ -51,7 +51,7 @@ export const ReceiptValidationConfig = {
 
   // Phase 1: Fast polling (first 5 seconds)
   PHASE1_DURATION_MS: 5000, // 5 seconds
-  PHASE1_INTERVAL_MS: 100, // 100ms between polls
+  PHASE1_INTERVAL_MS: 50, // 50ms between polls
 
   // Phase 2: Medium polling (5 seconds to 1 minute)
   PHASE2_DURATION_MS: 60 * 1000, // 1 minute cumulative
@@ -71,6 +71,13 @@ export const PreConfirmedValidationConfig = {
   // Maintain the previous ~100s total wait budget while polling more often.
   TIMEOUT_MS: 100 * 1000,
   POLL_INTERVAL_MS: 100,
+} as const;
+
+/**
+ * Source block prefetch configuration
+ */
+export const SourceBlockPrefetchConfig = {
+  PREFETCH_COUNT: 5,
 } as const;
 
 /**
