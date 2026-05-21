@@ -102,9 +102,11 @@ export async function startSync(endBlock: BlockIdentifier) {
   logger.info(
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
   );
-  const txMode = config.sequentialValidation
-    ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
-    : "SEQUENTIAL sending, PARALLEL receipt validation";
+  const txMode = config.replayBlockRpcEnabled
+    ? "SINGLE RPC block replay (env-gated)"
+    : config.sequentialValidation
+      ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+      : "SEQUENTIAL sending, PARALLEL receipt validation";
   logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
@@ -343,6 +345,23 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     let currentBlock = process.currentBlock;
     // Track existing tx hashes for recovery scenarios (continue_block action)
     let existingTxHashes: string[] = [];
+    const finalizeSuccessfulBlock = (txCount: number) => {
+      incrementBlocksProcessed();
+      recordBlockStatus("success");
+      throughputTracker.recordBlock(txCount);
+      process.processedBlocks++;
+      updateSyncMetrics(process, process.syncTo, currentBlock);
+
+      const percentComplete = process.isContinuous
+        ? "N/A (continuous)"
+        : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
+          2,
+        ) + "%";
+
+      logger.info(
+        `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
+      );
+    };
 
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
@@ -391,6 +410,48 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           );
           if (!validateResult.success) {
             throw validateResult.error;
+          }
+
+          if (config.replayBlockRpcEnabled) {
+            let replayResult;
+            try {
+              replayResult = await blockProcessor.replayBlock(
+                currentBlock,
+                sourceBlock,
+                process,
+              );
+              if (!replayResult.success) {
+                throw replayResult.error;
+              }
+            } catch (error) {
+              if (error instanceof MadaraDownError) {
+                logger.warn(
+                  `🚨 Madara down detected during replayBlock at block ${currentBlock}`,
+                );
+
+                const recoveryResult = await blockProcessor.handleBlockRecovery(
+                  currentBlock,
+                  process,
+                );
+
+                if (!recoveryResult.recovered) {
+                  throw new Error(
+                    `Madara recovery failed at block ${currentBlock}`,
+                  );
+                }
+
+                const { newBlock, existingTxHashes: recoveredTxHashes } =
+                  handleRecoveryAction(recoveryResult.action, currentBlock);
+                currentBlock = newBlock;
+                existingTxHashes = recoveredTxHashes;
+                continue;
+              }
+              throw error;
+            }
+
+            finalizeSuccessfulBlock(sourceBlock.transactions.length);
+            currentBlock++;
+            continue;
           }
 
           // Set custom headers
@@ -598,31 +659,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           throw error;
         }
 
-        // Record successful block processing metrics
-        incrementBlocksProcessed();
-        recordBlockStatus("success");
-
-        // Update throughput metrics
-        throughputTracker.recordBlock(blockResult.txCount);
-
-        process.processedBlocks++;
-
-        // Update sync progress metrics
-        // Use known values instead of making redundant RPC calls:
-        // - originalNodeLatest: use process.syncTo (updated by probe for continuous sync)
-        // - syncingNodeLatest: we just synced this block, so it's currentBlock
-        updateSyncMetrics(process, process.syncTo, currentBlock);
-
-        const percentComplete = process.isContinuous
-          ? "N/A (continuous)"
-          : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-            2,
-          ) + "%";
-
-        logger.info(
-          `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
-        );
-
+        finalizeSuccessfulBlock(blockResult.txCount);
         currentBlock++;
       } catch (error) {
         // Record failed block processing metric
