@@ -28,6 +28,7 @@ interface EnvironmentConfig {
   // Features
   cleanSlate: boolean;
   sequentialValidation: boolean;
+  replayBlockRpcEnabled: boolean;
   maxSupportedStarknetVersion?: string;
 }
 
@@ -98,6 +99,8 @@ class Config {
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
+      replayBlockRpcEnabled:
+        process.env.REPLAY_BLOCK_RPC_ENABLED?.toLowerCase() === "true",
       maxSupportedStarknetVersion,
     };
 
@@ -162,6 +165,9 @@ class Config {
       `  • Sequential Validation: ${config.sequentialValidation ? "ENABLED" : "disabled"}`,
     );
     logger.info(
+      `  • Replay Block RPC: ${config.replayBlockRpcEnabled ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
       `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
     );
 
@@ -224,6 +230,10 @@ class Config {
 
   public get sequentialValidation(): boolean {
     return this.config.sequentialValidation;
+  }
+
+  public get replayBlockRpcEnabled(): boolean {
+    return this.config.replayBlockRpcEnabled;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {
