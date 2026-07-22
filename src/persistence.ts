@@ -122,6 +122,21 @@ class PersistenceLayer {
     this.writeState(state);
   }
 
+  public pauseSync(
+    syncTo: number | "latest",
+    isContinuous: boolean,
+    error?: string,
+  ): void {
+    const state: SyncState = {
+      status: ProcessStatus.PAUSED,
+      syncTo,
+      isContinuous,
+      updatedAt: new Date().toISOString(),
+      error,
+    };
+    this.writeState(state);
+  }
+
   /**
    * Update sync target (for continuous sync)
    */

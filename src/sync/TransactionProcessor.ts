@@ -1,11 +1,22 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
-import { validateBlockReceipts } from "../operations/transactionOperations.js";
+import {
+  assertTransactionExecutionStatusMatches,
+  validateBlockReceipts,
+  waitForTransactionExecutionStatus,
+} from "../operations/transactionOperations.js";
 import { syncingProvider } from "../providers.js";
 import { getPreConfirmedBlock } from "../operations/blockOperations.js";
-import { MadaraDownError } from "../errors/index.js";
-import { TransactionResult, SendTransactionsResult } from "../types.js";
+import {
+  MadaraDownError,
+  TransactionStatusMismatchError,
+} from "../errors/index.js";
+import {
+  ExecutionStatus,
+  TransactionResult,
+  SendTransactionsResult,
+} from "../types.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
@@ -82,6 +93,93 @@ export class ParallelTransactionProcessor {
 
     const sendDuration = Date.now() - startTime;
     logger.info(`✅ All ${transactions.length} transactions sent in ${sendDuration}ms`);
+
+    recordBlockProcessingDuration("send_txs", endTimer());
+
+    return {
+      txResults,
+      txHashes,
+      sendDuration,
+    };
+  }
+
+  async sendTransactionsAndValidateStatuses(
+    transactions: TransactionWithHash[],
+    blockNumber: number,
+    expectedStatuses: Map<string, ExecutionStatus>,
+  ): Promise<SendTransactionsResult> {
+    if (transactions.length === 0) {
+      return { txResults: [], txHashes: [], sendDuration: 0 };
+    }
+
+    logger.info(
+      `📤 Sending ${transactions.length} transactions sequentially (transaction-only status validation)...`,
+    );
+
+    const startTime = Date.now();
+    const endTimer = startTimer();
+    const txResults: TransactionResult[] = [];
+    const txHashes: string[] = [];
+
+    for (let index = 0; index < transactions.length; index++) {
+      const tx = transactions[index];
+      const txHash = tx.transaction_hash;
+
+      try {
+        const expectedStatus = expectedStatuses.get(txHash);
+
+        if (!expectedStatus) {
+          throw new Error(
+            `Missing original receipt status for transaction ${txHash}`,
+          );
+        }
+
+        txHashes.push(txHash);
+        logger.debug(
+          `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
+        );
+
+        await processTx(tx, blockNumber);
+
+        const syncingStatus = await waitForTransactionExecutionStatus(
+          syncingProvider,
+          txHash,
+        );
+
+        assertTransactionExecutionStatusMatches(
+          blockNumber,
+          txHash,
+          index,
+          expectedStatus,
+          syncingStatus,
+        );
+
+        txResults.push({
+          txHash,
+          success: true,
+        });
+      } catch (error: any) {
+        if (
+          error instanceof MadaraDownError ||
+          error instanceof TransactionStatusMismatchError
+        ) {
+          throw error;
+        }
+
+        logger.error(
+          `  Failed to send/validate transaction ${index + 1}:`,
+          error.message,
+        );
+        throw new Error(
+          `Failed to send/validate transaction ${index + 1}/${transactions.length} in block ${blockNumber}: ${error.message}`,
+        );
+      }
+    }
+
+    const sendDuration = Date.now() - startTime;
+    logger.info(
+      `✅ All ${transactions.length} transactions sent and status-matched in ${sendDuration}ms`,
+    );
 
     recordBlockProcessingDuration("send_txs", endTimer());
 

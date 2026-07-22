@@ -1,6 +1,8 @@
 import { BlockIdentifier } from "starknet";
 import { ProcessStatusType } from "./constants.js";
 
+export type ExecutionStatus = "SUCCEEDED" | "REVERTED";
+
 /**
  * Return type for sync bounds calculation
  */
@@ -39,10 +41,11 @@ export interface SyncProcess {
  * Minimal state - recovery queries syncing node for current position
  */
 export interface SyncState {
-  status: "running" | "idle";
+  status: "running" | "idle" | "paused";
   syncTo: number | "latest" | null;
   isContinuous: boolean;
   updatedAt: string;
+  error?: string;
 }
 
 /**
@@ -119,7 +122,7 @@ export interface TransactionReceipt {
     amount: string;
     unit: string;
   };
-  execution_status: "SUCCEEDED" | "REVERTED";
+  execution_status: ExecutionStatus;
   finality_status: string;
   type: string;
   messages_sent: any[];

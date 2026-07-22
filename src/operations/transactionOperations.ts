@@ -4,9 +4,10 @@ import {
   wrapMadaraError,
   MadaraDownError,
   isMadaraDownError,
+  TransactionStatusMismatchError,
 } from "../errors/index.js";
 import { RetryConfig, ReceiptValidationConfig } from "../constants.js";
-import { RetryOptions, BlockWithReceipts } from "../types.js";
+import { RetryOptions, BlockWithReceipts, ExecutionStatus } from "../types.js";
 import axios, { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
 import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
@@ -113,6 +114,90 @@ export async function validateTransactionReceipt(
 
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
+  }
+}
+
+export function getReceiptExecutionStatus(
+  receipt: GetTransactionReceiptResponse,
+): ExecutionStatus | null {
+  if (receipt.isSuccess()) {
+    return "SUCCEEDED";
+  }
+  if (receipt.isReverted()) {
+    return "REVERTED";
+  }
+
+  const rawStatus = (receipt as any).execution_status;
+  return rawStatus === "SUCCEEDED" || rawStatus === "REVERTED"
+    ? rawStatus
+    : null;
+}
+
+export function assertTransactionExecutionStatusMatches(
+  blockNumber: number,
+  txHash: string,
+  txIndex: number,
+  originalStatus: ExecutionStatus,
+  syncingStatus: ExecutionStatus,
+): void {
+  if (originalStatus !== syncingStatus) {
+    throw new TransactionStatusMismatchError(
+      blockNumber,
+      txHash,
+      txIndex,
+      originalStatus,
+      syncingStatus,
+    );
+  }
+}
+
+export async function waitForTransactionExecutionStatus(
+  provider: RpcProvider,
+  txHash: string,
+): Promise<ExecutionStatus> {
+  const nodeName = getNodeName(provider);
+  const startTime = Date.now();
+  let pollCount = 0;
+
+  await new Promise((resolve) =>
+    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
+  );
+
+  while (true) {
+    const elapsed = Date.now() - startTime;
+
+    if (elapsed >= ReceiptValidationConfig.TIMEOUT_MS) {
+      throw new Error(
+        `Receipt validation timed out after ${Math.round(elapsed / 1000)}s for tx ${txHash} [${nodeName}]`,
+      );
+    }
+
+    pollCount++;
+    const interval = getPollingInterval(elapsed);
+
+    try {
+      const receipt = await getTransactionReceipt(provider, txHash);
+      const status = getReceiptExecutionStatus(receipt);
+
+      if (status) {
+        logger.debug(
+          `Receipt for ${txHash} [${nodeName}] reached ${status} after ${pollCount} polls`,
+        );
+        return status;
+      }
+    } catch (error) {
+      if (error instanceof MadaraDownError || isMadaraDownError(error)) {
+        throw new MadaraDownError(
+          `Madara down while waiting for receipt ${txHash}`,
+        );
+      }
+
+      logger.debug(
+        `Receipt for ${txHash} [${nodeName}] not ready (poll ${pollCount}): ${error}`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, interval));
   }
 }
 

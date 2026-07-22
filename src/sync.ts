@@ -17,6 +17,7 @@ import {
   getLatestBlockNumber,
   getBlockWithTxs,
   getOriginalBlockWithTxsAndProofFacts,
+  getBlockWithReceipts,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import { assertSupportedBlockVersion } from "./validation/index.js";
@@ -34,8 +35,10 @@ import {
   SyncInProgressError,
   InvalidBlockError,
   MadaraDownError,
+  TransactionStatusMismatchError,
 } from "./errors/index.js";
 import { config } from "./config.js";
+import { ExecutionStatus } from "./types.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -102,9 +105,11 @@ export async function startSync(endBlock: BlockIdentifier) {
   logger.info(
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
   );
-  const txMode = config.sequentialValidation
-    ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
-    : "SEQUENTIAL sending, PARALLEL receipt validation";
+  const txMode = config.isTransactionOnlyReplay
+    ? "TRANSACTION_ONLY send-and-status-match"
+    : config.sequentialValidation
+      ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+      : "SEQUENTIAL sending, PARALLEL receipt validation";
   logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
@@ -297,6 +302,68 @@ async function processBlock(
   }
 }
 
+async function getOriginalReceiptStatusMap(
+  blockNumber: number,
+  sourceTxs: TransactionWithHash[],
+): Promise<Map<string, ExecutionStatus>> {
+  const blockWithReceipts = await getBlockWithReceipts(
+    originalProvider,
+    blockNumber,
+  );
+
+  if (!blockWithReceipts) {
+    throw new Error(`Original block receipts not found for block ${blockNumber}`);
+  }
+
+  const statuses = new Map(
+    blockWithReceipts.transactions.map((txWithReceipt) => [
+      txWithReceipt.receipt.transaction_hash,
+      txWithReceipt.receipt.execution_status,
+    ]),
+  );
+
+  for (const tx of sourceTxs) {
+    if (!statuses.has(tx.transaction_hash)) {
+      throw new Error(
+        `Original block ${blockNumber} is missing receipt for transaction ${tx.transaction_hash}`,
+      );
+    }
+  }
+
+  return statuses;
+}
+
+async function processTransactionOnlyBlock(
+  blockNumber: number,
+  blockWithTxs: SourceBlockWithTxs,
+): Promise<ProcessBlockResult> {
+  const transactions = blockWithTxs.transactions as TransactionWithHash[];
+
+  logger.info(
+    `📦 Block ${blockNumber}: Found ${transactions.length} transactions`,
+  );
+
+  if (transactions.length === 0) {
+    logger.info(
+      `⏭️  Block ${blockNumber} has no transactions, skipping in transaction-only mode`,
+    );
+    return { txCount: 0, txHashes: [] };
+  }
+
+  const originalStatuses = await getOriginalReceiptStatusMap(
+    blockNumber,
+    transactions,
+  );
+  const result =
+    await parallelTransactionProcessor.sendTransactionsAndValidateStatuses(
+      transactions,
+      blockNumber,
+      originalStatuses,
+    );
+
+  return { txCount: transactions.length, txHashes: result.txHashes };
+}
+
 /**
  * Handle recovery action returned by blockProcessor.handleBlockRecovery
  * Returns the new block number to continue from, or throws if recovery failed
@@ -325,6 +392,17 @@ function handleRecoveryAction(
       );
       return { newBlock: action.blockNumber, existingTxHashes: [] };
 
+    case "failed":
+      throw new Error(`Recovery failed: ${action.error}`);
+  }
+}
+
+function getTransactionOnlyRecoveryBlock(action: RecoveryAction): number {
+  switch (action.type) {
+    case "restart_block":
+    case "continue_block":
+    case "skip_to_block":
+      return action.blockNumber;
     case "failed":
       throw new Error(`Recovery failed: ${action.error}`);
   }
@@ -382,6 +460,60 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           ? await getOriginalBlockWithTxsAndProofFacts(currentBlock)
           : (await getBlockWithTxs(originalProvider, currentBlock) as SourceBlockWithTxs);
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
+
+        if (config.isTransactionOnlyReplay) {
+          let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
+
+          try {
+            blockResult = await processTransactionOnlyBlock(
+              currentBlock,
+              sourceBlock,
+            );
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              logger.warn(
+                `🚨 Madara down detected during transaction-only replay at block ${currentBlock}`,
+              );
+
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              currentBlock = getTransactionOnlyRecoveryBlock(
+                recoveryResult.action,
+              );
+              existingTxHashes = [];
+              continue;
+            }
+            throw error;
+          }
+
+          incrementBlocksProcessed();
+          recordBlockStatus("success");
+          throughputTracker.recordBlock(blockResult.txCount);
+          process.processedBlocks++;
+          updateSyncMetrics(process, process.syncTo, currentBlock);
+
+          const percentComplete = process.isContinuous
+            ? "N/A (continuous)"
+            : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
+              2,
+            ) + "%";
+
+          logger.info(
+            `✅ Block ${currentBlock} transaction-only replay completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
+          );
+
+          currentBlock++;
+          continue;
+        }
 
         // Validate block (unless we're continuing with existing txs - block is already set up)
         if (existingTxHashes.length === 0) {
@@ -625,6 +757,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
+        if (error instanceof TransactionStatusMismatchError) {
+          throw error;
+        }
+
         // Record failed block processing metric
         recordBlockStatus("failed");
 
@@ -656,6 +792,20 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       );
     }
   } catch (error) {
+    if (error instanceof TransactionStatusMismatchError) {
+      process.status = ProcessStatus.PAUSED;
+      process.error = error.message;
+      persistence.pauseSync(
+        process.syncTo,
+        !!process.isContinuous,
+        error.message,
+      );
+      syncStateManager.stopProbe();
+      updateActiveSyncProcessCount("sync", false);
+      logger.error(`⏸️ Sync process ${process.id} paused:`, error);
+      return;
+    }
+
     process.status = ProcessStatus.FAILED;
     process.error = error instanceof Error ? error.message : String(error);
 
@@ -728,6 +878,21 @@ export const getSyncStatus = async (req: Request, res: Response) => {
     const currentProcess = syncStateManager.getProcess();
 
     if (!currentProcess) {
+      const persistedState = persistence.readState();
+
+      if (persistedState?.status === ProcessStatus.PAUSED) {
+        return res.json({
+          message: "Sync process paused",
+          status: ProcessStatus.PAUSED,
+          mode: persistedState.isContinuous ? "continuous" : "fixed",
+          progress: {
+            endBlock: persistedState.syncTo,
+          },
+          error: persistedState.error,
+          updatedAt: persistedState.updatedAt,
+        });
+      }
+
       return res.json({
         message: "No sync process currently running",
       });
