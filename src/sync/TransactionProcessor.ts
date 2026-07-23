@@ -1,16 +1,31 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
-import { validateBlockReceipts } from "../operations/transactionOperations.js";
+import {
+  assertTransactionExecutionStatusMatches,
+  getReceiptExecutionStatus,
+  getTransactionReceipt,
+  validateBlockReceipts,
+  waitForTransactionExecutionStatus,
+} from "../operations/transactionOperations.js";
 import { syncingProvider } from "../providers.js";
 import { getPreConfirmedBlock } from "../operations/blockOperations.js";
-import { MadaraDownError } from "../errors/index.js";
-import { TransactionResult, SendTransactionsResult } from "../types.js";
+import {
+  MadaraDownError,
+  TransactionReplayFailedError,
+  TransactionStatusMismatchError,
+} from "../errors/index.js";
+import {
+  ExecutionStatus,
+  TransactionResult,
+  SendTransactionsResult,
+} from "../types.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
 } from "../telemetry/metrics.js";
 import { config } from "../config.js";
+import { TransactionOnlyReplayConfig } from "../constants.js";
 
 /**
  * Process transactions for a block
@@ -90,6 +105,180 @@ export class ParallelTransactionProcessor {
       txHashes,
       sendDuration,
     };
+  }
+
+  async sendTransactionsAndValidateStatuses(
+    transactions: TransactionWithHash[],
+    blockNumber: number,
+    expectedStatuses: Map<string, ExecutionStatus>,
+    txIndexOffset: number = 0,
+  ): Promise<SendTransactionsResult> {
+    if (transactions.length === 0) {
+      return { txResults: [], txHashes: [], sendDuration: 0 };
+    }
+
+    logger.info(
+      `📤 Sending ${transactions.length} transactions sequentially (transaction-only status validation)...`,
+    );
+
+    const startTime = Date.now();
+    const endTimer = startTimer();
+    const txResults: TransactionResult[] = [];
+    const txHashes: string[] = [];
+
+    for (let index = 0; index < transactions.length; index++) {
+      const tx = transactions[index];
+      const txHash = tx.transaction_hash;
+      const txIndex = txIndexOffset + index;
+      const expectedStatus = expectedStatuses.get(txHash);
+
+      if (!expectedStatus) {
+        throw new Error(
+          `Missing original receipt status for transaction ${txHash}`,
+        );
+      }
+
+      txHashes.push(txHash);
+
+      try {
+        const existingStatus = await this.getExistingTransactionStatus(txHash);
+
+        if (existingStatus) {
+          assertTransactionExecutionStatusMatches(
+            blockNumber,
+            txHash,
+            txIndex,
+            expectedStatus,
+            existingStatus,
+          );
+          logger.info(
+            `  [${index + 1}/${transactions.length}] Tx ${txHash} already has matching receipt, skipping send`,
+          );
+          txResults.push({
+            txHash,
+            success: true,
+          });
+          continue;
+        }
+
+        await this.sendTransactionOnlyWithRetries(
+          tx,
+          blockNumber,
+          txIndex,
+          transactions.length,
+          expectedStatus,
+        );
+
+        txResults.push({
+          txHash,
+          success: true,
+        });
+      } catch (error: any) {
+        if (
+          error instanceof MadaraDownError ||
+          error instanceof TransactionReplayFailedError ||
+          error instanceof TransactionStatusMismatchError
+        ) {
+          throw error;
+        }
+
+        logger.error(
+          `  Failed to send/validate transaction ${index + 1}:`,
+          error.message,
+        );
+        throw new Error(
+          `Failed to send/validate transaction ${index + 1}/${transactions.length} in block ${blockNumber}: ${error.message}`,
+        );
+      }
+    }
+
+    const sendDuration = Date.now() - startTime;
+    logger.info(
+      `✅ All ${transactions.length} transactions sent and status-matched in ${sendDuration}ms`,
+    );
+
+    recordBlockProcessingDuration("send_txs", endTimer());
+
+    return {
+      txResults,
+      txHashes,
+      sendDuration,
+    };
+  }
+
+  private async sendTransactionOnlyWithRetries(
+    tx: TransactionWithHash,
+    blockNumber: number,
+    txIndex: number,
+    totalTxs: number,
+    expectedStatus: ExecutionStatus,
+  ): Promise<void> {
+    const txHash = tx.transaction_hash;
+
+    for (
+      let attempt = 1;
+      attempt <= TransactionOnlyReplayConfig.MAX_ATTEMPTS;
+      attempt++
+    ) {
+      try {
+        logger.debug(
+          `  [${txIndex + 1}/${totalTxs}] Sending tx: ${txHash} (attempt ${attempt}/${TransactionOnlyReplayConfig.MAX_ATTEMPTS})`,
+        );
+
+        await processTx(tx, blockNumber);
+
+        const syncingStatus = await waitForTransactionExecutionStatus(
+          syncingProvider,
+          txHash,
+          TransactionOnlyReplayConfig.RECEIPT_TIMEOUT_MS,
+        );
+
+        assertTransactionExecutionStatusMatches(
+          blockNumber,
+          txHash,
+          txIndex,
+          expectedStatus,
+          syncingStatus,
+        );
+
+        return;
+      } catch (error: any) {
+        if (
+          error instanceof MadaraDownError ||
+          error instanceof TransactionReplayFailedError ||
+          error instanceof TransactionStatusMismatchError
+        ) {
+          throw error;
+        }
+
+        if (attempt >= TransactionOnlyReplayConfig.MAX_ATTEMPTS) {
+          throw new TransactionReplayFailedError(
+            blockNumber,
+            txHash,
+            txIndex,
+            `Transaction ${txHash} did not produce a matching receipt after ${TransactionOnlyReplayConfig.MAX_ATTEMPTS} attempts: ${error.message}`,
+          );
+        }
+
+        logger.warn(
+          `  [${txIndex + 1}/${totalTxs}] Tx ${txHash} failed attempt ${attempt}/${TransactionOnlyReplayConfig.MAX_ATTEMPTS}, retrying: ${error.message}`,
+        );
+      }
+    }
+  }
+
+  private async getExistingTransactionStatus(
+    txHash: string,
+  ): Promise<ExecutionStatus | null> {
+    try {
+      const receipt = await getTransactionReceipt(syncingProvider, txHash);
+      return getReceiptExecutionStatus(receipt);
+    } catch (error) {
+      if (error instanceof MadaraDownError) {
+        throw error;
+      }
+      return null;
+    }
   }
 
   /**

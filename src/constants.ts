@@ -65,6 +65,14 @@ export const ReceiptValidationConfig = {
 } as const;
 
 /**
+ * Transaction-only replay retry configuration
+ */
+export const TransactionOnlyReplayConfig = {
+  MAX_ATTEMPTS: 3,
+  RECEIPT_TIMEOUT_MS: 30 * 1000, // 30 seconds
+} as const;
+
+/**
  * Block Processing Configuration
  */
 export const BlockProcessing = {
@@ -86,6 +94,7 @@ export const ProcessStatus = {
   CANCELLED: "cancelled",
   FAILED: "failed",
   RECOVERING: "recovering",
+  PAUSED: "paused",
 } as const;
 
 export type ProcessStatusType =
@@ -101,6 +110,16 @@ export const SyncMode = {
 } as const;
 
 export type SyncModeType = (typeof SyncMode)[keyof typeof SyncMode];
+
+/**
+ * Replay Modes
+ */
+export const ReplayMode = {
+  MANAGED_BLOCKS: "managed_blocks",
+  TRANSACTION_ONLY: "transaction_only",
+} as const;
+
+export type ReplayModeType = (typeof ReplayMode)[keyof typeof ReplayMode];
 
 /**
  * RPC Version Paths
@@ -186,6 +205,8 @@ export const ErrorCode = {
   MADARA_DOWN: "MADARA_DOWN",
   CONFIGURATION_ERROR: "CONFIGURATION_ERROR",
   BLOCK_HASH_MISMATCH: "BLOCK_HASH_MISMATCH",
+  TRANSACTION_STATUS_MISMATCH: "TRANSACTION_STATUS_MISMATCH",
+  TRANSACTION_REPLAY_FAILED: "TRANSACTION_REPLAY_FAILED",
   UNSUPPORTED_STARKNET_VERSION: "UNSUPPORTED_STARKNET_VERSION",
   PROCESS_NOT_FOUND: "PROCESS_NOT_FOUND",
   INVALID_PROCESS_STATUS: "INVALID_PROCESS_STATUS",

@@ -93,6 +93,19 @@ async function recoverOnStartup(): Promise<void> {
       return;
     }
 
+    if (config.isTransactionOnlyReplay && state.currentBlock === undefined) {
+      const error =
+        "Transaction-only replay found running state without an explicit start cursor; refusing auto-resume";
+      logger.warn(`⚠️  ${error}`);
+      logger.warn("📍 Call /sync with startBlock and optional startTxHash/startTxIndex");
+      persistence.pauseSync(
+        state.syncTo ?? "latest",
+        state.isContinuous,
+        error,
+      );
+      return;
+    }
+
     // State says we should be running - validate and recover
     logger.info("🔍 Found running state - validating chain integrity...");
 
@@ -101,6 +114,12 @@ async function recoverOnStartup(): Promise<void> {
 
       logger.info(`✅ Chain integrity validated`);
       logger.info(`🔄 Resuming sync from block ${recovery.resumeFrom}`);
+      if (recovery.startTxIndex > 0) {
+        logger.info(`📍 Resuming from tx index ${recovery.startTxIndex}`);
+      }
+      if (recovery.startTxHash) {
+        logger.info(`📍 Resuming from tx hash ${recovery.startTxHash}`);
+      }
 
       const mode = recovery.isContinuous ? "CONTINUOUS" : "FIXED";
       logger.info(`📋 Mode: ${mode}, Target: ${recovery.syncTo}`);
@@ -108,6 +127,9 @@ async function recoverOnStartup(): Promise<void> {
       // Start sync from recovery point
       const result = await startSync(
         recovery.isContinuous ? "latest" : recovery.syncTo,
+        recovery.resumeFrom,
+        recovery.startTxIndex,
+        recovery.startTxHash,
       );
 
       if (result.alreadyComplete) {

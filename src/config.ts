@@ -2,6 +2,8 @@ import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
+import { ReplayMode, ReplayModeType } from "./constants.js";
+import { parseReplayMode } from "./replayMode.js";
 
 dotenv.config();
 
@@ -28,6 +30,7 @@ interface EnvironmentConfig {
   // Features
   cleanSlate: boolean;
   sequentialValidation: boolean;
+  replayMode: ReplayModeType;
   maxSupportedStarknetVersion?: string;
 }
 
@@ -98,6 +101,7 @@ class Config {
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
+      replayMode: this.parseReplayMode(process.env.REPLAY_MODE),
       maxSupportedStarknetVersion,
     };
 
@@ -124,6 +128,14 @@ class Config {
     }
 
     return port;
+  }
+
+  private parseReplayMode(mode: string | undefined): ReplayModeType {
+    try {
+      return parseReplayMode(mode);
+    } catch (error) {
+      throw new ConfigurationError((error as Error).message);
+    }
   }
 
   private parseOptionalStarknetVersion(
@@ -161,6 +173,7 @@ class Config {
     logger.info(
       `  • Sequential Validation: ${config.sequentialValidation ? "ENABLED" : "disabled"}`,
     );
+    logger.info(`  • Replay Mode: ${config.replayMode}`);
     logger.info(
       `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
     );
@@ -224,6 +237,14 @@ class Config {
 
   public get sequentialValidation(): boolean {
     return this.config.sequentialValidation;
+  }
+
+  public get replayMode(): ReplayModeType {
+    return this.config.replayMode;
+  }
+
+  public get isTransactionOnlyReplay(): boolean {
+    return this.config.replayMode === ReplayMode.TRANSACTION_ONLY;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {

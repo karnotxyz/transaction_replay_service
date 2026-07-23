@@ -86,6 +86,54 @@ export class BlockHashMismatchError extends AppError {
 }
 
 /**
+ * Transaction execution status differs from the original node.
+ */
+export class TransactionStatusMismatchError extends AppError {
+  public readonly blockNumber: number;
+  public readonly txHash: string;
+  public readonly txIndex: number;
+  public readonly originalStatus: string;
+  public readonly syncingStatus: string;
+
+  constructor(
+    blockNumber: number,
+    txHash: string,
+    txIndex: number,
+    originalStatus: string,
+    syncingStatus: string,
+  ) {
+    const message = `Transaction status mismatch at block ${blockNumber}, tx ${txIndex} (${txHash}): original=${originalStatus}, syncing=${syncingStatus}`;
+    super(message, ErrorCode.TRANSACTION_STATUS_MISMATCH, 409, true);
+    this.blockNumber = blockNumber;
+    this.txHash = txHash;
+    this.txIndex = txIndex;
+    this.originalStatus = originalStatus;
+    this.syncingStatus = syncingStatus;
+  }
+}
+
+/**
+ * Transaction-only replay could not produce a matching receipt for a tx.
+ */
+export class TransactionReplayFailedError extends AppError {
+  public readonly blockNumber: number;
+  public readonly txHash: string;
+  public readonly txIndex: number;
+
+  constructor(
+    blockNumber: number,
+    txHash: string,
+    txIndex: number,
+    message: string,
+  ) {
+    super(message, ErrorCode.TRANSACTION_REPLAY_FAILED, 409, true);
+    this.blockNumber = blockNumber;
+    this.txHash = txHash;
+    this.txIndex = txIndex;
+  }
+}
+
+/**
  * Block Starknet version exceeds configured support ceiling
  */
 export class UnsupportedStarknetVersionError extends AppError {
