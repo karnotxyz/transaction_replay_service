@@ -22,6 +22,7 @@ import {
   startTimer,
 } from "../telemetry/metrics.js";
 import { config } from "../config.js";
+import { TransactionOnlyReplayConfig } from "../constants.js";
 
 /**
  * Process transactions for a block
@@ -124,34 +125,23 @@ export class ParallelTransactionProcessor {
     for (let index = 0; index < transactions.length; index++) {
       const tx = transactions[index];
       const txHash = tx.transaction_hash;
+      const expectedStatus = expectedStatuses.get(txHash);
+
+      if (!expectedStatus) {
+        throw new Error(
+          `Missing original receipt status for transaction ${txHash}`,
+        );
+      }
+
+      txHashes.push(txHash);
 
       try {
-        const expectedStatus = expectedStatuses.get(txHash);
-
-        if (!expectedStatus) {
-          throw new Error(
-            `Missing original receipt status for transaction ${txHash}`,
-          );
-        }
-
-        txHashes.push(txHash);
-        logger.debug(
-          `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
-        );
-
-        await processTx(tx, blockNumber);
-
-        const syncingStatus = await waitForTransactionExecutionStatus(
-          syncingProvider,
-          txHash,
-        );
-
-        assertTransactionExecutionStatusMatches(
+        await this.sendTransactionOnlyWithRetries(
+          tx,
           blockNumber,
-          txHash,
           index,
+          transactions.length,
           expectedStatus,
-          syncingStatus,
         );
 
         txResults.push({
@@ -188,6 +178,63 @@ export class ParallelTransactionProcessor {
       txHashes,
       sendDuration,
     };
+  }
+
+  private async sendTransactionOnlyWithRetries(
+    tx: TransactionWithHash,
+    blockNumber: number,
+    txIndex: number,
+    totalTxs: number,
+    expectedStatus: ExecutionStatus,
+  ): Promise<void> {
+    const txHash = tx.transaction_hash;
+
+    for (
+      let attempt = 1;
+      attempt <= TransactionOnlyReplayConfig.MAX_ATTEMPTS;
+      attempt++
+    ) {
+      try {
+        logger.debug(
+          `  [${txIndex + 1}/${totalTxs}] Sending tx: ${txHash} (attempt ${attempt}/${TransactionOnlyReplayConfig.MAX_ATTEMPTS})`,
+        );
+
+        await processTx(tx, blockNumber);
+
+        const syncingStatus = await waitForTransactionExecutionStatus(
+          syncingProvider,
+          txHash,
+          TransactionOnlyReplayConfig.RECEIPT_TIMEOUT_MS,
+        );
+
+        assertTransactionExecutionStatusMatches(
+          blockNumber,
+          txHash,
+          txIndex,
+          expectedStatus,
+          syncingStatus,
+        );
+
+        return;
+      } catch (error: any) {
+        if (
+          error instanceof MadaraDownError ||
+          error instanceof TransactionStatusMismatchError
+        ) {
+          throw error;
+        }
+
+        if (attempt >= TransactionOnlyReplayConfig.MAX_ATTEMPTS) {
+          throw new Error(
+            `Transaction ${txHash} did not produce a matching receipt after ${TransactionOnlyReplayConfig.MAX_ATTEMPTS} attempts: ${error.message}`,
+          );
+        }
+
+        logger.warn(
+          `  [${txIndex + 1}/${totalTxs}] Tx ${txHash} failed attempt ${attempt}/${TransactionOnlyReplayConfig.MAX_ATTEMPTS}, retrying: ${error.message}`,
+        );
+      }
+    }
   }
 
   /**

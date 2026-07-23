@@ -154,6 +154,7 @@ export function assertTransactionExecutionStatusMatches(
 export async function waitForTransactionExecutionStatus(
   provider: RpcProvider,
   txHash: string,
+  timeoutMs = ReceiptValidationConfig.TIMEOUT_MS,
 ): Promise<ExecutionStatus> {
   const nodeName = getNodeName(provider);
   const startTime = Date.now();
@@ -166,7 +167,7 @@ export async function waitForTransactionExecutionStatus(
   while (true) {
     const elapsed = Date.now() - startTime;
 
-    if (elapsed >= ReceiptValidationConfig.TIMEOUT_MS) {
+    if (elapsed >= timeoutMs) {
       throw new Error(
         `Receipt validation timed out after ${Math.round(elapsed / 1000)}s for tx ${txHash} [${nodeName}]`,
       );

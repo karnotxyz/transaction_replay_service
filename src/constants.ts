@@ -65,6 +65,14 @@ export const ReceiptValidationConfig = {
 } as const;
 
 /**
+ * Transaction-only replay retry configuration
+ */
+export const TransactionOnlyReplayConfig = {
+  MAX_ATTEMPTS: 3,
+  RECEIPT_TIMEOUT_MS: 30 * 1000, // 30 seconds
+} as const;
+
+/**
  * Block Processing Configuration
  */
 export const BlockProcessing = {

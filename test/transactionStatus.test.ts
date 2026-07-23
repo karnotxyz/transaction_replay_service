@@ -9,6 +9,7 @@ process.env.ADMIN_RPC_URL_SYNCING_NODE ??= "http://admin.example";
 const {
   assertTransactionExecutionStatusMatches,
   getReceiptExecutionStatus,
+  waitForTransactionExecutionStatus,
 } = await import("../src/operations/transactionOperations.js");
 
 test("getReceiptExecutionStatus returns SUCCEEDED for successful receipts", () => {
@@ -66,4 +67,20 @@ test("assertTransactionExecutionStatusMatches throws on mismatches", () => {
       ),
     TransactionStatusMismatchError,
   );
+});
+
+test("waitForTransactionExecutionStatus honors caller timeout", async () => {
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    () =>
+      waitForTransactionExecutionStatus(
+        { getTransactionReceipt: async () => ({}) } as any,
+        "0x123",
+        1,
+      ),
+    /Receipt validation timed out/,
+  );
+
+  assert.ok(Date.now() - startedAt < 2000);
 });
