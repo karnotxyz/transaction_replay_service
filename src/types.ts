@@ -25,6 +25,7 @@ export interface SyncProcess {
   syncTo: number;
   currentBlock: number;
   currentTxIndex: number;
+  currentTxHash?: string;
   totalBlocks: number | null; // null for continuous sync
   processedBlocks: number;
   startTime: Date;
@@ -46,6 +47,9 @@ export interface SyncState {
   isContinuous: boolean;
   updatedAt: string;
   error?: string;
+  currentBlock?: number;
+  currentTxIndex?: number;
+  currentTxHash?: string;
 }
 
 /**
@@ -53,6 +57,9 @@ export interface SyncState {
  */
 export interface SyncRequest {
   endBlock: BlockIdentifier;
+  startBlock?: number;
+  startTxIndex?: number;
+  startTxHash?: string;
 }
 
 /**

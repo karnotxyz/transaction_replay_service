@@ -113,6 +113,27 @@ export class TransactionStatusMismatchError extends AppError {
 }
 
 /**
+ * Transaction-only replay could not produce a matching receipt for a tx.
+ */
+export class TransactionReplayFailedError extends AppError {
+  public readonly blockNumber: number;
+  public readonly txHash: string;
+  public readonly txIndex: number;
+
+  constructor(
+    blockNumber: number,
+    txHash: string,
+    txIndex: number,
+    message: string,
+  ) {
+    super(message, ErrorCode.TRANSACTION_REPLAY_FAILED, 409, true);
+    this.blockNumber = blockNumber;
+    this.txHash = txHash;
+    this.txIndex = txIndex;
+  }
+}
+
+/**
  * Block Starknet version exceeds configured support ceiling
  */
 export class UnsupportedStarknetVersionError extends AppError {

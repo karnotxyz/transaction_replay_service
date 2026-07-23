@@ -35,15 +35,21 @@ import {
   SyncInProgressError,
   InvalidBlockError,
   MadaraDownError,
+  TransactionReplayFailedError,
   TransactionStatusMismatchError,
 } from "./errors/index.js";
 import { config } from "./config.js";
-import { ExecutionStatus } from "./types.js";
+import { ExecutionStatus, SyncRequest } from "./types.js";
 
 /**
  * Start a sync process (for auto-resume and API)
  */
-export async function startSync(endBlock: BlockIdentifier) {
+export async function startSync(
+  endBlock: BlockIdentifier,
+  startBlockOverride?: number,
+  startTxIndex: number = 0,
+  startTxHash?: string,
+) {
   if (syncStateManager.isSyncRunning()) {
     const currentProcess = syncStateManager.getProcess()!;
     throw new SyncInProgressError(
@@ -65,7 +71,7 @@ export async function startSync(endBlock: BlockIdentifier) {
   const targetBlock = await getTargetBlock(endBlock);
 
   const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider);
-  const startBlock = syncingNodeLatestBlock + 1;
+  const startBlock = startBlockOverride ?? syncingNodeLatestBlock + 1;
 
   if (startBlock > targetBlock) {
     return {
@@ -86,7 +92,8 @@ export async function startSync(endBlock: BlockIdentifier) {
     syncFrom: startBlock,
     syncTo: targetBlock,
     currentBlock: startBlock,
-    currentTxIndex: 0,
+    currentTxIndex: startTxIndex,
+    currentTxHash: startTxHash,
     totalBlocks: targetBlock - startBlock + 1,
     processedBlocks: 0,
     startTime: new Date(),
@@ -98,13 +105,25 @@ export async function startSync(endBlock: BlockIdentifier) {
   syncStateManager.setProcess(newProcess);
 
   // Save state to file
-  persistence.startSync(isContinuous ? "latest" : targetBlock, isContinuous);
+  persistence.startSync(
+    isContinuous ? "latest" : targetBlock,
+    isContinuous,
+    startBlock,
+    startTxIndex,
+    startTxHash,
+  );
 
   const mode = isContinuous ? "CONTINUOUS (following latest)" : "FIXED";
   logger.info(`🚀 Starting SYNC process ${processId} [${mode}]`);
   logger.info(
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
   );
+  if (startTxIndex > 0) {
+    logger.info(`📍 Starting inside block ${startBlock} at tx index ${startTxIndex}`);
+  }
+  if (startTxHash) {
+    logger.info(`📍 Starting inside block ${startBlock} at tx hash ${startTxHash}`);
+  }
   const txMode = config.isTransactionOnlyReplay
     ? "TRANSACTION_ONLY send-and-status-match"
     : config.sequentialValidation
@@ -150,7 +169,12 @@ export async function startSync(endBlock: BlockIdentifier) {
  */
 export const syncEndpoint = async (req: Request, res: Response) => {
   try {
-    const { endBlock }: { endBlock: BlockIdentifier } = req.body;
+    const {
+      endBlock,
+      startBlock,
+      startTxIndex = 0,
+      startTxHash,
+    }: SyncRequest = req.body;
 
     if (!endBlock && endBlock !== 0) {
       return res.status(HttpStatus.BAD_REQUEST).json({
@@ -158,7 +182,30 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       });
     }
 
-    const result = await startSync(endBlock);
+    if (startBlock !== undefined && (!Number.isInteger(startBlock) || startBlock < 0)) {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        error: "startBlock must be a non-negative integer",
+      });
+    }
+
+    if (!Number.isInteger(startTxIndex) || startTxIndex < 0) {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        error: "startTxIndex must be a non-negative integer",
+      });
+    }
+
+    if (startTxHash !== undefined && typeof startTxHash !== "string") {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        error: "startTxHash must be a transaction hash string",
+      });
+    }
+
+    const result = await startSync(
+      endBlock,
+      startBlock,
+      startTxIndex,
+      startTxHash,
+    );
 
     if (result.alreadyComplete) {
       return res.status(HttpStatus.OK).json({
@@ -175,6 +222,8 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       mode: result.isContinuous ? "continuous" : "fixed",
       status: {
         startBlock: result.syncFrom,
+        startTxIndex,
+        startTxHash,
         endBlock: result.syncTo,
         totalBlocks: result.estimatedBlocks,
       },
@@ -336,29 +385,63 @@ async function getOriginalReceiptStatusMap(
 async function processTransactionOnlyBlock(
   blockNumber: number,
   blockWithTxs: SourceBlockWithTxs,
+  startTxIndex: number = 0,
+  startTxHash?: string,
 ): Promise<ProcessBlockResult> {
-  const transactions = blockWithTxs.transactions as TransactionWithHash[];
+  const allTransactions = blockWithTxs.transactions as TransactionWithHash[];
+  let effectiveStartTxIndex = startTxIndex;
 
   logger.info(
-    `📦 Block ${blockNumber}: Found ${transactions.length} transactions`,
+    `📦 Block ${blockNumber}: Found ${allTransactions.length} transactions`,
   );
 
-  if (transactions.length === 0) {
+  if (startTxIndex > 0) {
+    logger.info(
+      `📍 Transaction-only resume: skipping first ${startTxIndex} source transactions in block ${blockNumber}`,
+    );
+  }
+
+  if (startTxHash) {
+    const hashIndex = allTransactions.findIndex(
+      (tx) => tx.transaction_hash === startTxHash,
+    );
+    if (hashIndex < 0) {
+      throw new Error(
+        `Transaction ${startTxHash} not found in source block ${blockNumber}`,
+      );
+    }
+    effectiveStartTxIndex = hashIndex;
+    logger.info(
+      `📍 Transaction-only resume: starting at tx hash ${startTxHash} (index ${effectiveStartTxIndex}) in block ${blockNumber}`,
+    );
+  }
+
+  const transactions = allTransactions.slice(effectiveStartTxIndex);
+
+  if (allTransactions.length === 0) {
     logger.info(
       `⏭️  Block ${blockNumber} has no transactions, skipping in transaction-only mode`,
     );
     return { txCount: 0, txHashes: [] };
   }
 
+  if (transactions.length === 0) {
+    logger.info(
+      `✅ Block ${blockNumber} has no remaining transactions from tx index ${startTxIndex}`,
+    );
+    return { txCount: allTransactions.length, txHashes: [] };
+  }
+
   const originalStatuses = await getOriginalReceiptStatusMap(
     blockNumber,
-    transactions,
+    allTransactions,
   );
   const result =
     await parallelTransactionProcessor.sendTransactionsAndValidateStatuses(
       transactions,
       blockNumber,
       originalStatuses,
+      effectiveStartTxIndex,
     );
 
   return { txCount: transactions.length, txHashes: result.txHashes };
@@ -419,6 +502,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     );
 
     let currentBlock = process.currentBlock;
+    let startTxIndex = process.currentTxIndex || 0;
+    let startTxHash = process.currentTxHash;
     // Track existing tx hashes for recovery scenarios (continue_block action)
     let existingTxHashes: string[] = [];
 
@@ -449,6 +534,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       }
 
       process.currentBlock = currentBlock;
+      process.currentTxIndex = startTxIndex;
+      process.currentTxHash = startTxHash;
+      persistence.updateProgress(currentBlock, startTxIndex, startTxHash);
 
       // Update current block metric
       updateCurrentBlock(currentBlock);
@@ -468,6 +556,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
             blockResult = await processTransactionOnlyBlock(
               currentBlock,
               sourceBlock,
+              startTxIndex,
+              startTxHash,
             );
           } catch (error) {
             if (error instanceof MadaraDownError) {
@@ -489,6 +579,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
               currentBlock = getTransactionOnlyRecoveryBlock(
                 recoveryResult.action,
               );
+              startTxIndex = 0;
+              startTxHash = undefined;
               existingTxHashes = [];
               continue;
             }
@@ -512,6 +604,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           );
 
           currentBlock++;
+          startTxIndex = 0;
+          startTxHash = undefined;
           continue;
         }
 
@@ -761,6 +855,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           throw error;
         }
 
+        if (error instanceof TransactionReplayFailedError) {
+          throw error;
+        }
+
         // Record failed block processing metric
         recordBlockStatus("failed");
 
@@ -792,6 +890,26 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       );
     }
   } catch (error) {
+    if (error instanceof TransactionReplayFailedError) {
+      process.status = ProcessStatus.PAUSED;
+      process.error = error.message;
+      process.currentBlock = error.blockNumber;
+      process.currentTxIndex = error.txIndex;
+      persistence.pauseSync(
+        process.syncTo,
+        !!process.isContinuous,
+        error.message,
+        error.blockNumber,
+        error.txIndex,
+        error.txHash,
+      );
+      syncStateManager.stopProbe();
+      syncStateManager.clearProcess();
+      updateActiveSyncProcessCount("sync", false);
+      logger.error(`⏸️ Sync process ${process.id} paused at tx cursor:`, error);
+      return;
+    }
+
     if (error instanceof TransactionStatusMismatchError) {
       process.status = ProcessStatus.PAUSED;
       process.error = error.message;
@@ -799,8 +917,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         process.syncTo,
         !!process.isContinuous,
         error.message,
+        error.blockNumber,
+        error.txIndex,
+        error.txHash,
       );
       syncStateManager.stopProbe();
+      syncStateManager.clearProcess();
       updateActiveSyncProcessCount("sync", false);
       logger.error(`⏸️ Sync process ${process.id} paused:`, error);
       return;
@@ -887,8 +1009,19 @@ export const getSyncStatus = async (req: Request, res: Response) => {
           mode: persistedState.isContinuous ? "continuous" : "fixed",
           progress: {
             endBlock: persistedState.syncTo,
+            currentBlock: persistedState.currentBlock,
+            currentTxIndex: persistedState.currentTxIndex,
+            currentTxHash: persistedState.currentTxHash,
           },
           error: persistedState.error,
+          resumeRequest: persistedState.currentBlock !== undefined
+            ? {
+              startBlock: persistedState.currentBlock,
+              startTxIndex: persistedState.currentTxIndex ?? 0,
+              startTxHash: persistedState.currentTxHash,
+              endBlock: persistedState.syncTo,
+            }
+            : undefined,
           updatedAt: persistedState.updatedAt,
         });
       }

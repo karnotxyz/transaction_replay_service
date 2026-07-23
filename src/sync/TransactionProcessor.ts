@@ -3,6 +3,8 @@ import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
 import {
   assertTransactionExecutionStatusMatches,
+  getReceiptExecutionStatus,
+  getTransactionReceipt,
   validateBlockReceipts,
   waitForTransactionExecutionStatus,
 } from "../operations/transactionOperations.js";
@@ -10,6 +12,7 @@ import { syncingProvider } from "../providers.js";
 import { getPreConfirmedBlock } from "../operations/blockOperations.js";
 import {
   MadaraDownError,
+  TransactionReplayFailedError,
   TransactionStatusMismatchError,
 } from "../errors/index.js";
 import {
@@ -108,6 +111,7 @@ export class ParallelTransactionProcessor {
     transactions: TransactionWithHash[],
     blockNumber: number,
     expectedStatuses: Map<string, ExecutionStatus>,
+    txIndexOffset: number = 0,
   ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
       return { txResults: [], txHashes: [], sendDuration: 0 };
@@ -125,6 +129,7 @@ export class ParallelTransactionProcessor {
     for (let index = 0; index < transactions.length; index++) {
       const tx = transactions[index];
       const txHash = tx.transaction_hash;
+      const txIndex = txIndexOffset + index;
       const expectedStatus = expectedStatuses.get(txHash);
 
       if (!expectedStatus) {
@@ -136,10 +141,30 @@ export class ParallelTransactionProcessor {
       txHashes.push(txHash);
 
       try {
+        const existingStatus = await this.getExistingTransactionStatus(txHash);
+
+        if (existingStatus) {
+          assertTransactionExecutionStatusMatches(
+            blockNumber,
+            txHash,
+            txIndex,
+            expectedStatus,
+            existingStatus,
+          );
+          logger.info(
+            `  [${index + 1}/${transactions.length}] Tx ${txHash} already has matching receipt, skipping send`,
+          );
+          txResults.push({
+            txHash,
+            success: true,
+          });
+          continue;
+        }
+
         await this.sendTransactionOnlyWithRetries(
           tx,
           blockNumber,
-          index,
+          txIndex,
           transactions.length,
           expectedStatus,
         );
@@ -151,6 +176,7 @@ export class ParallelTransactionProcessor {
       } catch (error: any) {
         if (
           error instanceof MadaraDownError ||
+          error instanceof TransactionReplayFailedError ||
           error instanceof TransactionStatusMismatchError
         ) {
           throw error;
@@ -219,13 +245,17 @@ export class ParallelTransactionProcessor {
       } catch (error: any) {
         if (
           error instanceof MadaraDownError ||
+          error instanceof TransactionReplayFailedError ||
           error instanceof TransactionStatusMismatchError
         ) {
           throw error;
         }
 
         if (attempt >= TransactionOnlyReplayConfig.MAX_ATTEMPTS) {
-          throw new Error(
+          throw new TransactionReplayFailedError(
+            blockNumber,
+            txHash,
+            txIndex,
             `Transaction ${txHash} did not produce a matching receipt after ${TransactionOnlyReplayConfig.MAX_ATTEMPTS} attempts: ${error.message}`,
           );
         }
@@ -234,6 +264,20 @@ export class ParallelTransactionProcessor {
           `  [${txIndex + 1}/${totalTxs}] Tx ${txHash} failed attempt ${attempt}/${TransactionOnlyReplayConfig.MAX_ATTEMPTS}, retrying: ${error.message}`,
         );
       }
+    }
+  }
+
+  private async getExistingTransactionStatus(
+    txHash: string,
+  ): Promise<ExecutionStatus | null> {
+    try {
+      const receipt = await getTransactionReceipt(syncingProvider, txHash);
+      return getReceiptExecutionStatus(receipt);
+    } catch (error) {
+      if (error instanceof MadaraDownError) {
+        throw error;
+      }
+      return null;
     }
   }
 

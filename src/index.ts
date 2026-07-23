@@ -101,6 +101,12 @@ async function recoverOnStartup(): Promise<void> {
 
       logger.info(`✅ Chain integrity validated`);
       logger.info(`🔄 Resuming sync from block ${recovery.resumeFrom}`);
+      if (recovery.startTxIndex > 0) {
+        logger.info(`📍 Resuming from tx index ${recovery.startTxIndex}`);
+      }
+      if (recovery.startTxHash) {
+        logger.info(`📍 Resuming from tx hash ${recovery.startTxHash}`);
+      }
 
       const mode = recovery.isContinuous ? "CONTINUOUS" : "FIXED";
       logger.info(`📋 Mode: ${mode}, Target: ${recovery.syncTo}`);
@@ -108,6 +114,9 @@ async function recoverOnStartup(): Promise<void> {
       // Start sync from recovery point
       const result = await startSync(
         recovery.isContinuous ? "latest" : recovery.syncTo,
+        recovery.resumeFrom,
+        recovery.startTxIndex,
+        recovery.startTxHash,
       );
 
       if (result.alreadyComplete) {
