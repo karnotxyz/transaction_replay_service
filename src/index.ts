@@ -93,6 +93,19 @@ async function recoverOnStartup(): Promise<void> {
       return;
     }
 
+    if (config.isTransactionOnlyReplay && state.currentBlock === undefined) {
+      const error =
+        "Transaction-only replay found running state without an explicit start cursor; refusing auto-resume";
+      logger.warn(`⚠️  ${error}`);
+      logger.warn("📍 Call /sync with startBlock and optional startTxHash/startTxIndex");
+      persistence.pauseSync(
+        state.syncTo ?? "latest",
+        state.isContinuous,
+        error,
+      );
+      return;
+    }
+
     // State says we should be running - validate and recover
     logger.info("🔍 Found running state - validating chain integrity...");
 
