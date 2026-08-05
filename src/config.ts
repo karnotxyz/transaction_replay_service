@@ -29,6 +29,8 @@ interface EnvironmentConfig {
   cleanSlate: boolean;
   sequentialValidation: boolean;
   maxSupportedStarknetVersion?: string;
+  preConfirmedValidationMaxRetries: number;
+  preConfirmedValidationRetryDelayMs: number;
 }
 
 class Config {
@@ -99,6 +101,16 @@ class Config {
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
       maxSupportedStarknetVersion,
+      preConfirmedValidationMaxRetries: this.parsePositiveInteger(
+        process.env.PRE_CONFIRMED_VALIDATION_MAX_RETRIES,
+        "PRE_CONFIRMED_VALIDATION_MAX_RETRIES",
+        500,
+      ),
+      preConfirmedValidationRetryDelayMs: this.parsePositiveInteger(
+        process.env.PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS,
+        "PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS",
+        200,
+      ),
     };
 
     this.logConfiguration(config);
@@ -143,6 +155,24 @@ class Config {
     }
   }
 
+  private parsePositiveInteger(
+    value: string | undefined,
+    varName: string,
+    defaultValue: number,
+  ): number {
+    if (!value) {
+      return defaultValue;
+    }
+
+    const parsed = parseInt(value, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new ConfigurationError(
+        `Invalid ${varName} value: ${value}. Must be a positive integer.`,
+      );
+    }
+    return parsed;
+  }
+
   private logConfiguration(config: EnvironmentConfig): void {
     logger.info("📋 Configuration loaded:");
     logger.info(`  • Environment: ${config.nodeEnv}`);
@@ -163,6 +193,9 @@ class Config {
     );
     logger.info(
       `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
+    );
+    logger.info(
+      `  • Pre-confirmed Validation: ${config.preConfirmedValidationMaxRetries} retries @ ${config.preConfirmedValidationRetryDelayMs}ms`,
     );
 
     // OpenTelemetry Configuration
@@ -228,6 +261,14 @@ class Config {
 
   public get maxSupportedStarknetVersion(): string | undefined {
     return this.config.maxSupportedStarknetVersion;
+  }
+
+  public get preConfirmedValidationMaxRetries(): number {
+    return this.config.preConfirmedValidationMaxRetries;
+  }
+
+  public get preConfirmedValidationRetryDelayMs(): number {
+    return this.config.preConfirmedValidationRetryDelayMs;
   }
 
   public get isDevelopment(): boolean {
