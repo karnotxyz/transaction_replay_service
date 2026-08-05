@@ -17,6 +17,7 @@ import {
   recordBlockProcessingDuration,
   startTimer,
 } from "../telemetry/metrics.js";
+import { config } from "../config.js";
 
 /**
  * Result of block processing operations
@@ -117,8 +118,8 @@ export class BlockProcessor {
     blockNumber: number,
     expectedTxHashes: string[],
     process: SyncProcess,
-    maxRetries: number = 500,
-    retryDelayMs: number = 200,
+    maxRetries: number = config.preConfirmedValidationMaxRetries,
+    retryDelayMs: number = config.preConfirmedValidationRetryDelayMs,
   ): Promise<BlockProcessResult> {
     if (expectedTxHashes.length === 0) {
       logger.info(`⏭️ No transactions to validate for block ${blockNumber}`);
