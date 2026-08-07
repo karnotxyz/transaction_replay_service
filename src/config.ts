@@ -76,11 +76,10 @@ class Config {
       "ADMIN_RPC_URL_SYNCING_NODE",
     );
 
-    const maxSupportedStarknetVersion =
-      this.parseOptionalStarknetVersion(
-        process.env.MAX_SUPPORTED_STARKNET_VERSION,
-        "MAX_SUPPORTED_STARKNET_VERSION",
-      );
+    const maxSupportedStarknetVersion = this.parseOptionalStarknetVersion(
+      process.env.MAX_SUPPORTED_STARKNET_VERSION,
+      "MAX_SUPPORTED_STARKNET_VERSION",
+    );
 
     const config: EnvironmentConfig = {
       // Server

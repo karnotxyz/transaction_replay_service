@@ -70,6 +70,8 @@ export const ReceiptValidationConfig = {
 export const TransactionOnlyReplayConfig = {
   MAX_ATTEMPTS: 3,
   RECEIPT_TIMEOUT_MS: 30 * 1000, // 30 seconds
+  REPLAY_BOUNDARY_TX_MAX_RETRIES: 1800,
+  REPLAY_BOUNDARY_TX_RETRY_DELAY_MS: 1000,
 } as const;
 
 /**

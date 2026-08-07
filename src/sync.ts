@@ -19,7 +19,12 @@ import {
   getOriginalBlockWithTxsAndProofFacts,
   getBlockWithReceipts,
 } from "./operations/blockOperations.js";
-import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
+import {
+  BlockProcessing,
+  HttpStatus,
+  ProcessStatus,
+  ProbeConfig,
+} from "./constants.js";
 import { assertSupportedBlockVersion } from "./validation/index.js";
 import {
   incrementBlocksProcessed,
@@ -36,7 +41,6 @@ import {
   InvalidBlockError,
   MadaraDownError,
   TransactionReplayFailedError,
-  TransactionStatusMismatchError,
 } from "./errors/index.js";
 import { config } from "./config.js";
 import { ExecutionStatus, SyncRequest } from "./types.js";
@@ -119,13 +123,17 @@ export async function startSync(
     `📊 Range: Block ${startBlock} → ${targetBlock} (${newProcess.totalBlocks} blocks)`,
   );
   if (startTxIndex > 0) {
-    logger.info(`📍 Starting inside block ${startBlock} at tx index ${startTxIndex}`);
+    logger.info(
+      `📍 Starting inside block ${startBlock} at tx index ${startTxIndex}`,
+    );
   }
   if (startTxHash) {
-    logger.info(`📍 Starting inside block ${startBlock} at tx hash ${startTxHash}`);
+    logger.info(
+      `📍 Starting inside block ${startBlock} at tx hash ${startTxHash}`,
+    );
   }
   const txMode = config.isTransactionOnlyReplay
-    ? "TRANSACTION_ONLY send-and-status-match"
+    ? "TRANSACTION_ONLY managed-blocks-without-hash-match"
     : config.sequentialValidation
       ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
       : "SEQUENTIAL sending, PARALLEL receipt validation";
@@ -182,7 +190,10 @@ export const syncEndpoint = async (req: Request, res: Response) => {
       });
     }
 
-    if (startBlock !== undefined && (!Number.isInteger(startBlock) || startBlock < 0)) {
+    if (
+      startBlock !== undefined &&
+      (!Number.isInteger(startBlock) || startBlock < 0)
+    ) {
       return res.status(HttpStatus.BAD_REQUEST).json({
         error: "startBlock must be a non-negative integer",
       });
@@ -304,9 +315,7 @@ async function processBlock(
   let transactions = blockWithTxs.transactions as TransactionWithHash[];
   const totalTxCount = transactions.length;
 
-  logger.info(
-    `📦 Block ${blockNumber}: Found ${totalTxCount} transactions`,
-  );
+  logger.info(`📦 Block ${blockNumber}: Found ${totalTxCount} transactions`);
 
   // If we have existing transactions (recovery scenario), filter them out
   if (existingTxHashes.length > 0) {
@@ -361,7 +370,9 @@ async function getOriginalReceiptStatusMap(
   );
 
   if (!blockWithReceipts) {
-    throw new Error(`Original block receipts not found for block ${blockNumber}`);
+    throw new Error(
+      `Original block receipts not found for block ${blockNumber}`,
+    );
   }
 
   const statuses = new Map(
@@ -387,6 +398,7 @@ async function processTransactionOnlyBlock(
   blockWithTxs: SourceBlockWithTxs,
   startTxIndex: number = 0,
   startTxHash?: string,
+  existingTxHashes: string[] = [],
 ): Promise<ProcessBlockResult> {
   const allTransactions = blockWithTxs.transactions as TransactionWithHash[];
   let effectiveStartTxIndex = startTxIndex;
@@ -416,7 +428,7 @@ async function processTransactionOnlyBlock(
     );
   }
 
-  const transactions = allTransactions.slice(effectiveStartTxIndex);
+  let transactions = allTransactions.slice(effectiveStartTxIndex);
 
   if (allTransactions.length === 0) {
     logger.info(
@@ -425,26 +437,53 @@ async function processTransactionOnlyBlock(
     return { txCount: 0, txHashes: [] };
   }
 
+  if (existingTxHashes.length > 0) {
+    const existingSet = new Set(existingTxHashes);
+    const originalRemainingCount = transactions.length;
+    transactions = transactions.filter(
+      (tx) => !existingSet.has(tx.transaction_hash),
+    );
+    logger.info(
+      `🔄 Transaction-only recovery: ${existingTxHashes.length} transactions already in PRE_CONFIRMED, sending ${transactions.length}/${originalRemainingCount} remaining`,
+    );
+  }
+
   if (transactions.length === 0) {
     logger.info(
       `✅ Block ${blockNumber} has no remaining transactions from tx index ${startTxIndex}`,
     );
-    return { txCount: allTransactions.length, txHashes: [] };
+    return { txCount: allTransactions.length, txHashes: existingTxHashes };
   }
 
-  const originalStatuses = await getOriginalReceiptStatusMap(
-    blockNumber,
-    allTransactions,
-  );
+  const expectedExecutedCounts = transactions.map((tx) => {
+    const originalIndex = allTransactions.findIndex(
+      (sourceTx) => sourceTx.transaction_hash === tx.transaction_hash,
+    );
+    if (originalIndex < 0) {
+      throw new Error(
+        `Transaction ${tx.transaction_hash} not found in source block ${blockNumber}`,
+      );
+    }
+    return originalIndex + 1;
+  });
+
   const result =
-    await parallelTransactionProcessor.sendTransactionsAndValidateStatuses(
+    await parallelTransactionProcessor.sendTransactionsWithReplayBoundary(
       transactions,
       blockNumber,
-      originalStatuses,
-      effectiveStartTxIndex,
+      expectedExecutedCounts,
     );
 
-  return { txCount: transactions.length, txHashes: result.txHashes };
+  if (BlockProcessing.TX_DELAY_BETWEEN_TXS > 0) {
+    logger.debug(
+      `Transaction-only replay boundary pacing replaces fixed ${BlockProcessing.TX_DELAY_BETWEEN_TXS}ms inter-tx delay`,
+    );
+  }
+
+  return {
+    txCount: transactions.length,
+    txHashes: [...existingTxHashes, ...result.txHashes],
+  };
 }
 
 /**
@@ -546,18 +585,108 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       try {
         const sourceBlock = supportsProofFacts()
           ? await getOriginalBlockWithTxsAndProofFacts(currentBlock)
-          : (await getBlockWithTxs(originalProvider, currentBlock) as SourceBlockWithTxs);
+          : ((await getBlockWithTxs(
+              originalProvider,
+              currentBlock,
+            )) as SourceBlockWithTxs);
         assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
 
         if (config.isTransactionOnlyReplay) {
           let blockResult: ProcessBlockResult = { txCount: 0, txHashes: [] };
 
           try {
+            const originalStatuses = await getOriginalReceiptStatusMap(
+              currentBlock,
+              sourceBlock.transactions,
+            );
+
+            if (
+              startTxIndex === 0 &&
+              !startTxHash &&
+              existingTxHashes.length === 0
+            ) {
+              const validateResult = await blockProcessor.validateBlockReady(
+                currentBlock,
+                process,
+              );
+              if (!validateResult.success) {
+                throw validateResult.error;
+              }
+
+              const headersResult = await blockProcessor.setBlockHeaders(
+                currentBlock,
+                process,
+              );
+              if (!headersResult.success) {
+                throw headersResult.error;
+              }
+            } else {
+              logger.info(
+                `⏭️ Transaction-only resume: skipping validation/headers for block ${currentBlock}`,
+              );
+            }
+
+            const expectedTxHashes = (
+              sourceBlock.transactions as TransactionWithHash[]
+            ).map((tx) => tx.transaction_hash);
+            if (expectedTxHashes.length > 0) {
+              const boundaryResult =
+                await blockProcessor.setTransactionOnlyReplayBoundary(
+                  currentBlock,
+                  expectedTxHashes,
+                );
+              if (!boundaryResult.success) {
+                throw boundaryResult.error;
+              }
+            }
+
             blockResult = await processTransactionOnlyBlock(
               currentBlock,
               sourceBlock,
               startTxIndex,
               startTxHash,
+              existingTxHashes,
+            );
+            existingTxHashes = [];
+
+            logger.info(
+              `⏭️ Transaction-only mode: skipped PRE_CONFIRMED tx-list validation for block ${currentBlock}`,
+            );
+
+            if (blockResult.txHashes.length > 0) {
+              const boundaryClosedResult =
+                await blockProcessor.waitForReplayBoundaryClosed(currentBlock);
+              if (!boundaryClosedResult.success) {
+                throw boundaryClosedResult.error;
+              }
+            } else {
+              const closeResult = await blockProcessor.closeCurrentBlock(
+                currentBlock,
+                process,
+              );
+              if (!closeResult.success) {
+                throw closeResult.error;
+              }
+            }
+
+            if (blockResult.txHashes.length > 0) {
+              const closedBlockResult =
+                await blockProcessor.validateClosedBlockTransactions(
+                  currentBlock,
+                  blockResult.txHashes,
+                );
+              if (!closedBlockResult.success) {
+                throw closedBlockResult.error;
+              }
+
+              await parallelTransactionProcessor.validateReceipts(
+                currentBlock,
+                blockResult.txHashes,
+                originalStatuses,
+              );
+            }
+            logger.info(
+              `⏭️ Transaction-only mode: skipped block hash validation for block ${currentBlock}`,
             );
           } catch (error) {
             if (error instanceof MadaraDownError) {
@@ -581,7 +710,10 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
               );
               startTxIndex = 0;
               startTxHash = undefined;
-              existingTxHashes = [];
+              existingTxHashes =
+                recoveryResult.action.type === "continue_block"
+                  ? recoveryResult.action.existingTxHashes
+                  : [];
               continue;
             }
             throw error;
@@ -596,8 +728,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           const percentComplete = process.isContinuous
             ? "N/A (continuous)"
             : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-              2,
-            ) + "%";
+                2,
+              ) + "%";
 
           logger.info(
             `✅ Block ${currentBlock} transaction-only replay completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
@@ -677,11 +809,12 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         // (skipped when sequential validation is enabled — each tx was already confirmed)
         if (blockResult.txHashes.length > 0 && !config.sequentialValidation) {
           try {
-            const validateTxResult = await blockProcessor.validateTransactionsBeforeClose(
-              currentBlock,
-              blockResult.txHashes,
-              process,
-            );
+            const validateTxResult =
+              await blockProcessor.validateTransactionsBeforeClose(
+                currentBlock,
+                blockResult.txHashes,
+                process,
+              );
             if (!validateTxResult.success) {
               throw validateTxResult.error;
             }
@@ -842,8 +975,8 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         const percentComplete = process.isContinuous
           ? "N/A (continuous)"
           : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-            2,
-          ) + "%";
+              2,
+            ) + "%";
 
         logger.info(
           `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
@@ -851,10 +984,6 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
         currentBlock++;
       } catch (error) {
-        if (error instanceof TransactionStatusMismatchError) {
-          throw error;
-        }
-
         if (error instanceof TransactionReplayFailedError) {
           throw error;
         }
@@ -885,9 +1014,7 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       logger.info(
         `📊 Processed ${process.processedBlocks} blocks in ${durationSeconds}s`,
       );
-      logger.info(
-        `📍 Range: ${process.syncFrom} → ${process.currentBlock}`,
-      );
+      logger.info(`📍 Range: ${process.syncFrom} → ${process.currentBlock}`);
     }
   } catch (error) {
     if (error instanceof TransactionReplayFailedError) {
@@ -907,24 +1034,6 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       syncStateManager.clearProcess();
       updateActiveSyncProcessCount("sync", false);
       logger.error(`⏸️ Sync process ${process.id} paused at tx cursor:`, error);
-      return;
-    }
-
-    if (error instanceof TransactionStatusMismatchError) {
-      process.status = ProcessStatus.PAUSED;
-      process.error = error.message;
-      persistence.pauseSync(
-        process.syncTo,
-        !!process.isContinuous,
-        error.message,
-        error.blockNumber,
-        error.txIndex,
-        error.txHash,
-      );
-      syncStateManager.stopProbe();
-      syncStateManager.clearProcess();
-      updateActiveSyncProcessCount("sync", false);
-      logger.error(`⏸️ Sync process ${process.id} paused:`, error);
       return;
     }
 
@@ -1014,14 +1123,15 @@ export const getSyncStatus = async (req: Request, res: Response) => {
             currentTxHash: persistedState.currentTxHash,
           },
           error: persistedState.error,
-          resumeRequest: persistedState.currentBlock !== undefined
-            ? {
-              startBlock: persistedState.currentBlock,
-              startTxIndex: persistedState.currentTxIndex ?? 0,
-              startTxHash: persistedState.currentTxHash,
-              endBlock: persistedState.syncTo,
-            }
-            : undefined,
+          resumeRequest:
+            persistedState.currentBlock !== undefined
+              ? {
+                  startBlock: persistedState.currentBlock,
+                  startTxIndex: persistedState.currentTxIndex ?? 0,
+                  startTxHash: persistedState.currentTxHash,
+                  endBlock: persistedState.syncTo,
+                }
+              : undefined,
           updatedAt: persistedState.updatedAt,
         });
       }
@@ -1035,9 +1145,9 @@ export const getSyncStatus = async (req: Request, res: Response) => {
       ? "N/A (continuous sync)"
       : currentProcess.totalBlocks! > 0
         ? (
-          (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
-          100
-        ).toFixed(2) + "%"
+            (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
+            100
+          ).toFixed(2) + "%"
         : "0.00%";
 
     const runningFor = currentProcess.endTime

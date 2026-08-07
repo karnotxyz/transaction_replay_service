@@ -4,10 +4,13 @@ import { originalProvider, syncingProvider } from "../providers.js";
 import {
   setCustomHeader,
   closeBlock,
+  setReplayBoundary,
+  getReplayBoundaryStatus,
   matchBlockHash,
   getBlockWithTxs,
   getPreConfirmedBlock,
   getLatestBlockNumber,
+  getBlockWithTxHashes,
 } from "../operations/blockOperations.js";
 import { validateBlock } from "../validation/index.js";
 import { executeWithMadaraRecovery } from "../madara/index.js";
@@ -89,8 +92,7 @@ export class BlockProcessor {
           process.status = ProcessStatus.RUNNING;
 
           // Check PRE_CONFIRMED state after recovery
-          const preConfirmedBlock =
-            await getPreConfirmedBlock(syncingProvider);
+          const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
           if (preConfirmedBlock.transactions.length > 0) {
             logger.info(
               `⚠️  Block ${blockNumber} has ${preConfirmedBlock.transactions.length} txs in PRE_CONFIRMED after recovery`,
@@ -138,7 +140,8 @@ export class BlockProcessor {
       try {
         const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
         const preConfirmedBlockNumber = preConfirmedBlock.block_number;
-        const pendingTxHashes = (preConfirmedBlock.transactions || []) as string[];
+        const pendingTxHashes = (preConfirmedBlock.transactions ||
+          []) as string[];
 
         // Verify we're looking at the right block
         if (preConfirmedBlockNumber !== blockNumber) {
@@ -191,6 +194,82 @@ export class BlockProcessor {
     return { success: false, error: new Error(errorMsg) };
   }
 
+  async setTransactionOnlyReplayBoundary(
+    blockNumber: number,
+    expectedTxHashes: string[],
+  ): Promise<BlockProcessResult> {
+    try {
+      await setReplayBoundary(blockNumber, expectedTxHashes);
+      return { success: true };
+    } catch (error) {
+      logger.error(
+        `Failed to set replay boundary for block ${blockNumber}:`,
+        error,
+      );
+      return { success: false, error: error as Error };
+    }
+  }
+
+  async waitForReplayBoundaryClosed(
+    blockNumber: number,
+    maxRetries: number = 1800,
+    retryDelayMs: number = 1000,
+  ): Promise<BlockProcessResult> {
+    logger.info(
+      `🔍 Waiting for replay boundary to close block ${blockNumber}...`,
+    );
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const status = await getReplayBoundaryStatus(blockNumber);
+
+        if (!status) {
+          throw new Error(
+            `Replay boundary status not found for block ${blockNumber}`,
+          );
+        }
+
+        if (status.mismatch) {
+          throw new Error(
+            `Replay boundary mismatch for block ${blockNumber}: ${status.mismatch}`,
+          );
+        }
+
+        if (status.closed) {
+          if (!status.boundary_met) {
+            throw new Error(
+              `Replay boundary closed before it was met for block ${blockNumber}: executed=${status.executed_tx_count}, expected=${status.expected_tx_count}, reached_last_tx_hash=${status.reached_last_tx_hash}`,
+            );
+          }
+
+          logger.info(
+            `✅ Replay boundary closed block ${blockNumber}: executed=${status.executed_tx_count}/${status.expected_tx_count}, last_tx=${status.last_executed_tx_hash}`,
+          );
+          return { success: true };
+        }
+
+        if (attempt === 1 || attempt % 10 === 0) {
+          logger.info(
+            `⏳ Replay boundary pending for block ${blockNumber} (attempt ${attempt}/${maxRetries}): executed=${status.executed_tx_count}/${status.expected_tx_count}, dispatched=${status.dispatched_tx_count}, reached_last_tx_hash=${status.reached_last_tx_hash}, boundary_met=${status.boundary_met}`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error;
+        }
+        logger.warn(
+          `⚠️ Error checking replay boundary for block ${blockNumber} (attempt ${attempt}/${maxRetries}): ${error}`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+
+    const errorMsg = `Replay boundary for block ${blockNumber} did not close after ${maxRetries} attempts`;
+    logger.error(errorMsg);
+    return { success: false, error: new Error(errorMsg) };
+  }
+
   /**
    * Close a block
    */
@@ -218,6 +297,53 @@ export class BlockProcessor {
       logger.error(`Failed to close block ${blockNumber}:`, error);
       return { success: false, error: error as Error };
     }
+  }
+
+  /**
+   * Validate that the closed block contains exactly the source transactions in order.
+   */
+  async validateClosedBlockTransactions(
+    blockNumber: number,
+    expectedTxHashes: string[],
+    maxRetries: number = 100,
+    retryDelayMs: number = 200,
+  ): Promise<BlockProcessResult> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const block = await getBlockWithTxHashes(syncingProvider, blockNumber);
+        const actualTxHashes = (block.transactions || []) as string[];
+        const sameLength = actualTxHashes.length === expectedTxHashes.length;
+        const firstOrderMismatchIndex = sameLength
+          ? expectedTxHashes.findIndex(
+              (txHash, index) => actualTxHashes[index] !== txHash,
+            )
+          : 0;
+
+        if (sameLength && firstOrderMismatchIndex === -1) {
+          logger.info(
+            `✅ Closed block ${blockNumber} contains ${expectedTxHashes.length} expected transactions in order`,
+          );
+          return { success: true };
+        }
+
+        logger.warn(
+          `⏳ Closed block ${blockNumber} tx order not aligned yet (attempt ${attempt}/${maxRetries}, actual=${actualTxHashes.length}, expected=${expectedTxHashes.length}, first_order_mismatch=${firstOrderMismatchIndex})`,
+        );
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error;
+        }
+        logger.warn(
+          `⚠️ Error checking closed block ${blockNumber} transactions (attempt ${attempt}/${maxRetries}): ${error}`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+
+    const errorMsg = `Failed to validate closed block ${blockNumber} transactions after ${maxRetries} attempts`;
+    logger.error(errorMsg);
+    return { success: false, error: new Error(errorMsg) };
   }
 
   /**
@@ -272,7 +398,8 @@ export class BlockProcessor {
       // Get PRE_CONFIRMED block state
       const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
       const preConfirmedBlockNumber = preConfirmedBlock.block_number;
-      const preConfirmedTxHashes = (preConfirmedBlock.transactions || []) as string[];
+      const preConfirmedTxHashes = (preConfirmedBlock.transactions ||
+        []) as string[];
 
       logger.info(
         `📊 PRE_CONFIRMED block: ${preConfirmedBlockNumber}, transactions: ${preConfirmedTxHashes.length}`,

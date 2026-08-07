@@ -93,6 +93,18 @@ export interface MadaraRpcResponse {
   };
 }
 
+export interface ReplayBoundaryStatus {
+  block_n: number;
+  expected_tx_count: number;
+  dispatched_tx_count: number;
+  executed_tx_count: number;
+  last_executed_tx_hash: string | null;
+  reached_last_tx_hash: boolean;
+  boundary_met: boolean;
+  closed: boolean;
+  mismatch: string | null;
+}
+
 /**
  * Retry options
  */
