@@ -119,6 +119,8 @@ export type SyncModeType = (typeof SyncMode)[keyof typeof SyncMode];
 export const ReplayMode = {
   MANAGED_BLOCKS: "managed_blocks",
   TRANSACTION_ONLY: "transaction_only",
+  TRANSACTION_ONLY_WITH_HASH_VALIDATION:
+    "transaction_only_with_hash_validation",
 } as const;
 
 export type ReplayModeType = (typeof ReplayMode)[keyof typeof ReplayMode];

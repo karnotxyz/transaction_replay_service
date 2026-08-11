@@ -2,8 +2,12 @@ import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
-import { ReplayMode, ReplayModeType } from "./constants.js";
-import { parseReplayMode } from "./replayMode.js";
+import { ReplayModeType } from "./constants.js";
+import {
+  isBoundaryReplayMode,
+  parseReplayMode,
+  shouldValidateBlockHash,
+} from "./replayMode.js";
 
 dotenv.config();
 
@@ -243,7 +247,11 @@ class Config {
   }
 
   public get isTransactionOnlyReplay(): boolean {
-    return this.config.replayMode === ReplayMode.TRANSACTION_ONLY;
+    return isBoundaryReplayMode(this.config.replayMode);
+  }
+
+  public get shouldValidateBlockHash(): boolean {
+    return shouldValidateBlockHash(this.config.replayMode);
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {

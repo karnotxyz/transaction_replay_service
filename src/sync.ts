@@ -133,7 +133,9 @@ export async function startSync(
     );
   }
   const txMode = config.isTransactionOnlyReplay
-    ? "TRANSACTION_ONLY managed-blocks-without-hash-match"
+    ? config.shouldValidateBlockHash
+      ? "TRANSACTION_ONLY boundary-paced-with-hash-validation"
+      : "TRANSACTION_ONLY managed-blocks-without-hash-match"
     : config.sequentialValidation
       ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
       : "SEQUENTIAL sending, PARALLEL receipt validation";
@@ -685,9 +687,19 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
                 originalStatuses,
               );
             }
-            logger.info(
-              `⏭️ Transaction-only mode: skipped block hash validation for block ${currentBlock}`,
-            );
+            if (config.shouldValidateBlockHash) {
+              const verifyResult = await blockProcessor.verifyBlockHash(
+                currentBlock,
+                process,
+              );
+              if (!verifyResult.success) {
+                throw verifyResult.error;
+              }
+            } else {
+              logger.info(
+                `⏭️ Transaction-only mode: skipped block hash validation for block ${currentBlock}`,
+              );
+            }
           } catch (error) {
             if (error instanceof MadaraDownError) {
               logger.warn(
