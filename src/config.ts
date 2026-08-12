@@ -36,6 +36,10 @@ interface EnvironmentConfig {
   sequentialValidation: boolean;
   replayMode: ReplayModeType;
   maxSupportedStarknetVersion?: string;
+  transactionOnlyMaxInflightBlocks: number;
+  transactionOnlyBoundaryPollIntervalMs: number;
+  transactionOnlyBoundaryTimeoutMs: number;
+  transactionOnlyRequireMixedMode: boolean;
 }
 
 class Config {
@@ -106,7 +110,31 @@ class Config {
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
       replayMode: this.parseReplayMode(process.env.REPLAY_MODE),
       maxSupportedStarknetVersion,
+      transactionOnlyMaxInflightBlocks: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS,
+        1,
+        "TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS",
+      ),
+      transactionOnlyBoundaryPollIntervalMs: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS,
+        100,
+        "TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS",
+      ),
+      transactionOnlyBoundaryTimeoutMs: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS,
+        30 * 60 * 1000,
+        "TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS",
+      ),
+      transactionOnlyRequireMixedMode:
+        process.env.TRANSACTION_ONLY_REQUIRE_MIXED_MODE?.toLowerCase() ===
+        "true",
     };
+
+    if (config.transactionOnlyMaxInflightBlocks > 10) {
+      throw new ConfigurationError(
+        `Invalid TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS value: ${config.transactionOnlyMaxInflightBlocks}. Madara supports at most 10 speculative blocks.`,
+      );
+    }
 
     this.logConfiguration(config);
 
@@ -131,6 +159,24 @@ class Config {
     }
 
     return port;
+  }
+
+  private parsePositiveInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string,
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a positive integer.`,
+      );
+    }
+    return parsed;
   }
 
   private parseReplayMode(mode: string | undefined): ReplayModeType {
@@ -174,11 +220,29 @@ class Config {
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
     );
     logger.info(
-      `  • Sequential Validation: ${config.sequentialValidation ? "ENABLED" : "disabled"}`,
+      `  • Sequential Validation: ${
+        config.sequentialValidation ? "ENABLED" : "disabled"
+      }`,
     );
     logger.info(`  • Replay Mode: ${config.replayMode}`);
     logger.info(
-      `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
+      `  • Max Supported Starknet Version: ${
+        config.maxSupportedStarknetVersion || "not set"
+      }`,
+    );
+    logger.info(
+      `  • Transaction-only Max Inflight Blocks: ${config.transactionOnlyMaxInflightBlocks}`,
+    );
+    logger.info(
+      `  • Transaction-only Boundary Poll Interval: ${config.transactionOnlyBoundaryPollIntervalMs}ms`,
+    );
+    logger.info(
+      `  • Transaction-only Boundary Timeout: ${config.transactionOnlyBoundaryTimeoutMs}ms`,
+    );
+    logger.info(
+      `  • Transaction-only Require Mixed Mode: ${
+        config.transactionOnlyRequireMixedMode ? "ENABLED" : "disabled"
+      }`,
     );
 
     // OpenTelemetry Configuration
@@ -256,6 +320,22 @@ class Config {
 
   public get maxSupportedStarknetVersion(): string | undefined {
     return this.config.maxSupportedStarknetVersion;
+  }
+
+  public get transactionOnlyMaxInflightBlocks(): number {
+    return this.config.transactionOnlyMaxInflightBlocks;
+  }
+
+  public get transactionOnlyBoundaryPollIntervalMs(): number {
+    return this.config.transactionOnlyBoundaryPollIntervalMs;
+  }
+
+  public get transactionOnlyBoundaryTimeoutMs(): number {
+    return this.config.transactionOnlyBoundaryTimeoutMs;
+  }
+
+  public get transactionOnlyRequireMixedMode(): boolean {
+    return this.config.transactionOnlyRequireMixedMode;
   }
 
   public get isDevelopment(): boolean {

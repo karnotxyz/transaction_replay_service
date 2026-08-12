@@ -12,6 +12,10 @@ import {
   getLatestBlockNumber,
   getBlockWithTxHashes,
 } from "../operations/blockOperations.js";
+import {
+  assertReplayBoundaryClosed,
+  assertReplayBoundaryMet,
+} from "./pipelineGuards.js";
 import { validateBlock } from "../validation/index.js";
 import { executeWithMadaraRecovery } from "../madara/index.js";
 import { ProcessStatus } from "../constants.js";
@@ -214,26 +218,30 @@ export class BlockProcessor {
     blockNumber: number,
     maxRetries: number = 1800,
     retryDelayMs: number = 1000,
+    expectedTxCount?: number,
+    shouldAbort?: () => boolean,
   ): Promise<BlockProcessResult> {
     logger.info(
       `🔍 Waiting for replay boundary to close block ${blockNumber}...`,
     );
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (shouldAbort?.()) {
+        return {
+          success: false,
+          error: new Error(
+            `Replay boundary close wait aborted for block ${blockNumber}`,
+          ),
+        };
+      }
       try {
         const status = await getReplayBoundaryStatus(blockNumber);
 
-        if (!status) {
-          throw new Error(
-            `Replay boundary status not found for block ${blockNumber}`,
-          );
-        }
-
-        if (status.mismatch) {
-          throw new Error(
-            `Replay boundary mismatch for block ${blockNumber}: ${status.mismatch}`,
-          );
-        }
+        assertReplayBoundaryClosed(
+          status,
+          blockNumber,
+          expectedTxCount ?? status?.expected_tx_count ?? 0,
+        );
 
         if (status.closed) {
           if (!status.boundary_met) {
@@ -257,6 +265,15 @@ export class BlockProcessor {
         if (error instanceof MadaraDownError) {
           throw error;
         }
+        if (
+          error instanceof Error &&
+          (error.message.includes("Replay boundary mismatch") ||
+            error.message.includes("Replay boundary count mismatch") ||
+            error.message.includes("Replay boundary returned block") ||
+            error.message.includes("Replay boundary closed before"))
+        ) {
+          return { success: false, error };
+        }
         logger.warn(
           `⚠️ Error checking replay boundary for block ${blockNumber} (attempt ${attempt}/${maxRetries}): ${error}`,
         );
@@ -266,6 +283,69 @@ export class BlockProcessor {
     }
 
     const errorMsg = `Replay boundary for block ${blockNumber} did not close after ${maxRetries} attempts`;
+    logger.error(errorMsg);
+    return { success: false, error: new Error(errorMsg) };
+  }
+
+  async waitForReplayBoundaryMet(
+    blockNumber: number,
+    expectedTxCount: number,
+    maxRetries: number,
+    retryDelayMs: number,
+    shouldAbort?: () => boolean,
+  ): Promise<BlockProcessResult> {
+    logger.info(
+      `🔍 Waiting for replay boundary execution of block ${blockNumber}...`,
+    );
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (shouldAbort?.()) {
+        return {
+          success: false,
+          error: new Error(
+            `Replay boundary wait aborted for block ${blockNumber}`,
+          ),
+        };
+      }
+
+      try {
+        const status = await getReplayBoundaryStatus(blockNumber);
+        assertReplayBoundaryMet(status, blockNumber, expectedTxCount);
+
+        if (status.boundary_met) {
+          logger.info(
+            `✅ Replay boundary met for block ${blockNumber}: executed=${status.executed_tx_count}/${status.expected_tx_count}, closed=${status.closed}`,
+          );
+          return { success: true };
+        }
+
+        if (attempt === 1 || attempt % 50 === 0) {
+          logger.info(
+            `⏳ Replay boundary execution pending for block ${blockNumber} (attempt ${attempt}/${maxRetries}): dispatched=${status.dispatched_tx_count}/${status.expected_tx_count}, executed=${status.executed_tx_count}/${status.expected_tx_count}`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error;
+        }
+        if (
+          error instanceof Error &&
+          (error.message.includes("Replay boundary mismatch") ||
+            error.message.includes("Replay boundary count mismatch") ||
+            error.message.includes("Replay boundary returned block") ||
+            error.message.includes("Replay boundary closed before"))
+        ) {
+          return { success: false, error };
+        }
+        logger.warn(
+          `⚠️ Error checking replay boundary execution for block ${blockNumber} (attempt ${attempt}/${maxRetries}): ${error}`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+
+    const errorMsg = `Replay boundary for block ${blockNumber} did not execute after ${maxRetries} attempts`;
     logger.error(errorMsg);
     return { success: false, error: new Error(errorMsg) };
   }
@@ -416,7 +496,9 @@ export class BlockProcessor {
       // Case 2: Madara is behind where we expected (e.g., restarted from earlier state)
       if (latestBlock < targetBlockNumber - 1) {
         logger.info(
-          `⚠️ Madara is at block ${latestBlock}, behind expected ${targetBlockNumber - 1}. Continuing from ${latestBlock + 1}`,
+          `⚠️ Madara is at block ${latestBlock}, behind expected ${
+            targetBlockNumber - 1
+          }. Continuing from ${latestBlock + 1}`,
         );
         return { type: "skip_to_block", blockNumber: latestBlock + 1 };
       }

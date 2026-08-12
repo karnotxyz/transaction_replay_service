@@ -35,6 +35,7 @@ export class ParallelTransactionProcessor {
     blockNumber: number,
     requirePreConfirmedValidation: boolean = false,
     delayBetweenTxsMs: number = 0,
+    shouldAbort?: () => boolean,
   ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
       return { txResults: [], txHashes: [], sendDuration: 0 };
@@ -55,6 +56,9 @@ export class ParallelTransactionProcessor {
     const txHashes: string[] = [];
 
     for (let index = 0; index < transactions.length; index++) {
+      if (shouldAbort?.()) {
+        throw new Error(`Transaction sending aborted for block ${blockNumber}`);
+      }
       const tx = transactions[index];
 
       try {
@@ -82,7 +86,9 @@ export class ParallelTransactionProcessor {
         });
 
         if (delayBetweenTxsMs > 0 && index < transactions.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, delayBetweenTxsMs));
+          await new Promise((resolve) =>
+            setTimeout(resolve, delayBetweenTxsMs),
+          );
         }
       } catch (error: any) {
         if (error instanceof MadaraDownError) {
@@ -158,7 +164,9 @@ export class ParallelTransactionProcessor {
         txHashes.push(txHash);
 
         logger.info(
-          `  [${index + 1}/${transactions.length}] Sending tx ${txHash}; waiting for replay executed=${expectedExecutedCount}`,
+          `  [${index + 1}/${
+            transactions.length
+          }] Sending tx ${txHash}; waiting for replay executed=${expectedExecutedCount}`,
         );
 
         await processTx(tx, blockNumber);
@@ -177,7 +185,9 @@ export class ParallelTransactionProcessor {
       } catch (error: any) {
         if (error instanceof MadaraDownError) {
           logger.warn(
-            `Madara down while sending transaction-only replay tx ${index + 1}/${transactions.length}`,
+            `Madara down while sending transaction-only replay tx ${
+              index + 1
+            }/${transactions.length}`,
           );
           throw error;
         }
@@ -187,7 +197,9 @@ export class ParallelTransactionProcessor {
           error.message,
         );
         throw new Error(
-          `Failed to send transaction-only replay tx ${index + 1}/${transactions.length} in block ${blockNumber}: ${error.message}`,
+          `Failed to send transaction-only replay tx ${index + 1}/${
+            transactions.length
+          } in block ${blockNumber}: ${error.message}`,
         );
       }
     }
@@ -286,8 +298,7 @@ export class ParallelTransactionProcessor {
         if (status.executed_tx_count >= expectedExecutedCount) {
           if (
             status.executed_tx_count === expectedExecutedCount &&
-            status.last_executed_tx_hash?.toLowerCase() !==
-              txHash.toLowerCase()
+            status.last_executed_tx_hash?.toLowerCase() !== txHash.toLowerCase()
           ) {
             throw new Error(
               `Replay boundary order mismatch for block ${blockNumber}: expected tx ${txHash} at executed=${expectedExecutedCount}, last_executed=${status.last_executed_tx_hash}`,

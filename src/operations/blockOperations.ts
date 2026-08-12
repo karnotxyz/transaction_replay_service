@@ -10,6 +10,7 @@ import {
   MadaraRpcResponse,
   BlockWithReceipts,
   ReplayBoundaryStatus,
+  ExecutionBoxStatus,
 } from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
@@ -514,6 +515,31 @@ export async function getReplayBoundaryStatus(
   }
 
   return (response.data.result as ReplayBoundaryStatus | null) ?? null;
+}
+
+export async function getExecutionBoxStatus(): Promise<ExecutionBoxStatus> {
+  const response = await axios.post<MadaraRpcResponse>(
+    config.adminRpcUrlSyncingNode,
+    {
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_executionboxStatus",
+      id: 1,
+      params: [],
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
+
+  if (response.data.error) {
+    throw new Error(
+      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+    );
+  }
+
+  return response.data.result as ExecutionBoxStatus;
 }
 
 /**

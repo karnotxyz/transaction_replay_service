@@ -7,7 +7,7 @@ import {
   syncingProvider,
   supportsProofFacts,
 } from "./providers.js";
-import { SyncProcess } from "./types.js";
+import { SyncProcess, ValidationJob } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
 import { probeManager } from "./probe/index.js";
@@ -18,6 +18,9 @@ import {
   getBlockWithTxs,
   getOriginalBlockWithTxsAndProofFacts,
   getBlockWithReceipts,
+  getExecutionBoxStatus,
+  setCustomHeader,
+  closeBlock,
 } from "./operations/blockOperations.js";
 import {
   BlockProcessing,
@@ -44,6 +47,7 @@ import {
 } from "./errors/index.js";
 import { config } from "./config.js";
 import { ExecutionStatus, SyncRequest } from "./types.js";
+import { assertExecutionBoxHealthy } from "./sync/pipelineGuards.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -133,12 +137,18 @@ export async function startSync(
     );
   }
   const txMode = config.isTransactionOnlyReplay
-    ? config.shouldValidateBlockHash
-      ? "TRANSACTION_ONLY boundary-paced-with-hash-validation"
-      : "TRANSACTION_ONLY managed-blocks-without-hash-match"
+    ? `${
+        config.transactionOnlyMaxInflightBlocks > 1
+          ? `PIPELINED boundary replay (max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks})`
+          : "SERIAL boundary replay"
+      }${
+        config.shouldValidateBlockHash
+          ? " with hash validation"
+          : " without hash validation"
+      }`
     : config.sequentialValidation
-      ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
-      : "SEQUENTIAL sending, PARALLEL receipt validation";
+    ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+    : "SEQUENTIAL sending, PARALLEL receipt validation";
   logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
@@ -532,6 +542,399 @@ function getTransactionOnlyRecoveryBlock(action: RecoveryAction): number {
   }
 }
 
+interface TransactionOnlyPipelineState {
+  queue: AsyncValidationQueue;
+  stopRequested: boolean;
+  fatalError: Error | null;
+  lastEnqueuedBlock: number;
+  lastClosedBlock: number;
+  lastValidatedBlock: number;
+  executionBoxEpoch?: number;
+}
+
+class AsyncValidationQueue {
+  private readonly jobs: ValidationJob[] = [];
+  private readonly waiters: Array<(job: ValidationJob | null) => void> = [];
+  private closed = false;
+
+  push(job: ValidationJob): void {
+    if (this.closed) {
+      throw new Error("Validation queue is closed");
+    }
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter(job);
+      return;
+    }
+    this.jobs.push(job);
+  }
+
+  async shift(): Promise<ValidationJob | null> {
+    const job = this.jobs.shift();
+    if (job) {
+      return job;
+    }
+    if (this.closed) {
+      return null;
+    }
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()!(null);
+    }
+  }
+
+  size(): number {
+    return this.jobs.length;
+  }
+}
+
+const sleep = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+function abortPipelineIfStopped(pipeline: TransactionOnlyPipelineState): void {
+  if (pipeline.stopRequested) {
+    throw pipeline.fatalError ?? new Error("Transaction-only pipeline stopped");
+  }
+}
+
+function updatePipelineProgress(
+  process: SyncProcess,
+  pipeline: TransactionOnlyPipelineState,
+): void {
+  process.lastEnqueuedBlock = pipeline.lastEnqueuedBlock;
+  process.lastClosedBlock = pipeline.lastClosedBlock;
+  process.lastValidatedBlock = pipeline.lastValidatedBlock;
+  process.validationQueueDepth = pipeline.queue.size();
+  process.comparatorBacklogBlocks = Math.max(
+    0,
+    pipeline.lastEnqueuedBlock - pipeline.lastClosedBlock,
+  );
+  process.maxInflightBlocks = config.transactionOnlyMaxInflightBlocks;
+}
+
+function stopPipeline(
+  process: SyncProcess,
+  pipeline: TransactionOnlyPipelineState,
+  error: unknown,
+): Error {
+  const fatalError = error instanceof Error ? error : new Error(String(error));
+  pipeline.stopRequested = true;
+  pipeline.fatalError = fatalError;
+  process.error = fatalError.message;
+  pipeline.queue.close();
+  updatePipelineProgress(process, pipeline);
+  return fatalError;
+}
+
+async function waitForPipelineCapacity(
+  blockNumber: number,
+  process: SyncProcess,
+  pipeline: TransactionOnlyPipelineState,
+): Promise<void> {
+  let logged = false;
+  while (!pipeline.stopRequested) {
+    const inflightBlocks = Math.max(
+      0,
+      pipeline.lastEnqueuedBlock - pipeline.lastClosedBlock,
+    );
+    if (inflightBlocks < config.transactionOnlyMaxInflightBlocks) {
+      if (logged) {
+        logger.info(
+          `✅ Comparator backlog released for block ${blockNumber}: ${inflightBlocks}/${config.transactionOnlyMaxInflightBlocks}`,
+        );
+      }
+      return;
+    }
+    if (!logged) {
+      logger.info(
+        `⏸️ Comparator backlog full before block ${blockNumber}: ${inflightBlocks}/${config.transactionOnlyMaxInflightBlocks}`,
+      );
+      logged = true;
+    }
+    updatePipelineProgress(process, pipeline);
+    await sleep(config.transactionOnlyBoundaryPollIntervalMs);
+  }
+  abortPipelineIfStopped(pipeline);
+}
+
+async function sendPipelinedTransactionOnlyBlock(
+  blockNumber: number,
+  pipeline: TransactionOnlyPipelineState,
+): Promise<ValidationJob> {
+  const sourceBlock = supportsProofFacts()
+    ? await getOriginalBlockWithTxsAndProofFacts(blockNumber)
+    : ((await getBlockWithTxs(
+        originalProvider,
+        blockNumber,
+      )) as SourceBlockWithTxs);
+  assertSupportedBlockVersion(blockNumber, sourceBlock.starknet_version);
+
+  const transactions = sourceBlock.transactions as TransactionWithHash[];
+  const txHashes = transactions.map((tx) => tx.transaction_hash);
+  const expectedStatuses = await getOriginalReceiptStatusMap(
+    blockNumber,
+    transactions,
+  );
+
+  logger.info(
+    `🚚 PIPELINE sending block ${blockNumber} with ${transactions.length} transactions`,
+  );
+  await setCustomHeader(blockNumber);
+
+  if (txHashes.length === 0) {
+    await closeBlock();
+    return {
+      blockNumber,
+      txHashes,
+      txCount: 0,
+      expectedStatuses,
+      requiresBoundaryClose: false,
+    };
+  }
+
+  const boundaryResult = await blockProcessor.setTransactionOnlyReplayBoundary(
+    blockNumber,
+    txHashes,
+  );
+  if (!boundaryResult.success) {
+    throw boundaryResult.error;
+  }
+
+  const sendResult = await parallelTransactionProcessor.sendTransactions(
+    transactions,
+    blockNumber,
+    false,
+    0,
+    () => pipeline.stopRequested,
+  );
+
+  const pollInterval = config.transactionOnlyBoundaryPollIntervalMs;
+  const maxRetries = Math.ceil(
+    config.transactionOnlyBoundaryTimeoutMs / pollInterval,
+  );
+  const boundaryMet = await blockProcessor.waitForReplayBoundaryMet(
+    blockNumber,
+    txHashes.length,
+    maxRetries,
+    pollInterval,
+    () => pipeline.stopRequested,
+  );
+  if (!boundaryMet.success) {
+    throw boundaryMet.error;
+  }
+
+  return {
+    blockNumber,
+    txHashes: sendResult.txHashes,
+    txCount: transactions.length,
+    expectedStatuses,
+    requiresBoundaryClose: true,
+  };
+}
+
+async function runTransactionOnlyProducer(
+  process: SyncProcess,
+  pipeline: TransactionOnlyPipelineState,
+): Promise<void> {
+  let currentBlock = process.currentBlock;
+  let caughtUpLogged = false;
+
+  while (process.isContinuous || currentBlock <= process.syncTo) {
+    abortPipelineIfStopped(pipeline);
+    if (process.cancelRequested) {
+      logger.info(
+        `🛑 Transaction-only pipeline producer stopping before block ${currentBlock}`,
+      );
+      break;
+    }
+    if (process.isContinuous && currentBlock > process.syncTo) {
+      if (!caughtUpLogged) {
+        logger.info(
+          `⏸️ Pipeline caught up to source target ${process.syncTo}; waiting for new blocks`,
+        );
+        caughtUpLogged = true;
+      }
+      await sleep(ProbeConfig.CAUGHT_UP_WAIT_MS);
+      continue;
+    }
+    caughtUpLogged = false;
+
+    await waitForPipelineCapacity(currentBlock, process, pipeline);
+    abortPipelineIfStopped(pipeline);
+
+    process.currentBlock = currentBlock;
+    process.currentTxIndex = 0;
+    process.currentTxHash = undefined;
+    persistence.updateProgress(currentBlock, 0);
+    updateCurrentBlock(currentBlock);
+
+    const job = await sendPipelinedTransactionOnlyBlock(currentBlock, pipeline);
+    abortPipelineIfStopped(pipeline);
+
+    pipeline.queue.push(job);
+    pipeline.lastEnqueuedBlock = currentBlock;
+    currentBlock++;
+    process.currentBlock = currentBlock;
+    updatePipelineProgress(process, pipeline);
+
+    logger.info(
+      `📥 Block ${job.blockNumber} execution complete and queued for comparator/close validation: comparator_backlog=${process.comparatorBacklogBlocks}/${config.transactionOnlyMaxInflightBlocks}, validation_queue=${process.validationQueueDepth}`,
+    );
+  }
+
+  pipeline.queue.close();
+}
+
+async function runTransactionOnlyValidator(
+  process: SyncProcess,
+  pipeline: TransactionOnlyPipelineState,
+): Promise<void> {
+  while (true) {
+    abortPipelineIfStopped(pipeline);
+    const job = await pipeline.queue.shift();
+    if (!job) {
+      return;
+    }
+
+    logger.info(
+      `🔎 PIPELINE validating block ${job.blockNumber}: comparator_backlog=${process.comparatorBacklogBlocks}/${config.transactionOnlyMaxInflightBlocks}`,
+    );
+
+    if (job.requiresBoundaryClose) {
+      const pollInterval = config.transactionOnlyBoundaryPollIntervalMs;
+      const closeResult = await blockProcessor.waitForReplayBoundaryClosed(
+        job.blockNumber,
+        Math.ceil(config.transactionOnlyBoundaryTimeoutMs / pollInterval),
+        pollInterval,
+        job.txCount,
+        () => pipeline.stopRequested,
+      );
+      if (!closeResult.success) {
+        throw closeResult.error;
+      }
+    }
+
+    if (config.transactionOnlyRequireMixedMode) {
+      const executionBoxStatus = await getExecutionBoxStatus();
+      assertExecutionBoxHealthy(executionBoxStatus, pipeline.executionBoxEpoch);
+    }
+
+    pipeline.lastClosedBlock = job.blockNumber;
+    updatePipelineProgress(process, pipeline);
+
+    if (job.txHashes.length > 0) {
+      const closedBlockResult =
+        await blockProcessor.validateClosedBlockTransactions(
+          job.blockNumber,
+          job.txHashes,
+        );
+      if (!closedBlockResult.success) {
+        throw closedBlockResult.error;
+      }
+
+      await parallelTransactionProcessor.validateReceipts(
+        job.blockNumber,
+        job.txHashes,
+        job.expectedStatuses,
+      );
+    }
+
+    if (config.shouldValidateBlockHash) {
+      const verifyResult = await blockProcessor.verifyBlockHash(
+        job.blockNumber,
+        process,
+      );
+      if (!verifyResult.success) {
+        throw verifyResult.error;
+      }
+    }
+
+    incrementBlocksProcessed();
+    recordBlockStatus("success");
+    throughputTracker.recordBlock(job.txCount);
+    process.processedBlocks++;
+    pipeline.lastValidatedBlock = job.blockNumber;
+    updatePipelineProgress(process, pipeline);
+    updateSyncMetrics(process, process.syncTo, job.blockNumber);
+
+    logger.info(
+      `✅ PIPELINE block ${job.blockNumber} closed and validated: processed=${process.processedBlocks}, comparator_backlog=${process.comparatorBacklogBlocks}/${config.transactionOnlyMaxInflightBlocks}, validation_queue=${process.validationQueueDepth}`,
+    );
+  }
+}
+
+async function syncTransactionOnlyBlocksPipelined(
+  process: SyncProcess,
+): Promise<void> {
+  if (process.currentTxIndex !== 0 || process.currentTxHash) {
+    throw new Error(
+      "Pipelined transaction-only replay requires a whole-block start cursor",
+    );
+  }
+
+  const initialFrontier = process.currentBlock - 1;
+  const pipeline: TransactionOnlyPipelineState = {
+    queue: new AsyncValidationQueue(),
+    stopRequested: false,
+    fatalError: null,
+    lastEnqueuedBlock: initialFrontier,
+    lastClosedBlock: initialFrontier,
+    lastValidatedBlock: initialFrontier,
+  };
+
+  if (config.transactionOnlyRequireMixedMode) {
+    const status = await getExecutionBoxStatus();
+    assertExecutionBoxHealthy(status);
+    pipeline.executionBoxEpoch = status.reexec_epoch;
+  }
+  updatePipelineProgress(process, pipeline);
+
+  logger.info(
+    `⚡ Transaction-only pipeline active: max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks}, boundary_poll_ms=${config.transactionOnlyBoundaryPollIntervalMs}, boundary_timeout_ms=${config.transactionOnlyBoundaryTimeoutMs}, require_mixed_mode=${config.transactionOnlyRequireMixedMode}, hash_validation=${config.shouldValidateBlockHash}`,
+  );
+
+  const producer = runTransactionOnlyProducer(process, pipeline).catch(
+    (error) => {
+      throw stopPipeline(process, pipeline, error);
+    },
+  );
+  const validator = runTransactionOnlyValidator(process, pipeline).catch(
+    (error) => {
+      throw stopPipeline(process, pipeline, error);
+    },
+  );
+
+  const results = await Promise.allSettled([producer, validator]);
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) {
+    throw failure.reason;
+  }
+
+  if (process.cancelRequested) {
+    process.status = ProcessStatus.CANCELLED;
+  } else if (!process.isContinuous) {
+    process.status = ProcessStatus.COMPLETED;
+  }
+  process.endTime = new Date();
+  persistence.stopSync();
+  syncStateManager.stopProbe();
+  syncStateManager.clearProcess();
+  updateActiveSyncProcessCount("sync", false);
+
+  logger.info(
+    `✅ Transaction-only pipeline stopped cleanly: validated_through=${pipeline.lastValidatedBlock}, processed_blocks=${process.processedBlocks}`,
+  );
+}
+
 /**
  * Async function to process blocks
  */
@@ -541,6 +944,14 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     logger.info(
       `🚀 Starting sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
     );
+
+    if (
+      config.isTransactionOnlyReplay &&
+      config.transactionOnlyMaxInflightBlocks > 1
+    ) {
+      await syncTransactionOnlyBlocksPipelined(process);
+      return;
+    }
 
     let currentBlock = process.currentBlock;
     let startTxIndex = process.currentTxIndex || 0;
@@ -1049,6 +1460,26 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
       return;
     }
 
+    if (
+      config.isTransactionOnlyReplay &&
+      config.transactionOnlyMaxInflightBlocks > 1
+    ) {
+      process.status = ProcessStatus.PAUSED;
+      process.error = error instanceof Error ? error.message : String(error);
+      persistence.pauseSync(
+        process.isContinuous ? "latest" : process.syncTo,
+        !!process.isContinuous,
+        process.error,
+      );
+      syncStateManager.stopProbe();
+      syncStateManager.clearProcess();
+      updateActiveSyncProcessCount("sync", false);
+      logger.error(
+        `⏸️ Transaction-only pipeline stopped on first failure: ${process.error}`,
+      );
+      return;
+    }
+
     process.status = ProcessStatus.FAILED;
     process.error = error instanceof Error ? error.message : String(error);
 
@@ -1156,11 +1587,11 @@ export const getSyncStatus = async (req: Request, res: Response) => {
     const percentComplete = currentProcess.isContinuous
       ? "N/A (continuous sync)"
       : currentProcess.totalBlocks! > 0
-        ? (
-            (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
-            100
-          ).toFixed(2) + "%"
-        : "0.00%";
+      ? (
+          (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
+          100
+        ).toFixed(2) + "%"
+      : "0.00%";
 
     const runningFor = currentProcess.endTime
       ? currentProcess.endTime.getTime() - currentProcess.startTime.getTime()
@@ -1186,6 +1617,17 @@ export const getSyncStatus = async (req: Request, res: Response) => {
       },
       error: currentProcess.error,
     };
+
+    if (currentProcess.maxInflightBlocks !== undefined) {
+      response.pipeline = {
+        maxInflightBlocks: currentProcess.maxInflightBlocks,
+        lastEnqueuedBlock: currentProcess.lastEnqueuedBlock,
+        lastClosedBlock: currentProcess.lastClosedBlock,
+        lastValidatedBlock: currentProcess.lastValidatedBlock,
+        comparatorBacklogBlocks: currentProcess.comparatorBacklogBlocks,
+        validationQueueDepth: currentProcess.validationQueueDepth,
+      };
+    }
 
     if (currentProcess.isContinuous) {
       response.continuousSync = {
