@@ -78,7 +78,19 @@ STATE_FILE_PATH=./sync-state.json
 CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
+
+# Boundary replay pipeline (REPLAY_MODE=transaction_only)
+TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS=1
+TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS=100
+TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS=1800000
+TRANSACTION_ONLY_REQUIRE_MIXED_MODE=false
 ```
+
+Set `TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS` above `1` to let Madara execute
+later blocks while the comparator closes earlier blocks. Transactions and
+blocks are still submitted in source order. The service stops on the first
+boundary, transaction-order, receipt-status, hash (when enabled), or required
+ExecutionBox-health failure.
 
 ### Configuration Features
 

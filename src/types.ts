@@ -35,6 +35,12 @@ export interface SyncProcess {
   completeCurrentBlock?: boolean;
   isContinuous?: boolean;
   originalTarget?: number;
+  lastEnqueuedBlock?: number;
+  lastClosedBlock?: number;
+  lastValidatedBlock?: number;
+  validationQueueDepth?: number;
+  comparatorBacklogBlocks?: number;
+  maxInflightBlocks?: number;
 }
 
 /**
@@ -91,6 +97,41 @@ export interface MadaraRpcResponse {
     code: number;
     message: string;
   };
+}
+
+export interface ReplayBoundaryStatus {
+  block_n: number;
+  expected_tx_count: number;
+  dispatched_tx_count: number;
+  executed_tx_count: number;
+  last_executed_tx_hash: string | null;
+  reached_last_tx_hash: boolean;
+  boundary_met: boolean;
+  closed: boolean;
+  mismatch: string | null;
+}
+
+export interface ExecutionBoxStatus {
+  mode: string;
+  startup_mode: string;
+  startup_recovery_active: boolean;
+  reason: string | null;
+  taint_block: number | null;
+  replay_from: number | null;
+  replay_to: number | null;
+  replay_cursor: number | null;
+  replay_backlog_empty: boolean;
+  replay_supported: boolean;
+  comparator_enabled: boolean;
+  reexec_epoch: number;
+}
+
+export interface ValidationJob {
+  blockNumber: number;
+  txHashes: string[];
+  txCount: number;
+  expectedStatuses: Map<string, ExecutionStatus>;
+  requiresBoundaryClose: boolean;
 }
 
 /**

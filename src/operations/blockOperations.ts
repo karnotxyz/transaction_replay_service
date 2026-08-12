@@ -5,7 +5,13 @@ import {
   BlockTag,
 } from "starknet";
 import logger from "../logger.js";
-import { GasPrices, MadaraRpcResponse, BlockWithReceipts } from "../types.js";
+import {
+  GasPrices,
+  MadaraRpcResponse,
+  BlockWithReceipts,
+  ReplayBoundaryStatus,
+  ExecutionBoxStatus,
+} from "../types.js";
 import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
@@ -442,6 +448,100 @@ export async function closeBlock(): Promise<void> {
   }
 }
 
+export async function setReplayBoundary(
+  blockNumber: number,
+  expectedTxHashes: string[],
+): Promise<ReplayBoundaryStatus | null> {
+  if (expectedTxHashes.length === 0) {
+    return null;
+  }
+
+  const response = await axios.post<MadaraRpcResponse>(
+    config.adminRpcUrlSyncingNode,
+    {
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_setReplayBoundary",
+      id: 1,
+      params: [
+        {
+          block_n: blockNumber,
+          expected_tx_count: expectedTxHashes.length,
+          last_tx_hash: expectedTxHashes[expectedTxHashes.length - 1],
+        },
+      ],
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
+
+  if (response.data.error) {
+    throw new Error(
+      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+    );
+  }
+
+  const status = response.data.result as ReplayBoundaryStatus;
+  logger.info(
+    `✅ Replay boundary set for block ${blockNumber}: expected=${status.expected_tx_count}, dispatched=${status.dispatched_tx_count}, executed=${status.executed_tx_count}, boundary_met=${status.boundary_met}, closed=${status.closed}`,
+  );
+  return status;
+}
+
+export async function getReplayBoundaryStatus(
+  blockNumber: number,
+): Promise<ReplayBoundaryStatus | null> {
+  const response = await axios.post<MadaraRpcResponse>(
+    config.adminRpcUrlSyncingNode,
+    {
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_getReplayBoundaryStatus",
+      id: 1,
+      params: [blockNumber],
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
+
+  if (response.data.error) {
+    throw new Error(
+      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+    );
+  }
+
+  return (response.data.result as ReplayBoundaryStatus | null) ?? null;
+}
+
+export async function getExecutionBoxStatus(): Promise<ExecutionBoxStatus> {
+  const response = await axios.post<MadaraRpcResponse>(
+    config.adminRpcUrlSyncingNode,
+    {
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_executionboxStatus",
+      id: 1,
+      params: [],
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
+
+  if (response.data.error) {
+    throw new Error(
+      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+    );
+  }
+
+  return response.data.result as ExecutionBoxStatus;
+}
+
 /**
  * Match block hashes between original and syncing nodes
  */
@@ -487,7 +587,11 @@ export async function matchBlockHash(blockNumber: number): Promise<void> {
         // Hash mismatch is NOT retriable - fail immediately
         recordBlockStatus("hash_mismatch");
         incrementErrors("block_hash_mismatch", "matchBlockHash");
-        throw new BlockHashMismatchError(blockNumber, originalHash, syncingHash);
+        throw new BlockHashMismatchError(
+          blockNumber,
+          originalHash,
+          syncingHash,
+        );
       }
 
       recordBlockProcessingDuration("verify_hash", endTimer());

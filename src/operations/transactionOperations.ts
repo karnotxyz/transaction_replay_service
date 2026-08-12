@@ -27,7 +27,10 @@ export async function getTransactionReceipt(
     const receipt = await provider.getTransactionReceipt(transactionHash);
     return receipt;
   } catch (error) {
-    throw wrapMadaraError(error, `getTransactionReceipt(${transactionHash}) [${nodeName}]`);
+    throw wrapMadaraError(
+      error,
+      `getTransactionReceipt(${transactionHash}) [${nodeName}]`,
+    );
   }
 }
 
@@ -59,7 +62,9 @@ export async function validateTransactionReceipt(
 
       // Validate transaction status
       if (!receipt.isSuccess() && !receipt.isReverted()) {
-        throw new Error(`Transaction in unexpected state: ${txHash} [${nodeName}]`);
+        throw new Error(
+          `Transaction in unexpected state: ${txHash} [${nodeName}]`,
+        );
       }
 
       // Success
@@ -238,6 +243,12 @@ export async function postWithRetry(
         continue;
       }
 
+      if (result.data.error) {
+        throw new Error(
+          `RPC Error: ${result.data.error.message} (Code: ${result.data.error.code})`,
+        );
+      }
+
       // Success
       if (attempt > 0) {
         logger.info(`✅ POST ${url} succeeded on attempt ${attempt + 1}`);
@@ -323,6 +334,7 @@ export async function validateBlockReceipts(
   provider: RpcProvider,
   blockNumber: number,
   expectedTxHashes: string[],
+  expectedStatuses?: Map<string, ExecutionStatus>,
 ): Promise<void> {
   const nodeName = getNodeName(provider);
   const startTime = Date.now();
@@ -355,7 +367,10 @@ export async function validateBlockReceipts(
     const interval = getPollingInterval(elapsed);
 
     try {
-      const blockWithReceipts = await getBlockWithReceipts(provider, blockNumber);
+      const blockWithReceipts = await getBlockWithReceipts(
+        provider,
+        blockNumber,
+      );
 
       if (!blockWithReceipts) {
         // Block not ready yet, wait and retry
@@ -388,14 +403,17 @@ export async function validateBlockReceipts(
           continue;
         }
 
-        // Check execution status
-        if (
+        const expectedStatus = expectedStatuses?.get(txHash);
+
+        if (expectedStatus && receipt.execution_status !== expectedStatus) {
+          failedTxs.push(
+            `${txHash} (expected: ${expectedStatus}, actual: ${receipt.execution_status})`,
+          );
+        } else if (
           receipt.execution_status !== "SUCCEEDED" &&
           receipt.execution_status !== "REVERTED"
         ) {
-          failedTxs.push(
-            `${txHash} (status: ${receipt.execution_status})`,
-          );
+          failedTxs.push(`${txHash} (status: ${receipt.execution_status})`);
         }
       }
 
