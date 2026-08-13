@@ -54,7 +54,11 @@ export async function getLatestBlockNumber(
 
       return blockNumber;
     } catch (error) {
-      throw wrapMadaraError(error, `getLatestBlockNumber [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getLatestBlockNumber [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getLatestBlockNumber [${nodeName}]`);
 }
@@ -76,6 +80,7 @@ export async function getBlockWithTxHashes(
       throw wrapMadaraError(
         error,
         `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`);
@@ -94,7 +99,11 @@ export async function getPreConfirmedBlock(
       const block = await provider.getBlockWithTxHashes(BlockTag.PRE_CONFIRMED);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getPreConfirmedBlock [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getPreConfirmedBlock [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getPreConfirmedBlock [${nodeName}]`);
 }
@@ -116,6 +125,7 @@ export async function getBlockWithTxs(
       throw wrapMadaraError(
         error,
         `getBlockWithTxs(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
@@ -155,6 +165,7 @@ export async function getOriginalBlockWithTxsAndProofFacts(
       throw wrapMadaraError(
         error,
         `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`,
+        "original",
       );
     }
   }, `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`);
@@ -215,6 +226,7 @@ export async function getBlockWithReceipts(
     throw wrapMadaraError(
       error,
       `getBlockWithReceipts(${blockNumber}) [${nodeName}]`,
+      nodeName,
     );
   }
 }
@@ -233,7 +245,11 @@ export async function getBlock(
       const block = await provider.getBlockWithTxHashes(blockTag);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getBlock(${blockTag}) [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getBlock(${blockTag}) [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getBlock(${blockTag}) [${nodeName}]`);
 }
@@ -260,6 +276,7 @@ export async function getBlockTimestamp(
       throw wrapMadaraError(
         error,
         `getBlockTimestamp(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockTimestamp(${blockNumber}) [${nodeName}]`);
@@ -292,6 +309,7 @@ export async function getGasPrices(
       throw wrapMadaraError(
         error,
         `getGasPrices(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getGasPrices(${blockNumber}) [${nodeName}]`);
@@ -319,6 +337,7 @@ export async function getBlockHash(
       throw wrapMadaraError(
         error,
         `getBlockHash(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockHash(${blockNumber}) [${nodeName}]`);
@@ -410,7 +429,11 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     recordBlockProcessingDuration("set_header", endTimer());
   } catch (error) {
     incrementErrors("set_custom_header_error", "setCustomHeader");
-    throw wrapMadaraError(error, `setCustomHeader(${currentBlock}) [syncing]`);
+    throw wrapMadaraError(
+      error,
+      `setCustomHeader(${currentBlock}) [syncing]`,
+      "syncing",
+    );
   }
 }
 
@@ -444,7 +467,7 @@ export async function closeBlock(): Promise<void> {
     recordBlockProcessingDuration("close_block", endTimer());
   } catch (error) {
     incrementErrors("close_block_error", "closeBlock");
-    throw wrapMadaraError(error, "closeBlock [syncing]");
+    throw wrapMadaraError(error, "closeBlock [syncing]", "syncing");
   }
 }
 
