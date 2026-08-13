@@ -1031,6 +1031,7 @@ async function sendMempoolSourceBlock(
     false,
     0,
     () => pipeline.stopRequested,
+    "mempool",
   );
 
   return {

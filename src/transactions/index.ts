@@ -12,9 +12,12 @@ import {
   incrementErrors,
 } from "../telemetry/metrics.js";
 
+export type TransactionSubmissionMode = "bypass" | "mempool";
+
 export async function processTx(
   tx: TransactionWithHash,
   block_no: number,
+  submissionMode: TransactionSubmissionMode = "bypass",
 ): Promise<string> {
   const endTimer = startTimer();
   const txType = tx.type;
@@ -22,8 +25,8 @@ export async function processTx(
 
   try {
     const handlers: Record<string, () => Promise<string>> = {
-      INVOKE: () => generalInvoke(tx),
-      DEPLOY_ACCOUNT: () => generalDeployAccount(tx),
+      INVOKE: () => generalInvoke(tx, submissionMode),
+      DEPLOY_ACCOUNT: () => generalDeployAccount(tx, submissionMode),
       DECLARE: () => generalDeclare(tx),
       L1_HANDLER: () => l1_handler_message(tx),
     };

@@ -1,26 +1,29 @@
 import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
+import { getSyncingUserRpcUrl } from "../providers.js";
+import type { TransactionSubmissionMode } from "./index.js";
 
 /**
  * General invoke transaction handler - routes to version-specific handlers
  */
 export async function generalInvoke(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode = "bypass",
 ) {
   let tx_version = tx.version;
 
   switch (tx_version) {
     case "0x0": {
-      return invokeV0(tx);
+      return invokeV0(tx, submissionMode);
     }
 
     case "0x1": {
-      return invokeV1(tx);
+      return invokeV1(tx, submissionMode);
     }
 
     case "0x3": {
-      return invokeV3(tx);
+      return invokeV3(tx, submissionMode);
     }
     default: {
       throw new Error(`Unsupported Invoke transaction version: ${tx_version}`);
@@ -30,6 +33,7 @@ export async function generalInvoke(
 
 async function invokeV0(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
 ) {
   type INVOKE_TXN_V0 = {
     type: "INVOKE";
@@ -43,28 +47,37 @@ async function invokeV0(
 
   let txn = tx as unknown as INVOKE_TXN_V0;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddInvokeTransaction",
-    params: [
-      {
-        type: "INVOKE",
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        contract_address: txn.contract_address,
-        entry_point_selector: txn.entry_point_selector,
-        calldata: txn.calldata,
-      },
-    ],
-  });
+  const result = await postWithRetry(
+    submissionMode === "mempool"
+      ? getSyncingUserRpcUrl()
+      : config.adminRpcUrlSyncingNode,
+    {
+      id: 1,
+      jsonrpc: "2.0",
+      method:
+        submissionMode === "mempool"
+          ? "starknet_addInvokeTransaction"
+          : "madara_V0_1_0_bypassAddInvokeTransaction",
+      params: [
+        {
+          type: "INVOKE",
+          max_fee: txn.max_fee,
+          version: txn.version,
+          signature: txn.signature,
+          contract_address: txn.contract_address,
+          entry_point_selector: txn.entry_point_selector,
+          calldata: txn.calldata,
+        },
+      ],
+    },
+  );
 
   return result.data.result.transaction_hash;
 }
 
 async function invokeV1(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
 ) {
   type INVOKE_TXN_V1 = {
     type: "INVOKE";
@@ -78,28 +91,37 @@ async function invokeV1(
 
   let txn = tx as unknown as INVOKE_TXN_V1;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddInvokeTransaction",
-    params: [
-      {
-        type: "INVOKE",
-        sender_address: txn.sender_address,
-        calldata: txn.calldata,
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: txn.nonce,
-      },
-    ],
-  });
+  const result = await postWithRetry(
+    submissionMode === "mempool"
+      ? getSyncingUserRpcUrl()
+      : config.adminRpcUrlSyncingNode,
+    {
+      id: 1,
+      jsonrpc: "2.0",
+      method:
+        submissionMode === "mempool"
+          ? "starknet_addInvokeTransaction"
+          : "madara_V0_1_0_bypassAddInvokeTransaction",
+      params: [
+        {
+          type: "INVOKE",
+          sender_address: txn.sender_address,
+          calldata: txn.calldata,
+          max_fee: txn.max_fee,
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+        },
+      ],
+    },
+  );
 
   return result.data.result.transaction_hash;
 }
 
 async function invokeV3(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
 ) {
   type INVOKE_TXN_V3 = {
     type: "INVOKE";
@@ -119,28 +141,36 @@ async function invokeV3(
 
   let txn = tx as unknown as INVOKE_TXN_V3;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddInvokeTransaction",
-    params: [
-      {
-        type: "INVOKE",
-        sender_address: txn.sender_address,
-        calldata: txn.calldata,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: txn.nonce,
-        resource_bounds: txn.resource_bounds,
-        tip: txn.tip,
-        paymaster_data: txn.paymaster_data,
-        account_deployment_data: txn.account_deployment_data,
-        proof_facts: txn.proof_facts,
-        nonce_data_availability_mode: txn.nonce_data_availability_mode,
-        fee_data_availability_mode: txn.fee_data_availability_mode,
-      },
-    ],
-  });
+  const result = await postWithRetry(
+    submissionMode === "mempool"
+      ? getSyncingUserRpcUrl()
+      : config.adminRpcUrlSyncingNode,
+    {
+      id: 1,
+      jsonrpc: "2.0",
+      method:
+        submissionMode === "mempool"
+          ? "starknet_addInvokeTransaction"
+          : "madara_V0_1_0_bypassAddInvokeTransaction",
+      params: [
+        {
+          type: "INVOKE",
+          sender_address: txn.sender_address,
+          calldata: txn.calldata,
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+          resource_bounds: txn.resource_bounds,
+          tip: txn.tip,
+          paymaster_data: txn.paymaster_data,
+          account_deployment_data: txn.account_deployment_data,
+          proof_facts: txn.proof_facts,
+          nonce_data_availability_mode: txn.nonce_data_availability_mode,
+          fee_data_availability_mode: txn.fee_data_availability_mode,
+        },
+      ],
+    },
+  );
 
   return result.data.result.transaction_hash;
 }

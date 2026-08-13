@@ -1,6 +1,7 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
+import type { TransactionSubmissionMode } from "../transactions/index.js";
 import {
   assertTransactionExecutionStatusMatches,
   validateBlockReceipts,
@@ -40,6 +41,7 @@ export class ParallelTransactionProcessor {
     requirePreConfirmedValidation: boolean = false,
     delayBetweenTxsMs: number = 0,
     shouldAbort?: () => boolean,
+    submissionMode: TransactionSubmissionMode = "bypass",
   ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
       return { txResults: [], txHashes: [], sendDuration: 0 };
@@ -73,7 +75,7 @@ export class ParallelTransactionProcessor {
           `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
         );
 
-        await processTx(tx, blockNumber);
+        await processTx(tx, blockNumber, submissionMode);
 
         if (preConfirmedValidation) {
           await this.waitForTxInPreConfirmed(
