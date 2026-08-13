@@ -4,7 +4,8 @@ import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
 import { ReplayModeType } from "./constants.js";
 import {
-  isBoundaryReplayMode,
+  isMempoolReplayMode,
+  isTransactionReplayMode,
   parseReplayMode,
   shouldValidateBlockHash,
 } from "./replayMode.js";
@@ -311,7 +312,11 @@ class Config {
   }
 
   public get isTransactionOnlyReplay(): boolean {
-    return isBoundaryReplayMode(this.config.replayMode);
+    return isTransactionReplayMode(this.config.replayMode);
+  }
+
+  public get isMempoolReplay(): boolean {
+    return isMempoolReplayMode(this.config.replayMode);
   }
 
   public get shouldValidateBlockHash(): boolean {

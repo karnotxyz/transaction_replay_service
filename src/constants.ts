@@ -121,6 +121,7 @@ export const ReplayMode = {
   TRANSACTION_ONLY: "transaction_only",
   TRANSACTION_ONLY_WITH_HASH_VALIDATION:
     "transaction_only_with_hash_validation",
+  MEMPOOL: "mempool",
 } as const;
 
 export type ReplayModeType = (typeof ReplayMode)[keyof typeof ReplayMode];

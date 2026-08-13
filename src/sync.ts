@@ -136,19 +136,21 @@ export async function startSync(
       `📍 Starting inside block ${startBlock} at tx hash ${startTxHash}`,
     );
   }
-  const txMode = config.isTransactionOnlyReplay
-    ? `${
-        config.transactionOnlyMaxInflightBlocks > 1
-          ? `PIPELINED boundary replay (max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks})`
-          : "SERIAL boundary replay"
-      }${
-        config.shouldValidateBlockHash
-          ? " with hash validation"
-          : " without hash validation"
-      }`
-    : config.sequentialValidation
-    ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
-    : "SEQUENTIAL sending, PARALLEL receipt validation";
+  const txMode = config.isMempoolReplay
+    ? `PIPELINED mempool submission (max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}), natural Madara block closure, transaction status validation`
+    : config.isTransactionOnlyReplay
+      ? `${
+          config.transactionOnlyMaxInflightBlocks > 1
+            ? `PIPELINED boundary replay (max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks})`
+            : "SERIAL boundary replay"
+        }${
+          config.shouldValidateBlockHash
+            ? " with hash validation"
+            : " without hash validation"
+        }`
+      : config.sequentialValidation
+        ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+        : "SEQUENTIAL sending, PARALLEL receipt validation";
   logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
@@ -935,6 +937,242 @@ async function syncTransactionOnlyBlocksPipelined(
   );
 }
 
+interface MempoolPipelineState {
+  queue: AsyncValidationQueue;
+  stopRequested: boolean;
+  fatalError: Error | null;
+  lastEnqueuedBlock: number;
+  lastValidatedBlock: number;
+}
+
+function updateMempoolPipelineProgress(
+  process: SyncProcess,
+  pipeline: MempoolPipelineState,
+): void {
+  process.lastEnqueuedBlock = pipeline.lastEnqueuedBlock;
+  process.lastClosedBlock = pipeline.lastValidatedBlock;
+  process.lastValidatedBlock = pipeline.lastValidatedBlock;
+  process.validationQueueDepth = pipeline.queue.size();
+  process.comparatorBacklogBlocks = Math.max(
+    0,
+    pipeline.lastEnqueuedBlock - pipeline.lastValidatedBlock,
+  );
+  process.maxInflightBlocks = config.transactionOnlyMaxInflightBlocks;
+}
+
+function stopMempoolPipeline(
+  process: SyncProcess,
+  pipeline: MempoolPipelineState,
+  error: unknown,
+): Error {
+  const fatalError = error instanceof Error ? error : new Error(String(error));
+  pipeline.stopRequested = true;
+  pipeline.fatalError = fatalError;
+  process.error = fatalError.message;
+  pipeline.queue.close();
+  updateMempoolPipelineProgress(process, pipeline);
+  return fatalError;
+}
+
+function abortMempoolPipelineIfStopped(pipeline: MempoolPipelineState): void {
+  if (pipeline.stopRequested) {
+    throw pipeline.fatalError ?? new Error("Mempool pipeline stopped");
+  }
+}
+
+async function waitForMempoolPipelineCapacity(
+  sourceBlockNumber: number,
+  process: SyncProcess,
+  pipeline: MempoolPipelineState,
+): Promise<void> {
+  let logged = false;
+  while (!pipeline.stopRequested) {
+    const inflightBlocks = Math.max(
+      0,
+      pipeline.lastEnqueuedBlock - pipeline.lastValidatedBlock,
+    );
+    if (inflightBlocks < config.transactionOnlyMaxInflightBlocks) {
+      return;
+    }
+    if (!logged) {
+      logger.info(
+        `⏸️ Mempool validation window full before source block ${sourceBlockNumber}: ${inflightBlocks}/${config.transactionOnlyMaxInflightBlocks}`,
+      );
+      logged = true;
+    }
+    updateMempoolPipelineProgress(process, pipeline);
+    await sleep(config.transactionOnlyBoundaryPollIntervalMs);
+  }
+  abortMempoolPipelineIfStopped(pipeline);
+}
+
+async function sendMempoolSourceBlock(
+  sourceBlockNumber: number,
+  pipeline: MempoolPipelineState,
+): Promise<ValidationJob> {
+  const sourceBlock = (await getBlockWithTxs(
+    originalProvider,
+    sourceBlockNumber,
+  )) as SourceBlockWithTxs;
+  assertSupportedBlockVersion(sourceBlockNumber, sourceBlock.starknet_version);
+
+  const transactions = sourceBlock.transactions as TransactionWithHash[];
+  const expectedStatuses = await getOriginalReceiptStatusMap(
+    sourceBlockNumber,
+    transactions,
+  );
+
+  logger.info(
+    `📤 MEMPOOL sending source block ${sourceBlockNumber} (${transactions.length} transaction(s)); no custom header, replay boundary, or close-block RPC`,
+  );
+  const result = await parallelTransactionProcessor.sendTransactions(
+    transactions,
+    sourceBlockNumber,
+    false,
+    0,
+    () => pipeline.stopRequested,
+  );
+
+  return {
+    blockNumber: sourceBlockNumber,
+    txHashes: result.txHashes,
+    txCount: transactions.length,
+    expectedStatuses,
+    requiresBoundaryClose: false,
+  };
+}
+
+async function runMempoolProducer(
+  process: SyncProcess,
+  pipeline: MempoolPipelineState,
+): Promise<void> {
+  let sourceBlockNumber = process.currentBlock;
+  let caughtUpLogged = false;
+
+  while (process.isContinuous || sourceBlockNumber <= process.syncTo) {
+    abortMempoolPipelineIfStopped(pipeline);
+    if (process.cancelRequested) {
+      break;
+    }
+    if (process.isContinuous && sourceBlockNumber > process.syncTo) {
+      if (!caughtUpLogged) {
+        logger.info(
+          `⏸️ Mempool producer caught up to source target ${process.syncTo}; waiting for new blocks`,
+        );
+        caughtUpLogged = true;
+      }
+      await sleep(ProbeConfig.CAUGHT_UP_WAIT_MS);
+      continue;
+    }
+    caughtUpLogged = false;
+
+    await waitForMempoolPipelineCapacity(sourceBlockNumber, process, pipeline);
+    abortMempoolPipelineIfStopped(pipeline);
+
+    process.currentBlock = sourceBlockNumber;
+    process.currentTxIndex = 0;
+    process.currentTxHash = undefined;
+    updateCurrentBlock(sourceBlockNumber);
+
+    const job = await sendMempoolSourceBlock(sourceBlockNumber, pipeline);
+    abortMempoolPipelineIfStopped(pipeline);
+
+    pipeline.queue.push(job);
+    pipeline.lastEnqueuedBlock = sourceBlockNumber;
+    sourceBlockNumber++;
+    process.currentBlock = sourceBlockNumber;
+    updateMempoolPipelineProgress(process, pipeline);
+
+    logger.info(
+      `📥 MEMPOOL source block ${job.blockNumber} submitted: validation_backlog=${process.comparatorBacklogBlocks}/${config.transactionOnlyMaxInflightBlocks}, validation_queue=${process.validationQueueDepth}`,
+    );
+  }
+
+  pipeline.queue.close();
+}
+
+async function runMempoolValidator(
+  process: SyncProcess,
+  pipeline: MempoolPipelineState,
+): Promise<void> {
+  while (true) {
+    abortMempoolPipelineIfStopped(pipeline);
+    const job = await pipeline.queue.shift();
+    if (!job) {
+      return;
+    }
+
+    await parallelTransactionProcessor.validateMempoolTransactionStatuses(
+      job.blockNumber,
+      job.txHashes,
+      job.expectedStatuses,
+    );
+
+    incrementBlocksProcessed();
+    recordBlockStatus("success");
+    throughputTracker.recordBlock(job.txCount);
+    process.processedBlocks++;
+    pipeline.lastValidatedBlock = job.blockNumber;
+    persistence.updateProgress(job.blockNumber + 1, 0);
+    updateMempoolPipelineProgress(process, pipeline);
+    updateSyncMetrics(process, process.syncTo, job.blockNumber);
+
+    logger.info(
+      `✅ MEMPOOL source block ${job.blockNumber} fully processed: ${job.txCount} transaction(s) finalized with matching statuses; processed=${process.processedBlocks}, validation_backlog=${process.comparatorBacklogBlocks}/${config.transactionOnlyMaxInflightBlocks}`,
+    );
+  }
+}
+
+async function syncMempoolBlocksPipelined(process: SyncProcess): Promise<void> {
+  if (process.currentTxIndex !== 0 || process.currentTxHash) {
+    throw new Error("Mempool replay requires a whole-source-block cursor");
+  }
+
+  const initialFrontier = process.currentBlock - 1;
+  const pipeline: MempoolPipelineState = {
+    queue: new AsyncValidationQueue(),
+    stopRequested: false,
+    fatalError: null,
+    lastEnqueuedBlock: initialFrontier,
+    lastValidatedBlock: initialFrontier,
+  };
+  updateMempoolPipelineProgress(process, pipeline);
+
+  logger.info(
+    `⚡ MEMPOOL replay active: max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}; Madara owns block packing and closure; block hash validation disabled`,
+  );
+
+  const producer = runMempoolProducer(process, pipeline).catch((error) => {
+    throw stopMempoolPipeline(process, pipeline, error);
+  });
+  const validator = runMempoolValidator(process, pipeline).catch((error) => {
+    throw stopMempoolPipeline(process, pipeline, error);
+  });
+
+  const results = await Promise.allSettled([producer, validator]);
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) {
+    throw failure.reason;
+  }
+
+  if (process.cancelRequested) {
+    process.status = ProcessStatus.CANCELLED;
+  } else if (!process.isContinuous) {
+    process.status = ProcessStatus.COMPLETED;
+  }
+  process.endTime = new Date();
+  persistence.stopSync();
+  syncStateManager.stopProbe();
+  syncStateManager.clearProcess();
+  updateActiveSyncProcessCount("sync", false);
+
+  logger.info(
+    `✅ MEMPOOL replay stopped cleanly: validated_through_source_block=${pipeline.lastValidatedBlock}, processed_source_blocks=${process.processedBlocks}`,
+  );
+}
+
 /**
  * Async function to process blocks
  */
@@ -944,6 +1182,11 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     logger.info(
       `🚀 Starting sync from block ${process.currentBlock} to ${process.syncTo} [${mode}]`,
     );
+
+    if (config.isMempoolReplay) {
+      await syncMempoolBlocksPipelined(process);
+      return;
+    }
 
     if (
       config.isTransactionOnlyReplay &&
@@ -1461,21 +1704,29 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     }
 
     if (
-      config.isTransactionOnlyReplay &&
-      config.transactionOnlyMaxInflightBlocks > 1
+      config.isMempoolReplay ||
+      (config.isTransactionOnlyReplay &&
+        config.transactionOnlyMaxInflightBlocks > 1)
     ) {
       process.status = ProcessStatus.PAUSED;
       process.error = error instanceof Error ? error.message : String(error);
+      const resumeBlock = config.isMempoolReplay
+        ? (process.lastValidatedBlock ?? process.syncFrom - 1) + 1
+        : undefined;
       persistence.pauseSync(
         process.isContinuous ? "latest" : process.syncTo,
         !!process.isContinuous,
         process.error,
+        resumeBlock,
+        resumeBlock === undefined ? undefined : 0,
       );
       syncStateManager.stopProbe();
       syncStateManager.clearProcess();
       updateActiveSyncProcessCount("sync", false);
       logger.error(
-        `⏸️ Transaction-only pipeline stopped on first failure: ${process.error}`,
+        `⏸️ ${
+          config.isMempoolReplay ? "Mempool" : "Transaction-only"
+        } pipeline stopped on first failure: ${process.error}`,
       );
       return;
     }
@@ -1587,11 +1838,11 @@ export const getSyncStatus = async (req: Request, res: Response) => {
     const percentComplete = currentProcess.isContinuous
       ? "N/A (continuous sync)"
       : currentProcess.totalBlocks! > 0
-      ? (
-          (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
-          100
-        ).toFixed(2) + "%"
-      : "0.00%";
+        ? (
+            (currentProcess.processedBlocks / currentProcess.totalBlocks!) *
+            100
+          ).toFixed(2) + "%"
+        : "0.00%";
 
     const runningFor = currentProcess.endTime
       ? currentProcess.endTime.getTime() - currentProcess.startTime.getTime()

@@ -1,7 +1,11 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
-import { validateBlockReceipts } from "../operations/transactionOperations.js";
+import {
+  assertTransactionExecutionStatusMatches,
+  validateBlockReceipts,
+  waitForTransactionExecutionStatus,
+} from "../operations/transactionOperations.js";
 import { syncingProvider } from "../providers.js";
 import {
   getPreConfirmedBlock,
@@ -378,6 +382,48 @@ export class ParallelTransactionProcessor {
 
     const duration = Date.now() - startTime;
     logger.info(`✅ All receipts validated in ${duration}ms`);
+  }
+
+  async validateMempoolTransactionStatuses(
+    sourceBlockNumber: number,
+    txHashes: string[],
+    expectedStatuses: Map<string, ExecutionStatus>,
+  ): Promise<void> {
+    if (txHashes.length === 0) {
+      return;
+    }
+
+    logger.info(
+      `🧾 Waiting for ${txHashes.length} mempool transaction(s) from source block ${sourceBlockNumber} to reach final execution status`,
+    );
+    const startTime = Date.now();
+
+    await Promise.all(
+      txHashes.map(async (txHash, txIndex) => {
+        const actualStatus = await waitForTransactionExecutionStatus(
+          syncingProvider,
+          txHash,
+        );
+        const expectedStatus = expectedStatuses.get(txHash);
+        if (expectedStatus) {
+          assertTransactionExecutionStatusMatches(
+            sourceBlockNumber,
+            txHash,
+            txIndex,
+            expectedStatus,
+            actualStatus,
+          );
+        }
+      }),
+    );
+
+    logger.info(
+      `✅ All ${
+        txHashes.length
+      } mempool transaction(s) from source block ${sourceBlockNumber} finalized with matching statuses in ${
+        Date.now() - startTime
+      }ms`,
+    );
   }
 }
 
