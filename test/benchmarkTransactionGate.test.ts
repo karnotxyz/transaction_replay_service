@@ -19,6 +19,12 @@ const secondBalanceUpdate =
   "0x170cc18cdc09097f55b0b2d619ff298d97dce48188cc3c115ce1adecb4313d1";
 const secondWithdrawal =
   "0x462eb7ca68773442217fba696e34953000945cc2d432abdf1c2767d0ca9bd99";
+const thirdBalancePrerequisite =
+  "0x62e88e5afebb9b0bb85e2e5b8eaa022636c8f5984c715e81d782f8e0ee071e4";
+const thirdBalanceUpdate =
+  "0x124c3f8fb11cbd6c159050b4638cd9785f5438ff7a9bb8a73fd7c2a7732916a";
+const thirdWithdrawal =
+  "0x2e4cbaf7ca234d6e297ed661dc954ef47d3bf1ad56fbbac468b41e068dfcbe5";
 
 test("holds benchmark transactions for their exact dependencies in mempool mode", () => {
   assert.equal(
@@ -33,9 +39,21 @@ test("holds benchmark transactions for their exact dependencies in mempool mode"
     getBenchmarkMempoolDependency(secondWithdrawal, "mempool"),
     secondBalanceUpdate,
   );
+  assert.equal(
+    getBenchmarkMempoolDependency(thirdBalanceUpdate, "mempool"),
+    thirdBalancePrerequisite,
+  );
+  assert.equal(
+    getBenchmarkMempoolDependency(thirdWithdrawal, "mempool"),
+    thirdBalanceUpdate,
+  );
   assert.equal(getBenchmarkMempoolDependency("0x123", "mempool"), undefined);
   assert.equal(
     getBenchmarkMempoolDependency(withdrawal, "bypass"),
+    undefined,
+  );
+  assert.equal(
+    getBenchmarkMempoolDependency(thirdBalanceUpdate, "bypass"),
     undefined,
   );
 });
