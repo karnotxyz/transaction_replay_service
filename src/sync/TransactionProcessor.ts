@@ -25,6 +25,21 @@ import {
 import { config } from "../config.js";
 import { TransactionOnlyReplayConfig } from "../constants.js";
 
+const BLOCKIFIER_BENCHMARK_WITHDRAWAL_TX =
+  "0x3f55308078a6bc808447c77909ebb062416de42acb3ea31a466532a80976845";
+const BLOCKIFIER_BENCHMARK_BALANCE_UPDATE_TX =
+  "0x663482430fb4490128452304d1ec257ec23cb98d0aecf742ade1073c1c7630f";
+
+export function getBenchmarkMempoolDependency(
+  txHash: string,
+  submissionMode: TransactionSubmissionMode,
+): string | undefined {
+  return submissionMode === "mempool" &&
+    txHash.toLowerCase() === BLOCKIFIER_BENCHMARK_WITHDRAWAL_TX
+    ? BLOCKIFIER_BENCHMARK_BALANCE_UPDATE_TX
+    : undefined;
+}
+
 /**
  * Process transactions for a block
  * Sends transactions sequentially. Receipt validation happens after block is closed.
@@ -70,6 +85,28 @@ export class ParallelTransactionProcessor {
       try {
         const txHash = tx.transaction_hash;
         txHashes.push(txHash);
+
+        const dependencyTxHash = getBenchmarkMempoolDependency(
+          txHash,
+          submissionMode,
+        );
+        if (dependencyTxHash) {
+          logger.info(
+            `⏸️ Holding benchmark tx ${txHash} until dependency ${dependencyTxHash} succeeds`,
+          );
+          const dependencyStatus = await waitForTransactionExecutionStatus(
+            syncingProvider,
+            dependencyTxHash,
+          );
+          if (dependencyStatus !== "SUCCEEDED") {
+            throw new Error(
+              `Benchmark dependency ${dependencyTxHash} reached ${dependencyStatus}`,
+            );
+          }
+          logger.info(
+            `✅ Benchmark dependency ${dependencyTxHash} succeeded; submitting ${txHash}`,
+          );
+        }
 
         logger.debug(
           `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
