@@ -37,6 +37,7 @@ interface EnvironmentConfig {
   sequentialValidation: boolean;
   replayMode: ReplayModeType;
   maxSupportedStarknetVersion?: string;
+  mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
   transactionOnlyBoundaryPollIntervalMs: number;
   transactionOnlyBoundaryTimeoutMs: number;
@@ -111,6 +112,11 @@ class Config {
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
       replayMode: this.parseReplayMode(process.env.REPLAY_MODE),
       maxSupportedStarknetVersion,
+      mempoolTransactionIntervalMs: this.parseNonNegativeInt(
+        process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
+        20,
+        "MEMPOOL_TRANSACTION_INTERVAL_MS",
+      ),
       transactionOnlyMaxInflightBlocks: this.parsePositiveInt(
         process.env.TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS,
         1,
@@ -180,6 +186,24 @@ class Config {
     return parsed;
   }
 
+  private parseNonNegativeInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string,
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a non-negative integer.`,
+      );
+    }
+    return parsed;
+  }
+
   private parseReplayMode(mode: string | undefined): ReplayModeType {
     try {
       return parseReplayMode(mode);
@@ -230,6 +254,9 @@ class Config {
       `  • Max Supported Starknet Version: ${
         config.maxSupportedStarknetVersion || "not set"
       }`,
+    );
+    logger.info(
+      `  • Mempool Transaction Interval: ${config.mempoolTransactionIntervalMs}ms`,
     );
     logger.info(
       `  • Transaction-only Max Inflight Blocks: ${config.transactionOnlyMaxInflightBlocks}`,
@@ -325,6 +352,10 @@ class Config {
 
   public get maxSupportedStarknetVersion(): string | undefined {
     return this.config.maxSupportedStarknetVersion;
+  }
+
+  public get mempoolTransactionIntervalMs(): number {
+    return this.config.mempoolTransactionIntervalMs;
   }
 
   public get transactionOnlyMaxInflightBlocks(): number {

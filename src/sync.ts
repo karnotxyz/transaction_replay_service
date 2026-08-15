@@ -48,6 +48,7 @@ import {
 import { config } from "./config.js";
 import { ExecutionStatus, SyncRequest } from "./types.js";
 import { assertExecutionBoxHealthy } from "./sync/pipelineGuards.js";
+import { getMempoolTransactionSuffix } from "./sync/mempoolCursor.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -65,7 +66,7 @@ export async function startSync(
       {
         processId: currentProcess.id,
         currentBlock: currentProcess.currentBlock,
-        currentTxIndex: 0,
+        currentTxIndex: currentProcess.currentTxIndex,
         syncFrom: currentProcess.syncFrom,
         syncTo: currentProcess.syncTo,
         isContinuous: currentProcess.isContinuous || false,
@@ -943,6 +944,7 @@ interface MempoolPipelineState {
   fatalError: Error | null;
   lastEnqueuedBlock: number;
   lastValidatedBlock: number;
+  executionBoxEpoch?: number;
 }
 
 function updateMempoolPipelineProgress(
@@ -1009,6 +1011,7 @@ async function waitForMempoolPipelineCapacity(
 async function sendMempoolSourceBlock(
   sourceBlockNumber: number,
   pipeline: MempoolPipelineState,
+  startTxIndex: number,
 ): Promise<ValidationJob> {
   const sourceBlock = (await getBlockWithTxs(
     originalProvider,
@@ -1016,20 +1019,25 @@ async function sendMempoolSourceBlock(
   )) as SourceBlockWithTxs;
   assertSupportedBlockVersion(sourceBlockNumber, sourceBlock.starknet_version);
 
-  const transactions = sourceBlock.transactions as TransactionWithHash[];
+  const allTransactions = sourceBlock.transactions as TransactionWithHash[];
+  const transactions = getMempoolTransactionSuffix(
+    allTransactions,
+    startTxIndex,
+    sourceBlockNumber,
+  );
   const expectedStatuses = await getOriginalReceiptStatusMap(
     sourceBlockNumber,
     transactions,
   );
 
   logger.info(
-    `📤 MEMPOOL sending source block ${sourceBlockNumber} (${transactions.length} transaction(s)); no custom header, replay boundary, or close-block RPC`,
+    `📤 MEMPOOL sending source block ${sourceBlockNumber} from tx index ${startTxIndex} (${transactions.length}/${allTransactions.length} transaction(s)); no custom header, replay boundary, or close-block RPC`,
   );
   const result = await parallelTransactionProcessor.sendTransactions(
     transactions,
     sourceBlockNumber,
     false,
-    0,
+    config.mempoolTransactionIntervalMs,
     () => pipeline.stopRequested,
     "mempool",
   );
@@ -1048,6 +1056,7 @@ async function runMempoolProducer(
   pipeline: MempoolPipelineState,
 ): Promise<void> {
   let sourceBlockNumber = process.currentBlock;
+  let startTxIndex = process.currentTxIndex || 0;
   let caughtUpLogged = false;
 
   while (process.isContinuous || sourceBlockNumber <= process.syncTo) {
@@ -1071,17 +1080,23 @@ async function runMempoolProducer(
     abortMempoolPipelineIfStopped(pipeline);
 
     process.currentBlock = sourceBlockNumber;
-    process.currentTxIndex = 0;
+    process.currentTxIndex = startTxIndex;
     process.currentTxHash = undefined;
     updateCurrentBlock(sourceBlockNumber);
 
-    const job = await sendMempoolSourceBlock(sourceBlockNumber, pipeline);
+    const job = await sendMempoolSourceBlock(
+      sourceBlockNumber,
+      pipeline,
+      startTxIndex,
+    );
     abortMempoolPipelineIfStopped(pipeline);
 
     pipeline.queue.push(job);
     pipeline.lastEnqueuedBlock = sourceBlockNumber;
     sourceBlockNumber++;
+    startTxIndex = 0;
     process.currentBlock = sourceBlockNumber;
+    process.currentTxIndex = 0;
     updateMempoolPipelineProgress(process, pipeline);
 
     logger.info(
@@ -1109,6 +1124,11 @@ async function runMempoolValidator(
       job.expectedStatuses,
     );
 
+    if (config.transactionOnlyRequireMixedMode) {
+      const executionBoxStatus = await getExecutionBoxStatus();
+      assertExecutionBoxHealthy(executionBoxStatus, pipeline.executionBoxEpoch);
+    }
+
     incrementBlocksProcessed();
     recordBlockStatus("success");
     throughputTracker.recordBlock(job.txCount);
@@ -1125,8 +1145,8 @@ async function runMempoolValidator(
 }
 
 async function syncMempoolBlocksPipelined(process: SyncProcess): Promise<void> {
-  if (process.currentTxIndex !== 0 || process.currentTxHash) {
-    throw new Error("Mempool replay requires a whole-source-block cursor");
+  if (process.currentTxHash) {
+    throw new Error("Mempool replay does not support startTxHash");
   }
 
   const initialFrontier = process.currentBlock - 1;
@@ -1137,10 +1157,15 @@ async function syncMempoolBlocksPipelined(process: SyncProcess): Promise<void> {
     lastEnqueuedBlock: initialFrontier,
     lastValidatedBlock: initialFrontier,
   };
+  if (config.transactionOnlyRequireMixedMode) {
+    const status = await getExecutionBoxStatus();
+    assertExecutionBoxHealthy(status);
+    pipeline.executionBoxEpoch = status.reexec_epoch;
+  }
   updateMempoolPipelineProgress(process, pipeline);
 
   logger.info(
-    `⚡ MEMPOOL replay active: max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}; Madara owns block packing and closure; block hash validation disabled`,
+    `⚡ MEMPOOL replay active: transaction_interval_ms=${config.mempoolTransactionIntervalMs}, max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}, require_mixed_mode=${config.transactionOnlyRequireMixedMode}; Madara owns block packing and closure; block hash validation disabled`,
   );
 
   const producer = runMempoolProducer(process, pipeline).catch((error) => {

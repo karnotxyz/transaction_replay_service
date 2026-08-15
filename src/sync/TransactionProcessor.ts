@@ -31,7 +31,7 @@ import { TransactionOnlyReplayConfig } from "../constants.js";
  */
 export class ParallelTransactionProcessor {
   /**
-   * Send transactions sequentially.
+   * Send transactions in source order, waiting only for RPC admission.
    * When SEQUENTIAL_VALIDATION is enabled, each transaction is confirmed
    * in the PRE_CONFIRMED block before the next one is sent.
    */
@@ -51,7 +51,7 @@ export class ParallelTransactionProcessor {
       requirePreConfirmedValidation || config.sequentialValidation;
     const mode = preConfirmedValidation
       ? "send-and-preconfirmed-validate"
-      : "fire-and-forget";
+      : "admission-acknowledged";
     logger.info(
       `📤 Sending ${transactions.length} transactions sequentially (${mode})...`,
     );
@@ -61,9 +61,23 @@ export class ParallelTransactionProcessor {
     const txResults: TransactionResult[] = [];
     const txHashes: string[] = [];
 
+    let previousSubmissionStartedAt = 0;
     for (let index = 0; index < transactions.length; index++) {
       if (shouldAbort?.()) {
         throw new Error(`Transaction sending aborted for block ${blockNumber}`);
+      }
+
+      if (delayBetweenTxsMs > 0 && previousSubmissionStartedAt > 0) {
+        const remainingDelay =
+          previousSubmissionStartedAt + delayBetweenTxsMs - Date.now();
+        if (remainingDelay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+        }
+        if (shouldAbort?.()) {
+          throw new Error(
+            `Transaction sending aborted for block ${blockNumber}`,
+          );
+        }
       }
       const tx = transactions[index];
 
@@ -75,6 +89,8 @@ export class ParallelTransactionProcessor {
           `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
         );
 
+        previousSubmissionStartedAt = Date.now();
+        // Strict FCFS uses Madara's admission order, so concurrent RPC posts can reorder source transactions.
         await processTx(tx, blockNumber, submissionMode);
 
         if (preConfirmedValidation) {
@@ -91,11 +107,6 @@ export class ParallelTransactionProcessor {
           success: true,
         });
 
-        if (delayBetweenTxsMs > 0 && index < transactions.length - 1) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, delayBetweenTxsMs),
-          );
-        }
       } catch (error: any) {
         if (error instanceof MadaraDownError) {
           logger.warn(

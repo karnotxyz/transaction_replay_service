@@ -79,6 +79,9 @@ CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
 
+# Mempool replay (REPLAY_MODE=mempool)
+MEMPOOL_TRANSACTION_INTERVAL_MS=20
+
 # Boundary replay pipeline (REPLAY_MODE=transaction_only)
 TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS=1
 TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS=100
@@ -91,6 +94,13 @@ later blocks while the comparator closes earlier blocks. Transactions and
 blocks are still submitted in source order. The service stops on the first
 boundary, transaction-order, receipt-status, hash (when enabled), or required
 ExecutionBox-health failure.
+
+Mempool replay submits transactions in source order and waits for each public
+RPC admission response before sending the next transaction. The interval is a
+minimum start-to-start delay; slower admission validation takes precedence.
+Final receipt/status validation remains asynchronous.
+`startTxIndex` applies only to the first source block; subsequent blocks always
+start at transaction index `0`.
 
 ### Configuration Features
 
