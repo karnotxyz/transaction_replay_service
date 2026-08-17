@@ -12,7 +12,12 @@ import {
   ReplayBoundaryStatus,
   ExecutionBoxStatus,
 } from "../types.js";
-import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
+import {
+  blockFetchRetry,
+  blockHashRetry,
+  RetryExecutor,
+  ExponentialBackoffStrategy,
+} from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
@@ -31,6 +36,17 @@ import {
   recordBlockStatus,
   incrementErrors,
 } from "../telemetry/metrics.js";
+import { RetryConfig } from "../constants.js";
+
+const executionBoxStatusRetry = new RetryExecutor(
+  new ExponentialBackoffStrategy(
+    RetryConfig.MAX_RETRIES_BLOCK_FETCH,
+    RetryConfig.BASE_DELAY_EXPONENTIAL,
+  ),
+  (error) =>
+    axios.isAxiosError(error) &&
+    (!error.response || error.response.status >= 500),
+);
 
 /**
  * Get latest block number from provider
@@ -541,28 +557,30 @@ export async function getReplayBoundaryStatus(
 }
 
 export async function getExecutionBoxStatus(): Promise<ExecutionBoxStatus> {
-  const response = await axios.post<MadaraRpcResponse>(
-    config.adminRpcUrlSyncingNode,
-    {
-      jsonrpc: "2.0",
-      method: "madara_V0_1_0_executionboxStatus",
-      id: 1,
-      params: [],
-    },
-    {
-      headers: {
-        "Content-Type": "application/json",
+  return executionBoxStatusRetry.execute(async () => {
+    const response = await axios.post<MadaraRpcResponse>(
+      config.adminRpcUrlSyncingNode,
+      {
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_executionboxStatus",
+        id: 1,
+        params: [],
       },
-    },
-  );
-
-  if (response.data.error) {
-    throw new Error(
-      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
     );
-  }
 
-  return response.data.result as ExecutionBoxStatus;
+    if (response.data.error) {
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
+    }
+
+    return response.data.result as ExecutionBoxStatus;
+  }, "getExecutionBoxStatus");
 }
 
 /**
