@@ -36,6 +36,17 @@ export class MadaraDownError extends AppError {
 }
 
 /**
+ * Original/source RPC is temporarily unreachable.
+ */
+export class SourceRpcUnavailableError extends AppError {
+  constructor(message: string) {
+    super(message, ErrorCode.SOURCE_RPC_UNAVAILABLE, 503, true);
+  }
+}
+
+export type RpcProviderRole = "original" | "syncing" | "unknown";
+
+/**
  * Configuration error
  */
 export class ConfigurationError extends AppError {
@@ -196,6 +207,10 @@ export class InvalidProcessStatusError extends AppError {
  * Check if an error indicates Madara is down
  */
 export function isMadaraDownError(error: any): boolean {
+  if (error instanceof SourceRpcUnavailableError) {
+    return false;
+  }
+
   if (error instanceof MadaraDownError) {
     return true;
   }
@@ -226,9 +241,23 @@ export function isMadaraDownError(error: any): boolean {
 /**
  * Wrap potential Madara errors
  */
-export function wrapMadaraError(error: any, context: string): Error {
+export function wrapMadaraError(
+  error: any,
+  context: string,
+  providerRole: RpcProviderRole = "unknown",
+): Error {
+  if (
+    error instanceof MadaraDownError ||
+    error instanceof SourceRpcUnavailableError
+  ) {
+    return error;
+  }
+
   if (isMadaraDownError(error)) {
-    return new MadaraDownError(`${context}: ${error.message || error}`);
+    const message = `${context}: ${error.message || error}`;
+    return providerRole === "original"
+      ? new SourceRpcUnavailableError(message)
+      : new MadaraDownError(message);
   }
   return error;
 }

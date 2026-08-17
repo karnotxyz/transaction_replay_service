@@ -121,6 +121,7 @@ export const ReplayMode = {
   TRANSACTION_ONLY: "transaction_only",
   TRANSACTION_ONLY_WITH_HASH_VALIDATION:
     "transaction_only_with_hash_validation",
+  MEMPOOL: "mempool",
 } as const;
 
 export type ReplayModeType = (typeof ReplayMode)[keyof typeof ReplayMode];
@@ -207,6 +208,7 @@ export const ErrorCode = {
   INVALID_BLOCK_TYPE: "INVALID_BLOCK_TYPE",
   BLOCK_NUMBER_TOO_LARGE: "BLOCK_NUMBER_TOO_LARGE",
   MADARA_DOWN: "MADARA_DOWN",
+  SOURCE_RPC_UNAVAILABLE: "SOURCE_RPC_UNAVAILABLE",
   CONFIGURATION_ERROR: "CONFIGURATION_ERROR",
   BLOCK_HASH_MISMATCH: "BLOCK_HASH_MISMATCH",
   TRANSACTION_STATUS_MISMATCH: "TRANSACTION_STATUS_MISMATCH",

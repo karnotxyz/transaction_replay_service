@@ -12,7 +12,12 @@ import {
   ReplayBoundaryStatus,
   ExecutionBoxStatus,
 } from "../types.js";
-import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
+import {
+  blockFetchRetry,
+  blockHashRetry,
+  RetryExecutor,
+  ExponentialBackoffStrategy,
+} from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
@@ -31,6 +36,17 @@ import {
   recordBlockStatus,
   incrementErrors,
 } from "../telemetry/metrics.js";
+import { RetryConfig } from "../constants.js";
+
+const executionBoxStatusRetry = new RetryExecutor(
+  new ExponentialBackoffStrategy(
+    RetryConfig.MAX_RETRIES_BLOCK_FETCH,
+    RetryConfig.BASE_DELAY_EXPONENTIAL,
+  ),
+  (error) =>
+    axios.isAxiosError(error) &&
+    (!error.response || error.response.status >= 500),
+);
 
 /**
  * Get latest block number from provider
@@ -54,7 +70,11 @@ export async function getLatestBlockNumber(
 
       return blockNumber;
     } catch (error) {
-      throw wrapMadaraError(error, `getLatestBlockNumber [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getLatestBlockNumber [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getLatestBlockNumber [${nodeName}]`);
 }
@@ -76,6 +96,7 @@ export async function getBlockWithTxHashes(
       throw wrapMadaraError(
         error,
         `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockWithTxHashes(${blockNumber}) [${nodeName}]`);
@@ -94,7 +115,11 @@ export async function getPreConfirmedBlock(
       const block = await provider.getBlockWithTxHashes(BlockTag.PRE_CONFIRMED);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getPreConfirmedBlock [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getPreConfirmedBlock [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getPreConfirmedBlock [${nodeName}]`);
 }
@@ -116,6 +141,7 @@ export async function getBlockWithTxs(
       throw wrapMadaraError(
         error,
         `getBlockWithTxs(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
@@ -155,6 +181,7 @@ export async function getOriginalBlockWithTxsAndProofFacts(
       throw wrapMadaraError(
         error,
         `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`,
+        "original",
       );
     }
   }, `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`);
@@ -215,6 +242,7 @@ export async function getBlockWithReceipts(
     throw wrapMadaraError(
       error,
       `getBlockWithReceipts(${blockNumber}) [${nodeName}]`,
+      nodeName,
     );
   }
 }
@@ -233,7 +261,11 @@ export async function getBlock(
       const block = await provider.getBlockWithTxHashes(blockTag);
       return block;
     } catch (error) {
-      throw wrapMadaraError(error, `getBlock(${blockTag}) [${nodeName}]`);
+      throw wrapMadaraError(
+        error,
+        `getBlock(${blockTag}) [${nodeName}]`,
+        nodeName,
+      );
     }
   }, `getBlock(${blockTag}) [${nodeName}]`);
 }
@@ -260,6 +292,7 @@ export async function getBlockTimestamp(
       throw wrapMadaraError(
         error,
         `getBlockTimestamp(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockTimestamp(${blockNumber}) [${nodeName}]`);
@@ -292,6 +325,7 @@ export async function getGasPrices(
       throw wrapMadaraError(
         error,
         `getGasPrices(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getGasPrices(${blockNumber}) [${nodeName}]`);
@@ -319,6 +353,7 @@ export async function getBlockHash(
       throw wrapMadaraError(
         error,
         `getBlockHash(${blockNumber}) [${nodeName}]`,
+        nodeName,
       );
     }
   }, `getBlockHash(${blockNumber}) [${nodeName}]`);
@@ -410,7 +445,11 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     recordBlockProcessingDuration("set_header", endTimer());
   } catch (error) {
     incrementErrors("set_custom_header_error", "setCustomHeader");
-    throw wrapMadaraError(error, `setCustomHeader(${currentBlock}) [syncing]`);
+    throw wrapMadaraError(
+      error,
+      `setCustomHeader(${currentBlock}) [syncing]`,
+      "syncing",
+    );
   }
 }
 
@@ -444,7 +483,7 @@ export async function closeBlock(): Promise<void> {
     recordBlockProcessingDuration("close_block", endTimer());
   } catch (error) {
     incrementErrors("close_block_error", "closeBlock");
-    throw wrapMadaraError(error, "closeBlock [syncing]");
+    throw wrapMadaraError(error, "closeBlock [syncing]", "syncing");
   }
 }
 
@@ -518,28 +557,30 @@ export async function getReplayBoundaryStatus(
 }
 
 export async function getExecutionBoxStatus(): Promise<ExecutionBoxStatus> {
-  const response = await axios.post<MadaraRpcResponse>(
-    config.adminRpcUrlSyncingNode,
-    {
-      jsonrpc: "2.0",
-      method: "madara_V0_1_0_executionboxStatus",
-      id: 1,
-      params: [],
-    },
-    {
-      headers: {
-        "Content-Type": "application/json",
+  return executionBoxStatusRetry.execute(async () => {
+    const response = await axios.post<MadaraRpcResponse>(
+      config.adminRpcUrlSyncingNode,
+      {
+        jsonrpc: "2.0",
+        method: "madara_V0_1_0_executionboxStatus",
+        id: 1,
+        params: [],
       },
-    },
-  );
-
-  if (response.data.error) {
-    throw new Error(
-      `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
     );
-  }
 
-  return response.data.result as ExecutionBoxStatus;
+    if (response.data.error) {
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`,
+      );
+    }
+
+    return response.data.result as ExecutionBoxStatus;
+  }, "getExecutionBoxStatus");
 }
 
 /**

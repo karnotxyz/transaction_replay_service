@@ -53,7 +53,9 @@ function createProvider(nodeUrl: string): RpcProvider {
 export const originalProvider = createProvider(getOriginalUserRpcUrl());
 export const syncingProvider = createProvider(getSyncingUserRpcUrl());
 
-export function getNodeName(provider: RpcProvider): string {
+export function getNodeName(
+  provider: RpcProvider,
+): "original" | "syncing" | "unknown" {
   if (provider === originalProvider) {
     return "original";
   }

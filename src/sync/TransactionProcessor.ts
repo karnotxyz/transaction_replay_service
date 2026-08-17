@@ -1,7 +1,12 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
-import { validateBlockReceipts } from "../operations/transactionOperations.js";
+import type { TransactionSubmissionMode } from "../transactions/index.js";
+import {
+  assertTransactionExecutionStatusMatches,
+  validateBlockReceipts,
+  waitForTransactionExecutionStatus,
+} from "../operations/transactionOperations.js";
 import { syncingProvider } from "../providers.js";
 import {
   getPreConfirmedBlock,
@@ -26,7 +31,7 @@ import { TransactionOnlyReplayConfig } from "../constants.js";
  */
 export class ParallelTransactionProcessor {
   /**
-   * Send transactions sequentially.
+   * Send transactions in source order, waiting only for RPC admission.
    * When SEQUENTIAL_VALIDATION is enabled, each transaction is confirmed
    * in the PRE_CONFIRMED block before the next one is sent.
    */
@@ -36,6 +41,7 @@ export class ParallelTransactionProcessor {
     requirePreConfirmedValidation: boolean = false,
     delayBetweenTxsMs: number = 0,
     shouldAbort?: () => boolean,
+    submissionMode: TransactionSubmissionMode = "bypass",
   ): Promise<SendTransactionsResult> {
     if (transactions.length === 0) {
       return { txResults: [], txHashes: [], sendDuration: 0 };
@@ -45,7 +51,7 @@ export class ParallelTransactionProcessor {
       requirePreConfirmedValidation || config.sequentialValidation;
     const mode = preConfirmedValidation
       ? "send-and-preconfirmed-validate"
-      : "fire-and-forget";
+      : "admission-acknowledged";
     logger.info(
       `📤 Sending ${transactions.length} transactions sequentially (${mode})...`,
     );
@@ -55,9 +61,23 @@ export class ParallelTransactionProcessor {
     const txResults: TransactionResult[] = [];
     const txHashes: string[] = [];
 
+    let previousSubmissionStartedAt = 0;
     for (let index = 0; index < transactions.length; index++) {
       if (shouldAbort?.()) {
         throw new Error(`Transaction sending aborted for block ${blockNumber}`);
+      }
+
+      if (delayBetweenTxsMs > 0 && previousSubmissionStartedAt > 0) {
+        const remainingDelay =
+          previousSubmissionStartedAt + delayBetweenTxsMs - Date.now();
+        if (remainingDelay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+        }
+        if (shouldAbort?.()) {
+          throw new Error(
+            `Transaction sending aborted for block ${blockNumber}`,
+          );
+        }
       }
       const tx = transactions[index];
 
@@ -69,7 +89,9 @@ export class ParallelTransactionProcessor {
           `  [${index + 1}/${transactions.length}] Sending tx: ${txHash}`,
         );
 
-        await processTx(tx, blockNumber);
+        previousSubmissionStartedAt = Date.now();
+        // Strict FCFS uses Madara's admission order, so concurrent RPC posts can reorder source transactions.
+        await processTx(tx, blockNumber, submissionMode);
 
         if (preConfirmedValidation) {
           await this.waitForTxInPreConfirmed(
@@ -85,11 +107,6 @@ export class ParallelTransactionProcessor {
           success: true,
         });
 
-        if (delayBetweenTxsMs > 0 && index < transactions.length - 1) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, delayBetweenTxsMs),
-          );
-        }
       } catch (error: any) {
         if (error instanceof MadaraDownError) {
           logger.warn(
@@ -378,6 +395,48 @@ export class ParallelTransactionProcessor {
 
     const duration = Date.now() - startTime;
     logger.info(`✅ All receipts validated in ${duration}ms`);
+  }
+
+  async validateMempoolTransactionStatuses(
+    sourceBlockNumber: number,
+    txHashes: string[],
+    expectedStatuses: Map<string, ExecutionStatus>,
+  ): Promise<void> {
+    if (txHashes.length === 0) {
+      return;
+    }
+
+    logger.info(
+      `🧾 Waiting for ${txHashes.length} mempool transaction(s) from source block ${sourceBlockNumber} to reach final execution status`,
+    );
+    const startTime = Date.now();
+
+    await Promise.all(
+      txHashes.map(async (txHash, txIndex) => {
+        const actualStatus = await waitForTransactionExecutionStatus(
+          syncingProvider,
+          txHash,
+        );
+        const expectedStatus = expectedStatuses.get(txHash);
+        if (expectedStatus) {
+          assertTransactionExecutionStatusMatches(
+            sourceBlockNumber,
+            txHash,
+            txIndex,
+            expectedStatus,
+            actualStatus,
+          );
+        }
+      }),
+    );
+
+    logger.info(
+      `✅ All ${
+        txHashes.length
+      } mempool transaction(s) from source block ${sourceBlockNumber} finalized with matching statuses in ${
+        Date.now() - startTime
+      }ms`,
+    );
   }
 }
 
