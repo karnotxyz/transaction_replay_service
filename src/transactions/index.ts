@@ -27,7 +27,7 @@ export async function processTx(
     const handlers: Record<string, () => Promise<string>> = {
       INVOKE: () => generalInvoke(tx, submissionMode),
       DEPLOY_ACCOUNT: () => generalDeployAccount(tx, submissionMode),
-      DECLARE: () => generalDeclare(tx),
+      DECLARE: () => generalDeclare(tx, submissionMode),
       L1_HANDLER: () => l1_handler_message(tx),
     };
 

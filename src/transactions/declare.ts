@@ -2,16 +2,19 @@ import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
 import {
+  getOriginalUserRpcUrl,
   getSyncingUserRpcUrl,
   originalProvider,
   syncingProvider,
 } from "../providers.js";
+import type { TransactionSubmissionMode } from "./index.js";
 
 /**
  * General declare transaction handler
  */
 export async function generalDeclare(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode = "bypass",
 ) {
   let tx_version = tx.version;
 
@@ -29,7 +32,7 @@ export async function generalDeclare(
     }
 
     case "0x3": {
-      return declareV3(tx);
+      return declareV3(tx, submissionMode);
     }
     default: {
       throw new Error(`Unsupported Declare transaction version: ${tx_version}`);
@@ -180,6 +183,7 @@ async function declareV2(
 
 async function declareV3(
   tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
 ) {
   type DECLARE_TXN_V3 = {
     type: "DECLARE";
@@ -199,7 +203,42 @@ async function declareV3(
 
   let txn = tx as unknown as DECLARE_TXN_V3;
 
+  if (submissionMode === "mempool") {
+    const classResult = await postWithRetry(getOriginalUserRpcUrl(), {
+      id: 1,
+      jsonrpc: "2.0",
+      method: "starknet_getClass",
+      params: { block_id: "latest", class_hash: txn.class_hash },
+    });
+    const contract_class = classResult.data.result;
+    const result = await postWithRetry(getSyncingUserRpcUrl(), {
+      id: 1,
+      jsonrpc: "2.0",
+      method: "starknet_addDeclareTransaction",
+      params: [
+        {
+          type: "DECLARE",
+          sender_address: txn.sender_address,
+          compiled_class_hash: txn.compiled_class_hash,
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+          contract_class,
+          resource_bounds: txn.resource_bounds,
+          tip: txn.tip,
+          paymaster_data: txn.paymaster_data,
+          account_deployment_data: txn.account_deployment_data,
+          nonce_data_availability_mode: txn.nonce_data_availability_mode,
+          fee_data_availability_mode: txn.fee_data_availability_mode,
+        },
+      ],
+    });
+
+    return result.data.result.transaction_hash;
+  }
+
   let contract_class = await originalProvider.getClassByHash(txn.class_hash);
+
   // Ensure tip is a hex string (NumAsHex expects hex string)
   let tipValue = txn.tip;
   if (typeof tipValue !== "string") {
