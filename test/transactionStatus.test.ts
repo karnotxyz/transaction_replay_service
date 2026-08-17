@@ -84,3 +84,22 @@ test("waitForTransactionExecutionStatus honors caller timeout", async () => {
 
   assert.ok(Date.now() - startedAt < 2000);
 });
+
+test("waitForTransactionExecutionStatus retries a transient connection failure", async () => {
+  let attempts = 0;
+  const provider = {
+    getTransactionReceipt: async () => {
+      attempts++;
+      if (attempts === 1) {
+        throw new Error("fetch failed");
+      }
+      return { isSuccess: () => true, isReverted: () => false };
+    },
+  } as any;
+
+  assert.equal(
+    await waitForTransactionExecutionStatus(provider, "0x123", 2000),
+    "SUCCEEDED",
+  );
+  assert.equal(attempts, 2);
+});

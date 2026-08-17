@@ -193,14 +193,14 @@ export async function waitForTransactionExecutionStatus(
       }
     } catch (error) {
       if (error instanceof MadaraDownError || isMadaraDownError(error)) {
-        throw new MadaraDownError(
-          `Madara down while waiting for receipt ${txHash}`,
+        logger.warn(
+          `Receipt RPC connection failure for ${txHash} [${nodeName}] (poll ${pollCount}); retrying: ${error}`,
+        );
+      } else {
+        logger.debug(
+          `Receipt for ${txHash} [${nodeName}] not ready (poll ${pollCount}): ${error}`,
         );
       }
-
-      logger.debug(
-        `Receipt for ${txHash} [${nodeName}] not ready (poll ${pollCount}): ${error}`,
-      );
     }
 
     await new Promise((resolve) => setTimeout(resolve, interval));

@@ -969,11 +969,14 @@ function stopMempoolPipeline(
 ): Error {
   const fatalError = error instanceof Error ? error : new Error(String(error));
   pipeline.stopRequested = true;
-  pipeline.fatalError = fatalError;
-  process.error = fatalError.message;
+  if (!pipeline.fatalError) {
+    pipeline.fatalError = fatalError;
+    logger.error(`Mempool pipeline initiating failure: ${fatalError.message}`);
+  }
+  process.error = pipeline.fatalError.message;
   pipeline.queue.close();
   updateMempoolPipelineProgress(process, pipeline);
-  return fatalError;
+  return pipeline.fatalError;
 }
 
 function abortMempoolPipelineIfStopped(pipeline: MempoolPipelineState): void {
