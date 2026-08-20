@@ -43,6 +43,8 @@ interface EnvironmentConfig {
   transactionOnlyBoundaryPollIntervalMs: number;
   transactionOnlyBoundaryTimeoutMs: number;
   transactionOnlyRequireMixedMode: boolean;
+  preConfirmedValidationMaxRetries: number;
+  preConfirmedValidationRetryDelayMs: number;
 }
 
 class Config {
@@ -141,6 +143,16 @@ class Config {
       transactionOnlyRequireMixedMode:
         process.env.TRANSACTION_ONLY_REQUIRE_MIXED_MODE?.toLowerCase() ===
         "true",
+      preConfirmedValidationMaxRetries: this.parsePositiveInt(
+        process.env.PRE_CONFIRMED_VALIDATION_MAX_RETRIES,
+        500,
+        "PRE_CONFIRMED_VALIDATION_MAX_RETRIES",
+      ),
+      preConfirmedValidationRetryDelayMs: this.parsePositiveInt(
+        process.env.PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS,
+        200,
+        "PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS",
+      ),
     };
 
     if (config.transactionOnlyMaxInflightBlocks > 10) {
@@ -281,6 +293,9 @@ class Config {
         config.transactionOnlyRequireMixedMode ? "ENABLED" : "disabled"
       }`,
     );
+    logger.info(
+      `  • Pre-confirmed Validation: ${config.preConfirmedValidationMaxRetries} retries @ ${config.preConfirmedValidationRetryDelayMs}ms`,
+    );
 
     // OpenTelemetry Configuration
     const otelEnabled = process.env.OTEL_ENABLED !== "false";
@@ -381,6 +396,14 @@ class Config {
 
   public get transactionOnlyRequireMixedMode(): boolean {
     return this.config.transactionOnlyRequireMixedMode;
+  }
+
+  public get preConfirmedValidationMaxRetries(): number {
+    return this.config.preConfirmedValidationMaxRetries;
+  }
+
+  public get preConfirmedValidationRetryDelayMs(): number {
+    return this.config.preConfirmedValidationRetryDelayMs;
   }
 
   public get isDevelopment(): boolean {
