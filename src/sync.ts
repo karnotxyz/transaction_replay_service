@@ -1614,42 +1614,48 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
         }
 
-        // Verify block hash
-        let verifyResult;
-        try {
-          verifyResult = await blockProcessor.verifyBlockHash(
-            currentBlock,
-            process,
-          );
-          if (!verifyResult.success) {
-            throw verifyResult.error;
-          }
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            // Handle Madara recovery during hash verification - STATELESS approach
-            logger.warn(
-              `🚨 Madara down detected during hash verification at block ${currentBlock}`,
-            );
-
-            const recoveryResult = await blockProcessor.handleBlockRecovery(
+        // Verify block hash when requested. Header-driven replay can intentionally
+        // preserve source timestamps while accepting a different local hash.
+        if (config.shouldValidateBlockHash) {
+          try {
+            const verifyResult = await blockProcessor.verifyBlockHash(
               currentBlock,
               process,
             );
-
-            if (!recoveryResult.recovered) {
-              throw new Error(
-                `Madara recovery failed at block ${currentBlock}`,
-              );
+            if (!verifyResult.success) {
+              throw verifyResult.error;
             }
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              // Handle Madara recovery during hash verification - STATELESS approach
+              logger.warn(
+                `🚨 Madara down detected during hash verification at block ${currentBlock}`,
+              );
 
-            // Handle the recovery action
-            const { newBlock, existingTxHashes: recoveredTxHashes } =
-              handleRecoveryAction(recoveryResult.action, currentBlock);
-            currentBlock = newBlock;
-            existingTxHashes = recoveredTxHashes;
-            continue;
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              // Handle the recovery action
+              const { newBlock, existingTxHashes: recoveredTxHashes } =
+                handleRecoveryAction(recoveryResult.action, currentBlock);
+              currentBlock = newBlock;
+              existingTxHashes = recoveredTxHashes;
+              continue;
+            }
+            throw error;
           }
-          throw error;
+        } else {
+          logger.info(
+            `⏭️ Skipped block hash validation for block ${currentBlock}`,
+          );
         }
 
         // Record successful block processing metrics

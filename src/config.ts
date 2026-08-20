@@ -7,7 +7,7 @@ import {
   isMempoolReplayMode,
   isTransactionReplayMode,
   parseReplayMode,
-  shouldValidateBlockHash,
+  resolveBlockHashValidation,
 } from "./replayMode.js";
 
 dotenv.config();
@@ -36,6 +36,7 @@ interface EnvironmentConfig {
   cleanSlate: boolean;
   sequentialValidation: boolean;
   replayMode: ReplayModeType;
+  validateBlockHash: boolean;
   maxSupportedStarknetVersion?: string;
   mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
@@ -91,6 +92,7 @@ class Config {
       "MAX_SUPPORTED_STARKNET_VERSION",
     );
 
+    const replayMode = this.parseReplayMode(process.env.REPLAY_MODE);
     const config: EnvironmentConfig = {
       // Server
       port: this.parsePort(process.env.PORT),
@@ -110,7 +112,11 @@ class Config {
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
-      replayMode: this.parseReplayMode(process.env.REPLAY_MODE),
+      replayMode,
+      validateBlockHash: resolveBlockHashValidation(
+        replayMode,
+        process.env.VALIDATE_BLOCK_HASH,
+      ),
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
         process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
@@ -251,6 +257,9 @@ class Config {
     );
     logger.info(`  • Replay Mode: ${config.replayMode}`);
     logger.info(
+      `  • Validate Block Hash: ${config.validateBlockHash ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
       `  • Max Supported Starknet Version: ${
         config.maxSupportedStarknetVersion || "not set"
       }`,
@@ -347,7 +356,7 @@ class Config {
   }
 
   public get shouldValidateBlockHash(): boolean {
-    return shouldValidateBlockHash(this.config.replayMode);
+    return this.config.validateBlockHash;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {

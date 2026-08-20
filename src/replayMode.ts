@@ -40,3 +40,20 @@ export function shouldValidateBlockHash(mode: ReplayModeType): boolean {
     mode === ReplayMode.TRANSACTION_ONLY_WITH_HASH_VALIDATION
   );
 }
+
+export function resolveBlockHashValidation(
+  mode: ReplayModeType,
+  override: string | undefined,
+): boolean {
+  if (override === undefined || override === "") {
+    return shouldValidateBlockHash(mode);
+  }
+
+  const normalized = override.toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+
+  throw new Error(
+    `Invalid VALIDATE_BLOCK_HASH value: ${override}. Expected true or false.`,
+  );
+}

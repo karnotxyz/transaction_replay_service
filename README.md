@@ -79,6 +79,10 @@ CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
 
+# Managed-block replay preserves source headers and explicitly closes each block.
+# Set false when destination block hashes are allowed to differ from the source.
+VALIDATE_BLOCK_HASH=true
+
 # Mempool replay (REPLAY_MODE=mempool)
 MEMPOOL_TRANSACTION_INTERVAL_MS=20
 
