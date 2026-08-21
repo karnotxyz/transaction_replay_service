@@ -138,7 +138,11 @@ export async function startSync(
     );
   }
   const txMode = config.replayBlockRpcEnabled
-    ? `SINGLE RPC block replay${config.shouldValidateBlockHash ? " with hash validation" : " without hash validation"}`
+    ? `${
+        config.managedBlockMaxInflight > 1
+          ? `PIPELINED managed-block RPC replay (max_inflight_blocks=${config.managedBlockMaxInflight})`
+          : "SINGLE RPC block replay"
+      }${config.shouldValidateBlockHash ? " with hash validation" : " without hash validation"}`
     : config.isMempoolReplay
       ? `PIPELINED mempool submission (max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}), natural Madara block closure, transaction status validation`
       : config.isTransactionOnlyReplay
@@ -1204,6 +1208,188 @@ async function syncMempoolBlocksPipelined(process: SyncProcess): Promise<void> {
   );
 }
 
+interface ManagedBlockOutcome {
+  blockNumber: number;
+  txCount: number;
+  error?: Error;
+}
+
+async function syncManagedBlocksPipelined(process: SyncProcess): Promise<void> {
+  if (process.currentTxIndex !== 0 || process.currentTxHash) {
+    throw new Error(
+      "Pipelined managed-block replay requires a whole-block start cursor",
+    );
+  }
+
+  const firstValidation = await blockProcessor.validateBlockReady(
+    process.currentBlock,
+    process,
+  );
+  if (!firstValidation.success) {
+    throw firstValidation.error;
+  }
+
+  const abortController = new AbortController();
+  const inFlight = new Map<number, Promise<ManagedBlockOutcome>>();
+  let executionBoxEpoch: number | undefined;
+  if (config.transactionOnlyRequireMixedMode) {
+    const status = await getExecutionBoxStatus();
+    assertExecutionBoxHealthy(status);
+    executionBoxEpoch = status.reexec_epoch;
+  }
+  let nextToSend = process.currentBlock;
+  let nextToConfirm = process.currentBlock;
+  let caughtUpLogged = false;
+
+  const updateProgress = () => {
+    process.currentBlock = nextToConfirm;
+    process.lastEnqueuedBlock = nextToSend - 1;
+    process.lastClosedBlock = nextToConfirm - 1;
+    process.lastValidatedBlock = nextToConfirm - 1;
+    process.validationQueueDepth = inFlight.size;
+    process.comparatorBacklogBlocks = inFlight.size;
+    process.maxInflightBlocks = config.managedBlockMaxInflight;
+    updateCurrentBlock(nextToConfirm);
+  };
+
+  logger.info(
+    `⚡ Managed-block RPC pipeline active: max_inflight_blocks=${config.managedBlockMaxInflight}, hash_validation=${config.shouldValidateBlockHash}; progress commits in confirmed source-block order`,
+  );
+
+  try {
+    while (
+      process.isContinuous ||
+      nextToConfirm <= process.syncTo ||
+      inFlight.size > 0
+    ) {
+      if (process.cancelRequested) {
+        abortController.abort();
+        break;
+      }
+
+      while (
+        inFlight.size < config.managedBlockMaxInflight &&
+        nextToSend <= process.syncTo
+      ) {
+        const blockNumber = nextToSend;
+        const sourceBlock = supportsProofFacts()
+          ? await getOriginalBlockWithTxsAndProofFacts(blockNumber)
+          : ((await getBlockWithTxs(
+              originalProvider,
+              blockNumber,
+            )) as SourceBlockWithTxs);
+        assertSupportedBlockVersion(
+          blockNumber,
+          sourceBlock.starknet_version,
+        );
+
+        const txCount = sourceBlock.transactions.length;
+        const outcome = blockProcessor
+          .replayBlock(
+            blockNumber,
+            sourceBlock,
+            process,
+            abortController.signal,
+            false,
+          )
+          .then((result): ManagedBlockOutcome =>
+            result.success
+              ? { blockNumber, txCount }
+              : {
+                  blockNumber,
+                  txCount,
+                  error:
+                    result.error ??
+                    new Error(`Managed replay failed for block ${blockNumber}`),
+                },
+          )
+          .catch(
+            (error): ManagedBlockOutcome => ({
+              blockNumber,
+              txCount,
+              error: error instanceof Error ? error : new Error(String(error)),
+            }),
+          );
+
+        inFlight.set(blockNumber, outcome);
+        nextToSend++;
+        updateProgress();
+        logger.info(
+          `📥 Managed block ${blockNumber} dispatched: inflight=${inFlight.size}/${config.managedBlockMaxInflight}, confirmed_frontier=${nextToConfirm - 1}`,
+        );
+      }
+
+      if (inFlight.size === 0) {
+        if (!process.isContinuous) {
+          break;
+        }
+        if (!caughtUpLogged) {
+          logger.info(
+            `⏸️ Managed-block pipeline caught up to source target ${process.syncTo}; waiting for new blocks`,
+          );
+          caughtUpLogged = true;
+        }
+        await sleep(ProbeConfig.CAUGHT_UP_WAIT_MS);
+        continue;
+      }
+      caughtUpLogged = false;
+
+      const oldest = inFlight.get(nextToConfirm);
+      if (!oldest) {
+        throw new Error(
+          `Managed-block pipeline lost ordered response slot ${nextToConfirm}`,
+        );
+      }
+      const outcome = await oldest;
+      if (outcome.error) {
+        abortController.abort();
+        throw outcome.error;
+      }
+      if (executionBoxEpoch !== undefined) {
+        assertExecutionBoxHealthy(
+          await getExecutionBoxStatus(),
+          executionBoxEpoch,
+        );
+      }
+
+      inFlight.delete(nextToConfirm);
+      incrementBlocksProcessed();
+      recordBlockStatus("success");
+      throughputTracker.recordBlock(outcome.txCount);
+      process.processedBlocks++;
+      persistence.updateProgress(nextToConfirm + 1, 0);
+      updateSyncMetrics(process, process.syncTo, nextToConfirm);
+      logger.info(
+        `✅ Managed block ${nextToConfirm} confirmed in order: processed=${process.processedBlocks}, inflight=${inFlight.size}/${config.managedBlockMaxInflight}`,
+      );
+      nextToConfirm++;
+      updateProgress();
+    }
+  } catch (error) {
+    abortController.abort();
+    const fatalError = error instanceof Error ? error : new Error(String(error));
+    process.error = fatalError.message;
+    process.status = ProcessStatus.FAILED;
+    updateProgress();
+    throw fatalError;
+  }
+
+  if (process.cancelRequested) {
+    process.status = ProcessStatus.CANCELLED;
+  } else if (!process.isContinuous) {
+    process.status = ProcessStatus.COMPLETED;
+  }
+  process.endTime = new Date();
+  persistence.stopSync();
+  syncStateManager.stopProbe();
+  syncStateManager.clearProcess();
+  updateActiveSyncProcessCount("sync", false);
+
+  logger.info(
+    `✅ Managed-block pipeline stopped cleanly: confirmed_through=${nextToConfirm - 1}, processed_blocks=${process.processedBlocks}`,
+  );
+}
+
 /**
  * Async function to process blocks
  */
@@ -1216,6 +1402,14 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
 
     if (config.isMempoolReplay) {
       await syncMempoolBlocksPipelined(process);
+      return;
+    }
+
+    if (
+      config.replayBlockRpcEnabled &&
+      config.managedBlockMaxInflight > 1
+    ) {
+      await syncManagedBlocksPipelined(process);
       return;
     }
 

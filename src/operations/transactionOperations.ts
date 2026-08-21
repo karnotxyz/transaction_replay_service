@@ -217,6 +217,7 @@ export async function waitForTransactionExecutionStatus(
 export async function postWithRetry(
   url: string,
   data: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<AxiosResponse<any>> {
   const { checkMadaraHealth } = await import("../madara/index.js");
 
@@ -225,7 +226,7 @@ export async function postWithRetry(
 
   while (attempt <= maxAttempts) {
     try {
-      const result = await axios.post(url, data);
+      const result = await axios.post(url, data, { signal });
 
       // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
@@ -255,6 +256,9 @@ export async function postWithRetry(
       }
       return result;
     } catch (error) {
+      if (signal?.aborted) {
+        throw new Error(`POST ${url} aborted`);
+      }
       const wrappedError = wrapMadaraError(error, `postWithRetry(${url})`);
 
       // Check if this is a connection error (potential Madara down)

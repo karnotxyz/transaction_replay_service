@@ -437,18 +437,23 @@ export async function buildReplayBlockRequest(
 export async function replayBlock(
   blockNumber: number,
   sourceBlock: SourceBlockWithTxs,
+  signal?: AbortSignal,
 ): Promise<ReplayBlockResult> {
   const request = await buildReplayBlockRequest(blockNumber, sourceBlock);
   logger.info(
     `📦 Replaying block ${blockNumber} via madara_V0_1_0_replayBlock with ${request.transactions.length} transactions`,
   );
 
-  const response = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_replayBlock",
-    params: [request],
-  });
+  const response = await postWithRetry(
+    config.adminRpcUrlSyncingNode,
+    {
+      id: blockNumber,
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_replayBlock",
+      params: [request],
+    },
+    signal,
+  );
 
   const rpcResponse = response.data as MadaraRpcResponse;
   if (rpcResponse.error) {
