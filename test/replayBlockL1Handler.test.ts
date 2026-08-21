@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { L1HandlerConfig } from "../src/constants.js";
-import { buildReplayBlockRequest } from "../src/operations/replayBlockOperations.js";
+import {
+  buildReplayBlockRequest,
+  validateReplayBlockResult,
+} from "../src/operations/replayBlockOperations.js";
+import { BlockHashMismatchError } from "../src/errors/index.js";
 
 test("buildReplayBlockRequest encodes L1 handler fees as hex strings", async () => {
   const request = await buildReplayBlockRequest(9566025, {
@@ -37,5 +41,45 @@ test("buildReplayBlockRequest encodes L1 handler fees as hex strings", async () 
   assert.equal(
     (transaction as any).l1_handler_message.paid_fee_on_l1,
     L1HandlerConfig.DEFAULT_PAID_FEE_HEX,
+  );
+});
+
+test("validateReplayBlockResult gates advancement only when hash validation is enabled", () => {
+  const result = {
+    block_number: 42,
+    block_hash: "0x0abc",
+    transaction_hashes: [],
+  };
+
+  assert.doesNotThrow(() =>
+    validateReplayBlockResult(42, "0xabc", true, result),
+  );
+  assert.doesNotThrow(() =>
+    validateReplayBlockResult(42, "0xdef", false, result),
+  );
+  assert.throws(
+    () => validateReplayBlockResult(42, "0xdef", true, result),
+    BlockHashMismatchError,
+  );
+});
+
+test("validateReplayBlockResult always requires the confirmed block identity", () => {
+  assert.throws(
+    () =>
+      validateReplayBlockResult(42, "0xabc", false, {
+        block_number: 41,
+        block_hash: "0xabc",
+        transaction_hashes: [],
+      }),
+    /returned block 41, expected 42/,
+  );
+  assert.throws(
+    () =>
+      validateReplayBlockResult(42, "0xabc", false, {
+        block_number: 42,
+        block_hash: "",
+        transaction_hashes: [],
+      }),
+    /returned no block hash/,
   );
 });

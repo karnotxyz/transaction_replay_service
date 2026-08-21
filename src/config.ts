@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
-import { ReplayModeType } from "./constants.js";
+import { ReplayMode, ReplayModeType } from "./constants.js";
 import {
   isMempoolReplayMode,
   isTransactionReplayMode,
@@ -161,6 +161,14 @@ class Config {
     if (config.transactionOnlyMaxInflightBlocks > 10) {
       throw new ConfigurationError(
         `Invalid TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS value: ${config.transactionOnlyMaxInflightBlocks}. Madara supports at most 10 speculative blocks.`,
+      );
+    }
+    if (
+      config.replayBlockRpcEnabled &&
+      config.replayMode !== ReplayMode.MANAGED_BLOCKS
+    ) {
+      throw new ConfigurationError(
+        "REPLAY_BLOCK_RPC_ENABLED requires REPLAY_MODE=managed_blocks.",
       );
     }
 

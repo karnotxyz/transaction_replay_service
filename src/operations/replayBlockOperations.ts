@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { originalProvider, syncingProvider } from "../providers.js";
 import { L1HandlerConfig } from "../constants.js";
 import { GasPrices, MadaraRpcResponse } from "../types.js";
+import { BlockHashMismatchError } from "../errors/index.js";
 import { postWithRetry } from "./transactionOperations.js";
 
 interface SourceBlockWithTxs {
@@ -65,6 +66,32 @@ export interface ReplayBlockResult {
   block_number: number;
   block_hash: string;
   transaction_hashes: string[];
+}
+
+export function validateReplayBlockResult(
+  blockNumber: number,
+  expectedBlockHash: string,
+  validateBlockHash: boolean,
+  result: ReplayBlockResult,
+): void {
+  if (result.block_number !== blockNumber) {
+    throw new Error(
+      `replayBlock returned block ${result.block_number}, expected ${blockNumber}`,
+    );
+  }
+  if (!result.block_hash) {
+    throw new Error(`replayBlock returned no block hash for block ${blockNumber}`);
+  }
+  if (
+    validateBlockHash &&
+    BigInt(result.block_hash) !== BigInt(expectedBlockHash)
+  ) {
+    throw new BlockHashMismatchError(
+      blockNumber,
+      expectedBlockHash,
+      result.block_hash,
+    );
+  }
 }
 
 type LegacyContractClass = starknet.ContractClass & {
@@ -430,5 +457,12 @@ export async function replayBlock(
     );
   }
 
-  return rpcResponse.result as ReplayBlockResult;
+  const result = rpcResponse.result as ReplayBlockResult;
+  validateReplayBlockResult(
+    blockNumber,
+    sourceBlock.block_hash!,
+    config.shouldValidateBlockHash,
+    result,
+  );
+  return result;
 }
