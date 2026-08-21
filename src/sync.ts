@@ -137,21 +137,23 @@ export async function startSync(
       `📍 Starting inside block ${startBlock} at tx hash ${startTxHash}`,
     );
   }
-  const txMode = config.isMempoolReplay
-    ? `PIPELINED mempool submission (max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}), natural Madara block closure, transaction status validation`
-    : config.isTransactionOnlyReplay
-      ? `${
-          config.transactionOnlyMaxInflightBlocks > 1
-            ? `PIPELINED boundary replay (max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks})`
-            : "SERIAL boundary replay"
-        }${
-          config.shouldValidateBlockHash
-            ? " with hash validation"
-            : " without hash validation"
-        }`
-      : config.sequentialValidation
-        ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
-        : "SEQUENTIAL sending, PARALLEL receipt validation";
+  const txMode = config.replayBlockRpcEnabled
+    ? `SINGLE RPC block replay${config.shouldValidateBlockHash ? " with hash validation" : " without hash validation"}`
+    : config.isMempoolReplay
+      ? `PIPELINED mempool submission (max_inflight_source_blocks=${config.transactionOnlyMaxInflightBlocks}), natural Madara block closure, transaction status validation`
+      : config.isTransactionOnlyReplay
+        ? `${
+            config.transactionOnlyMaxInflightBlocks > 1
+              ? `PIPELINED boundary replay (max_inflight_blocks=${config.transactionOnlyMaxInflightBlocks})`
+              : "SERIAL boundary replay"
+          }${
+            config.shouldValidateBlockHash
+              ? " with hash validation"
+              : " without hash validation"
+          }`
+        : config.sequentialValidation
+          ? "SEQUENTIAL send-and-validate (per-tx confirmation)"
+          : "SEQUENTIAL sending, PARALLEL receipt validation";
   logger.info(`⚡ Mode: ${txMode}`);
 
   if (isContinuous) {
@@ -1230,6 +1232,23 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
     let startTxHash = process.currentTxHash;
     // Track existing tx hashes for recovery scenarios (continue_block action)
     let existingTxHashes: string[] = [];
+    const finalizeSuccessfulBlock = (txCount: number) => {
+      incrementBlocksProcessed();
+      recordBlockStatus("success");
+      throughputTracker.recordBlock(txCount);
+      process.processedBlocks++;
+      updateSyncMetrics(process, process.syncTo, currentBlock);
+
+      const percentComplete = process.isContinuous
+        ? "N/A (continuous)"
+        : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
+          2,
+        ) + "%";
+
+      logger.info(
+        `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
+      );
+    };
 
     while (process.isContinuous || currentBlock <= process.syncTo) {
       // Check for cancellation
@@ -1446,6 +1465,48 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
             throw validateResult.error;
           }
 
+          if (config.replayBlockRpcEnabled) {
+            let replayResult;
+            try {
+              replayResult = await blockProcessor.replayBlock(
+                currentBlock,
+                sourceBlock,
+                process,
+              );
+              if (!replayResult.success) {
+                throw replayResult.error;
+              }
+            } catch (error) {
+              if (error instanceof MadaraDownError) {
+                logger.warn(
+                  `🚨 Madara down detected during replayBlock at block ${currentBlock}`,
+                );
+
+                const recoveryResult = await blockProcessor.handleBlockRecovery(
+                  currentBlock,
+                  process,
+                );
+
+                if (!recoveryResult.recovered) {
+                  throw new Error(
+                    `Madara recovery failed at block ${currentBlock}`,
+                  );
+                }
+
+                const { newBlock, existingTxHashes: recoveredTxHashes } =
+                  handleRecoveryAction(recoveryResult.action, currentBlock);
+                currentBlock = newBlock;
+                existingTxHashes = recoveredTxHashes;
+                continue;
+              }
+              throw error;
+            }
+
+            finalizeSuccessfulBlock(sourceBlock.transactions.length);
+            currentBlock++;
+            continue;
+          }
+
           // Set custom headers
           const headersResult = await blockProcessor.setBlockHeaders(
             currentBlock,
@@ -1614,69 +1675,51 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
           }
         }
 
-        // Verify block hash
-        let verifyResult;
-        try {
-          verifyResult = await blockProcessor.verifyBlockHash(
-            currentBlock,
-            process,
-          );
-          if (!verifyResult.success) {
-            throw verifyResult.error;
-          }
-        } catch (error) {
-          if (error instanceof MadaraDownError) {
-            // Handle Madara recovery during hash verification - STATELESS approach
-            logger.warn(
-              `🚨 Madara down detected during hash verification at block ${currentBlock}`,
-            );
-
-            const recoveryResult = await blockProcessor.handleBlockRecovery(
+        // Verify block hash when requested. Header-driven replay can intentionally
+        // preserve source timestamps while accepting a different local hash.
+        if (config.shouldValidateBlockHash) {
+          try {
+            const verifyResult = await blockProcessor.verifyBlockHash(
               currentBlock,
               process,
             );
-
-            if (!recoveryResult.recovered) {
-              throw new Error(
-                `Madara recovery failed at block ${currentBlock}`,
-              );
+            if (!verifyResult.success) {
+              throw verifyResult.error;
             }
+          } catch (error) {
+            if (error instanceof MadaraDownError) {
+              // Handle Madara recovery during hash verification - STATELESS approach
+              logger.warn(
+                `🚨 Madara down detected during hash verification at block ${currentBlock}`,
+              );
 
-            // Handle the recovery action
-            const { newBlock, existingTxHashes: recoveredTxHashes } =
-              handleRecoveryAction(recoveryResult.action, currentBlock);
-            currentBlock = newBlock;
-            existingTxHashes = recoveredTxHashes;
-            continue;
+              const recoveryResult = await blockProcessor.handleBlockRecovery(
+                currentBlock,
+                process,
+              );
+
+              if (!recoveryResult.recovered) {
+                throw new Error(
+                  `Madara recovery failed at block ${currentBlock}`,
+                );
+              }
+
+              // Handle the recovery action
+              const { newBlock, existingTxHashes: recoveredTxHashes } =
+                handleRecoveryAction(recoveryResult.action, currentBlock);
+              currentBlock = newBlock;
+              existingTxHashes = recoveredTxHashes;
+              continue;
+            }
+            throw error;
           }
-          throw error;
+        } else {
+          logger.info(
+            `⏭️ Skipped block hash validation for block ${currentBlock}`,
+          );
         }
 
-        // Record successful block processing metrics
-        incrementBlocksProcessed();
-        recordBlockStatus("success");
-
-        // Update throughput metrics
-        throughputTracker.recordBlock(blockResult.txCount);
-
-        process.processedBlocks++;
-
-        // Update sync progress metrics
-        // Use known values instead of making redundant RPC calls:
-        // - originalNodeLatest: use process.syncTo (updated by probe for continuous sync)
-        // - syncingNodeLatest: we just synced this block, so it's currentBlock
-        updateSyncMetrics(process, process.syncTo, currentBlock);
-
-        const percentComplete = process.isContinuous
-          ? "N/A (continuous)"
-          : ((process.processedBlocks / process.totalBlocks!) * 100).toFixed(
-              2,
-            ) + "%";
-
-        logger.info(
-          `✅ Block ${currentBlock} completed (${process.processedBlocks} blocks processed, ${percentComplete} complete)`,
-        );
-
+        finalizeSuccessfulBlock(blockResult.txCount);
         currentBlock++;
       } catch (error) {
         if (error instanceof TransactionReplayFailedError) {

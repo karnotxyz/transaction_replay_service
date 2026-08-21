@@ -5,6 +5,7 @@ import {
   isMempoolReplayMode,
   isTransactionReplayMode,
   parseReplayMode,
+  resolveBlockHashValidation,
   shouldValidateBlockHash,
   usesReplayBoundaries,
 } from "../src/replayMode.js";
@@ -60,5 +61,24 @@ test("parseReplayMode rejects invalid values", () => {
   assert.throws(
     () => parseReplayMode("headers_only"),
     /Invalid REPLAY_MODE value/,
+  );
+});
+
+test("block hash validation can be explicitly disabled for managed blocks", () => {
+  assert.equal(
+    resolveBlockHashValidation(ReplayMode.MANAGED_BLOCKS, undefined),
+    true,
+  );
+  assert.equal(
+    resolveBlockHashValidation(ReplayMode.MANAGED_BLOCKS, "false"),
+    false,
+  );
+  assert.equal(
+    resolveBlockHashValidation(ReplayMode.TRANSACTION_ONLY, "true"),
+    true,
+  );
+  assert.throws(
+    () => resolveBlockHashValidation(ReplayMode.MANAGED_BLOCKS, "maybe"),
+    /Invalid VALIDATE_BLOCK_HASH value/,
   );
 });

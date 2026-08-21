@@ -1,5 +1,6 @@
 import logger from "../logger.js";
-import { SyncProcess } from "../types.js";
+import { GasPrices, SyncProcess } from "../types.js";
+import { TransactionWithHash } from "starknet";
 import { originalProvider, syncingProvider } from "../providers.js";
 import {
   setCustomHeader,
@@ -16,6 +17,7 @@ import {
   assertReplayBoundaryClosed,
   assertReplayBoundaryMet,
 } from "./pipelineGuards.js";
+import { replayBlock as replayBlockRpc } from "../operations/replayBlockOperations.js";
 import { validateBlock } from "../validation/index.js";
 import { executeWithMadaraRecovery } from "../madara/index.js";
 import { ProcessStatus } from "../constants.js";
@@ -24,6 +26,7 @@ import {
   recordBlockProcessingDuration,
   startTimer,
 } from "../telemetry/metrics.js";
+import { config } from "../config.js";
 
 /**
  * Result of block processing operations
@@ -116,6 +119,48 @@ export class BlockProcessor {
   }
 
   /**
+   * Replay a full block through Madara's single-call replay RPC.
+   * This path stages the header, submits transactions, waits for PRE_CONFIRMED alignment,
+   * closes the block, and waits for confirmation entirely inside Madara.
+   */
+  async replayBlock(
+    blockNumber: number,
+    sourceBlock: {
+      block_hash?: string;
+      timestamp?: number;
+      l1_gas_price?: GasPrices["l1_gas_price"];
+      l1_data_gas_price?: GasPrices["l1_data_gas_price"];
+      l2_gas_price?: GasPrices["l2_gas_price"];
+      transactions: TransactionWithHash[];
+    },
+    process: SyncProcess,
+  ): Promise<BlockProcessResult> {
+    try {
+      const result = await executeWithMadaraRecovery(
+        () => replayBlockRpc(blockNumber, sourceBlock),
+        `replay block ${blockNumber}`,
+        () => {
+          process.status = ProcessStatus.RECOVERING;
+        },
+        () => {
+          process.status = ProcessStatus.RUNNING;
+        },
+        () => {
+          process.status = ProcessStatus.FAILED;
+        },
+      );
+
+      logger.info(
+        `✅ replayBlock confirmed block ${result.block_number} with hash ${result.block_hash}`,
+      );
+      return { success: true };
+    } catch (error) {
+      logger.error(`Failed to replay block ${blockNumber}:`, error);
+      return { success: false, error: error as Error };
+    }
+  }
+
+  /**
    * Validate that all sent transactions are in Madara's PRE_CONFIRMED block before closing
    * This ensures Madara has actually processed all transactions before we call closeBlock
    */
@@ -123,8 +168,8 @@ export class BlockProcessor {
     blockNumber: number,
     expectedTxHashes: string[],
     process: SyncProcess,
-    maxRetries: number = 500,
-    retryDelayMs: number = 200,
+    maxRetries: number = config.preConfirmedValidationMaxRetries,
+    retryDelayMs: number = config.preConfirmedValidationRetryDelayMs,
   ): Promise<BlockProcessResult> {
     if (expectedTxHashes.length === 0) {
       logger.info(`⏭️ No transactions to validate for block ${blockNumber}`);

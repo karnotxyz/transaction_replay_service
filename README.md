@@ -79,6 +79,13 @@ CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
 
+# Managed-block replay preserves source headers and explicitly closes each block.
+# Set false when destination block hashes are allowed to differ from the source.
+VALIDATE_BLOCK_HASH=true
+REPLAY_BLOCK_RPC_ENABLED=false # Send each full managed block through one Madara admin RPC
+PRE_CONFIRMED_VALIDATION_MAX_RETRIES=500
+PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS=200
+
 # Mempool replay (REPLAY_MODE=mempool)
 MEMPOOL_TRANSACTION_INTERVAL_MS=20
 
