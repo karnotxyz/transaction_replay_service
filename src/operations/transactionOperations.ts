@@ -223,6 +223,7 @@ export async function postWithRetry(
 
   let attempt = 0;
   const maxAttempts = RetryConfig.MAX_RETRIES_TRANSACTION_POST;
+  let transientDnsAttempts = 0;
 
   while (attempt <= maxAttempts) {
     try {
@@ -259,6 +260,24 @@ export async function postWithRetry(
       if (signal?.aborted) {
         throw new Error(`POST ${url} aborted`);
       }
+
+      const errorCode = String(
+        (error as any)?.code ?? (error as any)?.cause?.code ?? "",
+      ).toUpperCase();
+      if (errorCode === "EAI_AGAIN") {
+        if (
+          transientDnsAttempts >= RetryConfig.MAX_RETRIES_TRANSIENT_DNS_POST
+        ) {
+          throw error;
+        }
+        transientDnsAttempts++;
+        logger.warn(
+          `Transient DNS failure posting to ${url}; retrying in 1000ms (${transientDnsAttempts}/${RetryConfig.MAX_RETRIES_TRANSIENT_DNS_POST})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+
       const wrappedError = wrapMadaraError(error, `postWithRetry(${url})`);
 
       // Check if this is a connection error (potential Madara down)
