@@ -7,7 +7,7 @@ import {
 } from "../src/operations/replayBlockOperations.js";
 import { BlockHashMismatchError } from "../src/errors/index.js";
 
-test("buildReplayBlockRequest encodes L1 handler fees as hex strings", async () => {
+test("buildReplayBlockRequest encodes L1 handler fees as JSON numbers", async () => {
   const request = await buildReplayBlockRequest(9566025, {
     block_hash: "0x1575211d8eb22ff2a1e052aa1425ec7843e754317134ae3bbec25700a452d94",
     timestamp: 1778208479,
@@ -40,7 +40,12 @@ test("buildReplayBlockRequest encodes L1 handler fees as hex strings", async () 
   assert.equal(transaction.kind, "l1_handler");
   assert.equal(
     (transaction as any).l1_handler_message.paid_fee_on_l1,
-    L1HandlerConfig.DEFAULT_PAID_FEE_HEX,
+    L1HandlerConfig.DEFAULT_PAID_FEE,
+  );
+  assert.equal(
+    JSON.parse(JSON.stringify(request)).transactions[0].l1_handler_message
+      .paid_fee_on_l1,
+    L1HandlerConfig.DEFAULT_PAID_FEE,
   );
 });
 
