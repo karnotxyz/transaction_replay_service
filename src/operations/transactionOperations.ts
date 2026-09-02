@@ -19,6 +19,7 @@ import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
 import { config } from "../config.js";
 import { rpcHttpClient } from "../rpcClient.js";
+import { classifyRpcError, type RpcErrorPayload } from "./rpcError.js";
 
 /**
  * Get transaction receipt
@@ -150,24 +151,30 @@ export async function postWithRetry(
     try {
       const result = await rpcHttpClient.post(url, data);
 
-      // Check for account validation error (code 55) - needs retry
-      if (result.data.error && result.data.error.code === 55) {
-        if (attempt >= maxAttempts) {
-          throw new Error(
-            `Account validation failed after ${maxAttempts + 1} attempts: ${
-              result.data.error.message
-            }`
+      const rpcError = result.data.error as RpcErrorPayload | undefined;
+      const rpcErrorAction = classifyRpcError(rpcError);
+      if (rpcErrorAction) {
+        // Account validation errors may resolve after the prior account transaction lands.
+        if (rpcErrorAction === "retry_account_validation") {
+          if (attempt >= maxAttempts) {
+            throw new Error(
+              `Account validation failed after ${maxAttempts + 1} attempts: ${
+                rpcError!.message
+              }`
+            );
+          }
+
+          logger.warn(
+            `⚠️  Account validation failed (attempt ${attempt + 1}/${
+              maxAttempts + 1
+            }), retrying: ${JSON.stringify(result.data)}`
           );
+          attempt++;
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          continue;
         }
 
-        logger.warn(
-          `⚠️  Account validation failed (attempt ${attempt + 1}/${
-            maxAttempts + 1
-          }), retrying: ${JSON.stringify(result.data)}`
-        );
-        attempt++;
-        await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay for account validation
-        continue;
+        throw rpcErrorAction;
       }
 
       // Success
