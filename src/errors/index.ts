@@ -86,6 +86,29 @@ export class BlockHashMismatchError extends AppError {
 }
 
 /**
+ * Block Starknet version exceeds configured support ceiling
+ */
+export class UnsupportedStarknetVersionError extends AppError {
+  public readonly blockNumber: number;
+  public readonly blockVersion: string | null;
+  public readonly maxSupportedVersion: string;
+
+  constructor(
+    blockNumber: number,
+    blockVersion: string | null,
+    maxSupportedVersion: string,
+  ) {
+    const message = blockVersion
+      ? `Block ${blockNumber} uses Starknet version ${blockVersion}, which is higher than MAX_SUPPORTED_STARKNET_VERSION=${maxSupportedVersion}. Stopping replay.`
+      : `Block ${blockNumber} does not expose starknet_version while MAX_SUPPORTED_STARKNET_VERSION=${maxSupportedVersion} is configured. Stopping replay.`;
+    super(message, ErrorCode.UNSUPPORTED_STARKNET_VERSION, 409, true);
+    this.blockNumber = blockNumber;
+    this.blockVersion = blockVersion;
+    this.maxSupportedVersion = maxSupportedVersion;
+  }
+}
+
+/**
  * Process not found
  */
 export class ProcessNotFoundError extends AppError {
@@ -129,9 +152,9 @@ export function isMadaraDownError(error: any): boolean {
     return true;
   }
 
-  const errorMessage = error?.message?.toLowerCase() || "";
-  const errorCode = error?.code?.toLowerCase() || "";
-  const errorCause = error?.cause?.code?.toLowerCase() || "";
+  const errorMessage = String(error?.message ?? "").toLowerCase();
+  const errorCode = String(error?.code ?? "").toLowerCase();
+  const errorCause = String(error?.cause?.code ?? "").toLowerCase();
 
   return (
     errorMessage.includes("econnrefused") ||

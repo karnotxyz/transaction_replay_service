@@ -1,10 +1,12 @@
 import logger from "../logger.js";
 import { TransactionWithHash } from "starknet";
 import { processTx } from "../transactions/index.js";
+import { getPreConfirmedBlock } from "../operations/blockOperations.js";
 import { validateBlockReceipts } from "../operations/transactionOperations.js";
-import { syncingProvider_v9 } from "../providers.js";
+import { syncingProvider } from "../providers.js";
 import { MadaraDownError } from "../errors/index.js";
 import { TransactionResult, SendTransactionsResult } from "../types.js";
+import { config } from "../config.js";
 import {
   recordBlockProcessingDuration,
   startTimer,
@@ -16,7 +18,8 @@ import {
  */
 export class ParallelTransactionProcessor {
   /**
-   * Send transactions sequentially (no receipt validation - that happens after closeBlock)
+   * Send transactions sequentially. Optional per-transaction preconfirmation
+   * validation is retained for compatibility, but disabled for pipelined replay.
    */
   async sendTransactions(
     transactions: TransactionWithHash[],
@@ -27,7 +30,11 @@ export class ParallelTransactionProcessor {
       return { txResults: [], txHashes: [], sendDuration: 0 };
     }
 
-    logger.info(`Sending ${transactions.length} transactions sequentially...`);
+    const sequentialValidation = config.sequentialValidation;
+    const mode = sequentialValidation ? "send-and-validate" : "fire-and-forget";
+    logger.info(
+      `Sending ${transactions.length} transactions sequentially (${mode})...`
+    );
 
     const startTime = Date.now();
     const endTimer = startTimer();
@@ -51,6 +58,16 @@ export class ParallelTransactionProcessor {
         );
 
         await processTx(tx, blockNumber);
+
+        if (sequentialValidation) {
+          await this.waitForTxInPreConfirmed(
+            txHash,
+            blockNumber,
+            index + 1,
+            transactions.length,
+            shouldAbort
+          );
+        }
 
         txResults.push({
           txHash,
@@ -94,6 +111,60 @@ export class ParallelTransactionProcessor {
   }
 
   /**
+   * Poll the destination preconfirmed block until one transaction appears.
+   * The abort callback lets the pipeline stop promptly after another worker fails.
+   */
+  private async waitForTxInPreConfirmed(
+    txHash: string,
+    blockNumber: number,
+    txIndex: number,
+    totalTxs: number,
+    shouldAbort?: () => boolean,
+    maxRetries: number = 500,
+    retryDelayMs: number = 200
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (shouldAbort?.()) {
+        throw new Error(
+          `Transaction preconfirmation wait aborted for block ${blockNumber}`
+        );
+      }
+
+      try {
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
+        const pendingTxHashes = (preConfirmedBlock.transactions ||
+          []) as string[];
+
+        if (pendingTxHashes.includes(txHash)) {
+          logger.debug(
+            `  [${txIndex}/${totalTxs}] Tx ${txHash} confirmed in PRE_CONFIRMED (attempt ${attempt})`
+          );
+          return;
+        }
+
+        if (attempt % 50 === 0) {
+          logger.info(
+            `  [${txIndex}/${totalTxs}] Still waiting for tx ${txHash} in PRE_CONFIRMED (attempt ${attempt}/${maxRetries})`
+          );
+        }
+      } catch (error) {
+        if (error instanceof MadaraDownError) {
+          throw error;
+        }
+        logger.warn(
+          `  [${txIndex}/${totalTxs}] Error polling PRE_CONFIRMED (attempt ${attempt}/${maxRetries}): ${error}`
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+
+    throw new Error(
+      `Transaction ${txHash} not found in PRE_CONFIRMED block ${blockNumber} after ${maxRetries} attempts`
+    );
+  }
+
+  /**
    * Validate receipts for a block (call this AFTER closeBlock)
    */
   async validateReceipts(
@@ -113,7 +184,7 @@ export class ParallelTransactionProcessor {
 
     try {
       await validateBlockReceipts(
-        syncingProvider_v9,
+        syncingProvider,
         blockNumber,
         txHashes,
         shouldAbort

@@ -1,6 +1,6 @@
 import logger from "../logger.js";
 import { getLatestBlockNumber } from "../operations/blockOperations.js";
-import { syncingProvider_v9 } from "../providers.js";
+import { syncingProvider } from "../providers.js";
 import { blockValidationRetry } from "../retry/index.js";
 
 /**
@@ -9,7 +9,7 @@ import { blockValidationRetry } from "../retry/index.js";
  */
 export async function validateBlock(currentBlock: number): Promise<void> {
   return blockValidationRetry.execute(async () => {
-    const latestBlockNumber = await getLatestBlockNumber(syncingProvider_v9);
+    const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
 
     if (latestBlockNumber + 1 !== currentBlock) {
       throw new Error(
