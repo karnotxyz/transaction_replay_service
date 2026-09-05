@@ -1,64 +1,63 @@
 import { RpcProvider } from "starknet";
 import { config } from "./config.js";
-import { RpcVersion, RpcVersionPaths, RpcVersionType } from "./constants.js";
+import {
+  StarknetRpcProfiles,
+  DEFAULT_RPC_PROFILE,
+  StarknetRpcProfile,
+} from "./constants.js";
+import logger from "./logger.js";
+import { resolveRpcUrl } from "./rpcUrl.js";
 
 type NodeType = "Original" | "Syncing";
 
-/**
- * Create an RPC provider for a specific node and version
- */
-function createProvider(node: NodeType, version: RpcVersionType): RpcProvider {
-  const baseUrl =
-    node === "Original" ? config.rpcUrlOriginalNode : config.rpcUrlSyncingNode;
-
-  const nodeUrl = `${baseUrl}${RpcVersionPaths[version]}`;
-
-  return new RpcProvider({
-    nodeUrl,
-    specVersion: version,
-  });
-}
-
-// Original node providers
-export const originalProvider_v8 = createProvider(
-  "Original",
-  RpcVersion.V0_8_1,
-);
-export const originalProvider_v9 = createProvider(
-  "Original",
-  RpcVersion.V0_9_0,
-);
-
-// Syncing node providers
-export const syncingProvider_v8 = createProvider("Syncing", RpcVersion.V0_8_1);
-export const syncingProvider_v9 = createProvider("Syncing", RpcVersion.V0_9_0);
-
-/**
- * Get provider by version and node type
- */
-export function getProvider(
-  version: RpcVersionType,
-  node: NodeType = "Syncing",
-): RpcProvider {
-  if (node === "Original") {
-    return version === RpcVersion.V0_8_1
-      ? originalProvider_v8
-      : originalProvider_v9;
-  } else {
-    return version === RpcVersion.V0_8_1
-      ? syncingProvider_v8
-      : syncingProvider_v9;
+function resolveRpcProfile(): StarknetRpcProfile {
+  const version = config.maxSupportedStarknetVersion;
+  if (version && StarknetRpcProfiles[version]) {
+    return StarknetRpcProfiles[version];
   }
+  if (version) {
+    logger.warn(
+      `No RPC profile for Starknet version ${version}, falling back to default`,
+    );
+  }
+  return DEFAULT_RPC_PROFILE;
 }
 
-/**
- * Get a human-readable name for a provider (for logging)
- */
+const rpcProfile = resolveRpcProfile();
+logger.info(
+  `📡 RPC profile: original=${rpcProfile.originalNodeRpcPath}, syncing=${rpcProfile.syncingNodeRpcPath}, proofFacts=${rpcProfile.supportsProofFacts}`,
+);
+
+export function getOriginalUserRpcUrl(): string {
+  return resolveRpcUrl(
+    config.rpcUrlOriginalNode,
+    rpcProfile.originalNodeRpcPath,
+  );
+}
+
+export function getSyncingUserRpcUrl(): string {
+  return resolveRpcUrl(
+    config.rpcUrlSyncingNode,
+    rpcProfile.syncingNodeRpcPath,
+  );
+}
+
+export function supportsProofFacts(): boolean {
+  return rpcProfile.supportsProofFacts;
+}
+
+function createProvider(nodeUrl: string): RpcProvider {
+  return new RpcProvider({ nodeUrl });
+}
+
+export const originalProvider = createProvider(getOriginalUserRpcUrl());
+export const syncingProvider = createProvider(getSyncingUserRpcUrl());
+
 export function getNodeName(provider: RpcProvider): string {
-  if (provider === originalProvider_v8 || provider === originalProvider_v9) {
+  if (provider === originalProvider) {
     return "original";
   }
-  if (provider === syncingProvider_v8 || provider === syncingProvider_v9) {
+  if (provider === syncingProvider) {
     return "syncing";
   }
   return "unknown";

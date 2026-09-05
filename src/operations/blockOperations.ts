@@ -11,14 +11,20 @@ import {
   BlockWithReceipts,
   ReplayBoundaryStatus,
 } from "../types.js";
-import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
+import {
+  blockFetchRetry,
+  blockHashRetry,
+  sourceBlockFetchRetry,
+} from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
 import { rpcHttpClient } from "../rpcClient.js";
 import {
-  originalProvider_v9,
-  syncingProvider_v9,
+  originalProvider,
+  syncingProvider,
+  getOriginalUserRpcUrl,
+  getSyncingUserRpcUrl,
   getNodeName,
 } from "../providers.js";
 import {
@@ -32,6 +38,17 @@ import {
 } from "../telemetry/metrics.js";
 
 /**
+ * Selects retry behavior for a block read based on which node serves it.
+ * Source-node outages receive bounded retries; syncing-node outages are surfaced
+ * immediately so the Madara recovery coordinator can take over.
+ */
+function blockFetchRetryFor(provider: RpcProvider) {
+  return provider === originalProvider
+    ? sourceBlockFetchRetry
+    : blockFetchRetry;
+}
+
+/**
  * Get latest block number from provider
  */
 export async function getLatestBlockNumber(
@@ -39,15 +56,15 @@ export async function getLatestBlockNumber(
 ): Promise<number> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const latestBlock: any = await provider.getBlockLatestAccepted();
       const blockNumber = latestBlock.block_number;
 
       // Update metrics based on which provider this is
-      if (provider === originalProvider_v9) {
+      if (provider === originalProvider) {
         updateOriginalNodeBlockNumber(blockNumber);
-      } else if (provider === syncingProvider_v9) {
+      } else if (provider === syncingProvider) {
         updateSyncingNodeBlockNumber(blockNumber);
       }
 
@@ -67,7 +84,7 @@ export async function getBlockWithTxHashes(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
       return block;
@@ -88,7 +105,7 @@ export async function getPreConfirmedBlock(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(BlockTag.PRE_CONFIRMED);
       return block;
@@ -107,7 +124,7 @@ export async function getBlockWithTxs(
 ): Promise<any> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxs(blockNumber);
       return block;
@@ -118,6 +135,44 @@ export async function getBlockWithTxs(
       );
     }
   }, `getBlockWithTxs(${blockNumber}) [${nodeName}]`);
+}
+
+/**
+ * Fetch a source block while requesting the v0.10.2 Invoke v3 proof-facts
+ * extension. The version-selected RPC profile supplies the concrete URL.
+ */
+export async function getOriginalBlockWithTxsAndProofFacts(
+  blockNumber: number
+): Promise<any> {
+  const rpcUrl = getOriginalUserRpcUrl();
+
+  return sourceBlockFetchRetry.execute(async () => {
+    try {
+      const response = await rpcHttpClient.post(
+        rpcUrl,
+        {
+          jsonrpc: "2.0",
+          method: "starknet_getBlockWithTxs",
+          params: [{ block_number: blockNumber }, ["INCLUDE_PROOF_FACTS"]],
+          id: 1,
+        },
+        { headers: { "Content-Type": "application/json" } }
+      );
+
+      if (response.data.error) {
+        throw new Error(
+          `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
+        );
+      }
+
+      return response.data.result;
+    } catch (error) {
+      throw wrapMadaraError(
+        error,
+        `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`
+      );
+    }
+  }, `getOriginalBlockWithTxsAndProofFacts(${blockNumber}) [original]`);
 }
 
 /**
@@ -133,9 +188,9 @@ export async function getBlockWithReceipts(
   try {
     // Get the RPC URL from the provider
     const rpcUrl =
-      provider === syncingProvider_v9
-        ? config.rpcUrlSyncingNode
-        : config.rpcUrlOriginalNode;
+      provider === syncingProvider
+        ? getSyncingUserRpcUrl()
+        : getOriginalUserRpcUrl();
 
     const response = await rpcHttpClient.post(
       rpcUrl,
@@ -188,7 +243,7 @@ export async function getBlock(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockTag);
       return block;
@@ -207,7 +262,7 @@ export async function getBlockTimestamp(
 ): Promise<number | null> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
 
@@ -234,7 +289,7 @@ export async function getGasPrices(
 ): Promise<GasPrices> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
 
@@ -292,7 +347,7 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
   const endTimer = startTimer();
   try {
     // Single fetch for all block data (was 3 separate calls before)
-    const block = await getBlockWithTxHashes(originalProvider_v9, currentBlock);
+    const block = await getBlockWithTxHashes(originalProvider, currentBlock);
 
     // Extract timestamp
     const timestamp = "timestamp" in block ? block.timestamp : null;
@@ -589,8 +644,8 @@ export async function matchBlockHash(
     try {
       // Fetch both hashes in parallel for better performance
       const [originalHash, syncingHash] = await Promise.all([
-        getBlockHash(originalProvider_v9, blockNumber),
-        getBlockHash(syncingProvider_v9, blockNumber),
+        getBlockHash(originalProvider, blockNumber),
+        getBlockHash(syncingProvider, blockNumber),
       ]);
       logger.info(`Original node block hash: ${originalHash}`);
       logger.info(`Syncing node block hash: ${syncingHash}`);

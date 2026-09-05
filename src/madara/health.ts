@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { TimeoutConfig } from "../constants.js";
 import { MadaraDownError, isMadaraDownError } from "../errors/index.js";
 import { rpcHttpClient } from "../rpcClient.js";
+import { madaraHealthUrl } from "./healthUrl.js";
 import {
   updateMadaraHealthStatus,
   incrementMadaraRecoveryEvents,
@@ -14,7 +15,7 @@ import {
  */
 export async function checkMadaraHealth(): Promise<boolean> {
   try {
-    const healthUrl = `${config.rpcUrlSyncingNode}/health`;
+    const healthUrl = madaraHealthUrl(config.rpcUrlSyncingNode);
     const response = await rpcHttpClient.get(healthUrl, {
       timeout: TimeoutConfig.MADARA_HEALTH_CHECK_TIMEOUT,
     });

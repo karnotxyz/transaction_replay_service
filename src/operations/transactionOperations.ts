@@ -19,7 +19,8 @@ import { getNodeName } from "../providers.js";
 import { getBlockWithReceipts } from "./blockOperations.js";
 import { config } from "../config.js";
 import { rpcHttpClient } from "../rpcClient.js";
-import { classifyRpcError, type RpcErrorPayload } from "./rpcError.js";
+import { classifyRpcError } from "./rpcError.js";
+import type { RpcErrorPayload } from "./rpcError.js";
 
 /**
  * Get transaction receipt

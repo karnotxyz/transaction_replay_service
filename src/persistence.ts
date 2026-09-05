@@ -8,7 +8,7 @@ import {
   getLatestBlockNumber,
   getBlockWithTxHashes,
 } from "./operations/blockOperations.js";
-import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
+import { originalProvider, syncingProvider } from "./providers.js";
 import { BlockHashMismatchError } from "./errors/index.js";
 
 /**
@@ -160,18 +160,18 @@ class PersistenceLayer {
     logger.info("🔍 Validating chain integrity before resume...");
 
     // Get syncing node's latest block
-    const syncingLatest = await getLatestBlockNumber(syncingProvider_v9);
+    const syncingLatest = await getLatestBlockNumber(syncingProvider);
     logger.info(`📊 Syncing node latest block: ${syncingLatest}`);
 
     // Get the block from syncing node
     const syncingBlock = await getBlockWithTxHashes(
-      syncingProvider_v9,
+      syncingProvider,
       syncingLatest,
     );
 
     // Get the same block from original node
     const originalBlock = await getBlockWithTxHashes(
-      originalProvider_v9,
+      originalProvider,
       syncingLatest,
     );
 

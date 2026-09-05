@@ -1,6 +1,6 @@
 import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
-import { syncingProvider_v9 } from "../providers.js";
+import { syncingProvider } from "../providers.js";
 import {
   setCustomHeader,
   setReplayBoundary,
@@ -90,9 +90,7 @@ export class BlockProcessor {
           process.status = ProcessStatus.RUNNING;
 
           // Check PRE_CONFIRMED state after recovery
-          const preConfirmedBlock = await getPreConfirmedBlock(
-            syncingProvider_v9
-          );
+          const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
           if (preConfirmedBlock.transactions.length > 0) {
             logger.info(
               `⚠️  Block ${blockNumber} has ${preConfirmedBlock.transactions.length} txs in PRE_CONFIRMED after recovery`
@@ -223,9 +221,7 @@ export class BlockProcessor {
       attempt++;
 
       try {
-        const preConfirmedBlock = await getPreConfirmedBlock(
-          syncingProvider_v9
-        );
+        const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
         const preConfirmedBlockNumber = preConfirmedBlock.block_number;
         const pendingTxHashes = (preConfirmedBlock.transactions ||
           []) as string[];
@@ -239,12 +235,21 @@ export class BlockProcessor {
           continue;
         }
 
-        // Check which transactions are missing
+        const sameLength = pendingTxHashes.length === expectedTxHashes.length;
+        const firstOrderMismatchIndex = sameLength
+          ? expectedTxHashes.findIndex(
+              (txHash, index) => pendingTxHashes[index] !== txHash
+            )
+          : 0;
+
         const missingTxHashes = expectedTxHashes.filter(
           (txHash) => !pendingTxHashes.includes(txHash)
         );
+        const extraTxHashes = pendingTxHashes.filter(
+          (txHash) => !expectedSet.has(txHash)
+        );
 
-        if (missingTxHashes.length === 0) {
+        if (sameLength && firstOrderMismatchIndex === -1) {
           logger.info(
             `✅ All ${expectedTxHashes.length} transactions confirmed in PRE_CONFIRMED block ${blockNumber}`
           );
@@ -252,7 +257,7 @@ export class BlockProcessor {
         }
 
         logger.debug(
-          `⏳ Attempt ${attempt}/${maxRetries}: ${missingTxHashes.length}/${expectedTxHashes.length} transactions still missing`
+          `⏳ Attempt ${attempt}/${maxRetries}: preconfirmed block ${blockNumber} not aligned yet (missing=${missingTxHashes.length}, extra=${extraTxHashes.length}, pending=${pendingTxHashes.length}, expected=${expectedTxHashes.length}, first_order_mismatch=${firstOrderMismatchIndex})`
         );
 
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
@@ -348,11 +353,11 @@ export class BlockProcessor {
   async queryMadaraState(targetBlockNumber: number): Promise<RecoveryAction> {
     try {
       // Get Madara's latest completed block
-      const latestBlock = await getLatestBlockNumber(syncingProvider_v9);
+      const latestBlock = await getLatestBlockNumber(syncingProvider);
       logger.info(`📊 Madara latest completed block: ${latestBlock}`);
 
       // Get PRE_CONFIRMED block state
-      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider_v9);
+      const preConfirmedBlock = await getPreConfirmedBlock(syncingProvider);
       const preConfirmedBlockNumber = preConfirmedBlock.block_number;
       const preConfirmedTxHashes = (preConfirmedBlock.transactions ||
         []) as string[];

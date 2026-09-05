@@ -2,7 +2,11 @@ import { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 import { BlockIdentifier, TransactionWithHash, BlockTag } from "starknet";
-import { originalProvider_v9, syncingProvider_v9 } from "./providers.js";
+import {
+  originalProvider,
+  syncingProvider,
+  supportsProofFacts,
+} from "./providers.js";
 import { SyncProcess, ValidationJob } from "./types.js";
 import { persistence } from "./persistence.js";
 import { syncStateManager } from "./state/index.js";
@@ -12,6 +16,7 @@ import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
   getBlockWithTxs,
+  getOriginalBlockWithTxsAndProofFacts,
 } from "./operations/blockOperations.js";
 import { HttpStatus, ProcessStatus, ProbeConfig } from "./constants.js";
 import { config } from "./config.js";
@@ -35,6 +40,7 @@ import {
   updateActiveSyncProcessCount,
 } from "./telemetry/throughput.js";
 import { SyncInProgressError, InvalidBlockError } from "./errors/index.js";
+import { assertSupportedBlockVersion } from "./validation/index.js";
 
 /**
  * Start a sync process (for auto-resume and API)
@@ -60,7 +66,7 @@ export async function startSync(endBlock: BlockIdentifier) {
 
   const targetBlock = await getTargetBlock(endBlock);
 
-  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider_v9);
+  const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider);
   const startBlock = syncingNodeLatestBlock + 1;
 
   if (startBlock > targetBlock) {
@@ -208,7 +214,7 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
   }
 
   if (endBlock === BlockTag.LATEST || endBlock === "latest") {
-    const latestBlock = await getLatestBlockNumber(originalProvider_v9);
+    const latestBlock = await getLatestBlockNumber(originalProvider);
     return latestBlock;
   }
 
@@ -237,6 +243,11 @@ async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
 interface ProcessBlockResult {
   txCount: number;
   txHashes: string[];
+}
+
+interface SourceBlockWithTxs {
+  starknet_version?: string;
+  transactions: TransactionWithHash[];
 }
 
 interface PipelineState {
@@ -338,10 +349,7 @@ function syncPipelineProgress(
   updateValidationBacklogBlocks(validationBacklogBlocks);
   updatePipelineFrontier("enqueued", Math.max(0, pipeline.lastEnqueuedBlock));
   updatePipelineFrontier("closed", Math.max(0, pipeline.lastClosedBlock));
-  updatePipelineFrontier(
-    "validated",
-    Math.max(0, pipeline.lastValidatedBlock)
-  );
+  updatePipelineFrontier("validated", Math.max(0, pipeline.lastValidatedBlock));
   updateValidatorWorkers(
     config.validatorWorkerCount,
     pipeline.activeValidatorWorkers
@@ -355,7 +363,9 @@ function advanceValidatedFrontier(
 ): number {
   pipeline.validationCompletedBlocks.add(blockNumber);
 
-  while (pipeline.validationCompletedBlocks.has(pipeline.lastValidatedBlock + 1)) {
+  while (
+    pipeline.validationCompletedBlocks.has(pipeline.lastValidatedBlock + 1)
+  ) {
     const nextBlock = pipeline.lastValidatedBlock + 1;
     pipeline.validationCompletedBlocks.delete(nextBlock);
     pipeline.lastValidatedBlock = nextBlock;
@@ -379,10 +389,9 @@ function requestPipelineStop(
 async function processBlock(
   blockNumber: number,
   process: SyncProcess,
-  pipeline: PipelineState
+  pipeline: PipelineState,
+  blockWithTxs: SourceBlockWithTxs
 ): Promise<ProcessBlockResult> {
-  const blockWithTxs = await getBlockWithTxs(originalProvider_v9, blockNumber);
-
   const transactions = blockWithTxs.transactions as TransactionWithHash[];
   const totalTxCount = transactions.length;
   const canonicalTxHashes = transactions.map((tx) => tx.transaction_hash);
@@ -499,6 +508,14 @@ async function runProducerLoop(
 
     logger.info(`🚚 PRODUCING Block ${currentBlock}`);
 
+    const sourceBlock = supportsProofFacts()
+      ? await getOriginalBlockWithTxsAndProofFacts(currentBlock)
+      : ((await getBlockWithTxs(
+          originalProvider,
+          currentBlock
+        )) as SourceBlockWithTxs);
+    assertSupportedBlockVersion(currentBlock, sourceBlock.starknet_version);
+
     const headersResult = await blockProcessor.setBlockHeaders(
       currentBlock,
       process
@@ -507,7 +524,12 @@ async function runProducerLoop(
       throw headersResult.error;
     }
 
-    const blockResult = await processBlock(currentBlock, process, pipeline);
+    const blockResult = await processBlock(
+      currentBlock,
+      process,
+      pipeline,
+      sourceBlock
+    );
 
     if (blockResult.txHashes.length === 0) {
       const closeResult = await blockProcessor.closeCurrentBlock(
@@ -569,7 +591,9 @@ async function runValidatorLoop(
       logger.info(
         `🔎 VALIDATING Block ${
           job.blockNumber
-        } (worker=${workerId}, queue_depth=${pipeline.validationQueue.size()}, active_workers=${pipeline.activeValidatorWorkers})`
+        } (worker=${workerId}, queue_depth=${pipeline.validationQueue.size()}, active_workers=${
+          pipeline.activeValidatorWorkers
+        })`
       );
 
       if (job.requiresBoundaryClose) {
@@ -844,10 +868,8 @@ export const getSyncStatus = async (req: Request, res: Response) => {
         lastClosedBlock: currentProcess.lastClosedBlock,
         lastValidatedBlock: currentProcess.lastValidatedBlock,
         validationQueueDepth: currentProcess.validationQueueDepth ?? 0,
-        validationBacklogBlocks:
-          currentProcess.validationBacklogBlocks ?? 0,
-        activeValidatorWorkers:
-          currentProcess.activeValidatorWorkers ?? 0,
+        validationBacklogBlocks: currentProcess.validationBacklogBlocks ?? 0,
+        activeValidatorWorkers: currentProcess.activeValidatorWorkers ?? 0,
         validatorWorkerCount:
           currentProcess.validatorWorkerCount ?? config.validatorWorkerCount,
         maxInflightBlocks:

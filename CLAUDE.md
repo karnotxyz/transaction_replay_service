@@ -127,6 +127,7 @@ PORT=3000
 NODE_ENV=development|production
 STATE_FILE_PATH=./sync-state.json      # Path to state file
 CLEAN_SLATE=false                       # Clear state file on startup
+SEQUENTIAL_VALIDATION=false             # Confirm each tx in PRE_CONFIRMED before sending next
 
 # OpenTelemetry
 OTEL_ENABLED=false
