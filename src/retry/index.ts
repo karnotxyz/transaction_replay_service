@@ -24,6 +24,15 @@ export const blockFetchRetry = new RetryExecutor(
   failFastOnMadaraDown,
 );
 
+// Source-node connection failures are independent of the syncing Madara process.
+// Retry them here instead of entering the syncing-node recovery flow.
+export const sourceBlockFetchRetry = new RetryExecutor(
+  new ExponentialBackoffStrategy(
+    RetryConfig.MAX_RETRIES_BLOCK_FETCH,
+    RetryConfig.BASE_DELAY_EXPONENTIAL,
+  ),
+);
+
 // Block validation
 // Uses failFastOnMadaraDown to preserve MadaraDownError type for recovery handling
 export const blockValidationRetry = new RetryExecutor(

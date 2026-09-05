@@ -11,7 +11,11 @@ import {
   BlockWithReceipts,
   ReplayBoundaryStatus,
 } from "../types.js";
-import { blockFetchRetry, blockHashRetry } from "../retry/index.js";
+import {
+  blockFetchRetry,
+  blockHashRetry,
+  sourceBlockFetchRetry,
+} from "../retry/index.js";
 import { wrapMadaraError, BlockHashMismatchError } from "../errors/index.js";
 import { config } from "../config.js";
 import axios from "axios";
@@ -34,6 +38,17 @@ import {
 } from "../telemetry/metrics.js";
 
 /**
+ * Selects retry behavior for a block read based on which node serves it.
+ * Source-node outages receive bounded retries; syncing-node outages are surfaced
+ * immediately so the Madara recovery coordinator can take over.
+ */
+function blockFetchRetryFor(provider: RpcProvider) {
+  return provider === originalProvider
+    ? sourceBlockFetchRetry
+    : blockFetchRetry;
+}
+
+/**
  * Get latest block number from provider
  */
 export async function getLatestBlockNumber(
@@ -41,7 +56,7 @@ export async function getLatestBlockNumber(
 ): Promise<number> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const latestBlock: any = await provider.getBlockLatestAccepted();
       const blockNumber = latestBlock.block_number;
@@ -69,7 +84,7 @@ export async function getBlockWithTxHashes(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
       return block;
@@ -90,7 +105,7 @@ export async function getPreConfirmedBlock(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(BlockTag.PRE_CONFIRMED);
       return block;
@@ -109,7 +124,7 @@ export async function getBlockWithTxs(
 ): Promise<any> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxs(blockNumber);
       return block;
@@ -131,7 +146,7 @@ export async function getOriginalBlockWithTxsAndProofFacts(
 ): Promise<any> {
   const rpcUrl = getOriginalUserRpcUrl();
 
-  return blockFetchRetry.execute(async () => {
+  return sourceBlockFetchRetry.execute(async () => {
     try {
       const response = await rpcHttpClient.post(
         rpcUrl,
@@ -228,7 +243,7 @@ export async function getBlock(
 ): Promise<BlockWithTxHashes> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockTag);
       return block;
@@ -247,7 +262,7 @@ export async function getBlockTimestamp(
 ): Promise<number | null> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
 
@@ -274,7 +289,7 @@ export async function getGasPrices(
 ): Promise<GasPrices> {
   const nodeName = getNodeName(provider);
 
-  return blockFetchRetry.execute(async () => {
+  return blockFetchRetryFor(provider).execute(async () => {
     try {
       const block = await provider.getBlockWithTxHashes(blockNumber);
 
