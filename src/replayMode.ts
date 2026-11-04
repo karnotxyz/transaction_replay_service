@@ -57,3 +57,10 @@ export function resolveBlockHashValidation(
     `Invalid VALIDATE_BLOCK_HASH value: ${override}. Expected true or false.`,
   );
 }
+
+export function expectedReplayBlockHash(
+  sourceBlockHash: string,
+  validateBlockHash: boolean,
+): string {
+  return validateBlockHash ? sourceBlockHash : "0x0";
+}

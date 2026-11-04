@@ -37,6 +37,7 @@ import {
   incrementErrors,
 } from "../telemetry/metrics.js";
 import { RetryConfig } from "../constants.js";
+import { expectedReplayBlockHash } from "../replayMode.js";
 
 const executionBoxStatusRetry = new RetryExecutor(
   new ExponentialBackoffStrategy(
@@ -424,7 +425,10 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
                 16,
               ),
             },
-            expected_block_hash: expectedBlockHash,
+            expected_block_hash: expectedReplayBlockHash(
+              expectedBlockHash,
+              config.shouldValidateBlockHash,
+            ),
           },
         ],
       },
