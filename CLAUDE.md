@@ -131,6 +131,7 @@ SEQUENTIAL_VALIDATION=false             # Confirm each tx in PRE_CONFIRMED befor
 REPLAY_MODE=managed_blocks               # transaction_only skips expected block-hash equality
 VALIDATE_BLOCK_HASH=true                 # Set false to accept a different destination block hash
 REPLAY_BLOCK_RPC_ENABLED=false           # Send each full managed block through one Madara admin RPC
+MANAGED_BLOCK_MAX_INFLIGHT=1             # 1..9; requires ordered pipelined replay support in Madara
 PRE_CONFIRMED_VALIDATION_MAX_RETRIES=500
 PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS=200
 MEMPOOL_TRANSACTION_INTERVAL_MS=20       # Minimum source-ordered submission start interval

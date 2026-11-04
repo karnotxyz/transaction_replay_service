@@ -83,6 +83,7 @@ LOG_LEVEL=info
 # Set false when destination block hashes are allowed to differ from the source.
 VALIDATE_BLOCK_HASH=true
 REPLAY_BLOCK_RPC_ENABLED=false # Send each full managed block through one Madara admin RPC
+MANAGED_BLOCK_MAX_INFLIGHT=1   # 1..9; requires ordered pipelined replay support in Madara
 PRE_CONFIRMED_VALIDATION_MAX_RETRIES=500
 PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS=200
 
@@ -101,6 +102,11 @@ later blocks while the comparator closes earlier blocks. Transactions and
 blocks are still submitted in source order. The service stops on the first
 boundary, transaction-order, receipt-status, hash (when enabled), or required
 ExecutionBox-health failure.
+
+Set `MANAGED_BLOCK_MAX_INFLIGHT` above `1` with
+`REPLAY_BLOCK_RPC_ENABLED=true` to keep multiple whole-block RPCs pending.
+Madara admits their primary execution in source order; the service persists
+progress only as confirmed responses retire in that same order.
 
 Mempool replay submits transactions in source order and waits for each public
 RPC admission response before sending the next transaction. The interval is a

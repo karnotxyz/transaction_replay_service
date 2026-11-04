@@ -38,6 +38,7 @@ interface EnvironmentConfig {
   replayMode: ReplayModeType;
   validateBlockHash: boolean;
   replayBlockRpcEnabled: boolean;
+  managedBlockMaxInflight: number;
   maxSupportedStarknetVersion?: string;
   mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
@@ -122,6 +123,11 @@ class Config {
       ),
       replayBlockRpcEnabled:
         process.env.REPLAY_BLOCK_RPC_ENABLED?.toLowerCase() === "true",
+      managedBlockMaxInflight: this.parsePositiveInt(
+        process.env.MANAGED_BLOCK_MAX_INFLIGHT,
+        1,
+        "MANAGED_BLOCK_MAX_INFLIGHT",
+      ),
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
         process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
@@ -161,6 +167,16 @@ class Config {
     if (config.transactionOnlyMaxInflightBlocks > 10) {
       throw new ConfigurationError(
         `Invalid TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS value: ${config.transactionOnlyMaxInflightBlocks}. Madara supports at most 10 speculative blocks.`,
+      );
+    }
+    if (config.managedBlockMaxInflight > 9) {
+      throw new ConfigurationError(
+        `Invalid MANAGED_BLOCK_MAX_INFLIGHT value: ${config.managedBlockMaxInflight}. Madara supports at most 9 managed blocks in flight.`,
+      );
+    }
+    if (config.managedBlockMaxInflight > 1 && !config.replayBlockRpcEnabled) {
+      throw new ConfigurationError(
+        "MANAGED_BLOCK_MAX_INFLIGHT greater than 1 requires REPLAY_BLOCK_RPC_ENABLED=true.",
       );
     }
     if (
@@ -286,6 +302,9 @@ class Config {
       `  • Replay Block RPC: ${config.replayBlockRpcEnabled ? "ENABLED" : "disabled"}`,
     );
     logger.info(
+      `  • Managed-block Max Inflight: ${config.managedBlockMaxInflight}`,
+    );
+    logger.info(
       `  • Max Supported Starknet Version: ${
         config.maxSupportedStarknetVersion || "not set"
       }`,
@@ -390,6 +409,10 @@ class Config {
 
   public get replayBlockRpcEnabled(): boolean {
     return this.config.replayBlockRpcEnabled;
+  }
+
+  public get managedBlockMaxInflight(): number {
+    return this.config.managedBlockMaxInflight;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {

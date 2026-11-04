@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ReplayMode } from "../src/constants.js";
 import {
+  expectedReplayBlockHash,
   isMempoolReplayMode,
   isTransactionReplayMode,
   parseReplayMode,
@@ -9,6 +10,11 @@ import {
   shouldValidateBlockHash,
   usesReplayBoundaries,
 } from "../src/replayMode.js";
+
+test("expectedReplayBlockHash uses zero as the disabled-validation sentinel", () => {
+  assert.equal(expectedReplayBlockHash("0xabc", true), "0xabc");
+  assert.equal(expectedReplayBlockHash("0xabc", false), "0x0");
+});
 
 test("parseReplayMode defaults to managed blocks", () => {
   assert.equal(parseReplayMode(undefined), ReplayMode.MANAGED_BLOCKS);

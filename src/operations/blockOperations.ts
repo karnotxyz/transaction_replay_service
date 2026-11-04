@@ -37,6 +37,7 @@ import {
   incrementErrors,
 } from "../telemetry/metrics.js";
 import { RetryConfig } from "../constants.js";
+import { expectedReplayBlockHash } from "../replayMode.js";
 
 const executionBoxStatusRetry = new RetryExecutor(
   new ExponentialBackoffStrategy(
@@ -372,14 +373,11 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
     // Extract timestamp
     const timestamp = "timestamp" in block ? block.timestamp : null;
 
-    // Extract block hash
-    const expectedBlockHash =
-      "block_hash" in block && block.block_hash ? block.block_hash : null;
-
     // Extract gas prices
     if (!("block_hash" in block && block.block_hash)) {
       throw new Error(`Block ${currentBlock} is pending - cannot set headers`);
     }
+    const expectedBlockHash = block.block_hash;
 
     const gasPrices: GasPrices = {
       l1_data_gas_price: block.l1_data_gas_price,
@@ -424,7 +422,10 @@ export async function setCustomHeader(currentBlock: number): Promise<void> {
                 16,
               ),
             },
-            expected_block_hash: expectedBlockHash,
+            expected_block_hash: expectedReplayBlockHash(
+              expectedBlockHash,
+              config.shouldValidateBlockHash,
+            ),
           },
         ],
       },

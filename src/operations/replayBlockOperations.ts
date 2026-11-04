@@ -5,6 +5,7 @@ import { originalProvider, syncingProvider } from "../providers.js";
 import { L1HandlerConfig } from "../constants.js";
 import { GasPrices, MadaraRpcResponse } from "../types.js";
 import { BlockHashMismatchError } from "../errors/index.js";
+import { expectedReplayBlockHash } from "../replayMode.js";
 import { postWithRetry } from "./transactionOperations.js";
 
 interface SourceBlockWithTxs {
@@ -176,7 +177,10 @@ function buildCustomHeader(
       eth_l2_gas_price: parseInt(gasPrices.l2_gas_price.price_in_wei, 16),
       strk_l2_gas_price: parseInt(gasPrices.l2_gas_price.price_in_fri, 16),
     },
-    expected_block_hash: sourceBlock.block_hash,
+    expected_block_hash: expectedReplayBlockHash(
+      sourceBlock.block_hash,
+      config.shouldValidateBlockHash,
+    ),
   };
 }
 
@@ -437,18 +441,23 @@ export async function buildReplayBlockRequest(
 export async function replayBlock(
   blockNumber: number,
   sourceBlock: SourceBlockWithTxs,
+  signal?: AbortSignal,
 ): Promise<ReplayBlockResult> {
   const request = await buildReplayBlockRequest(blockNumber, sourceBlock);
   logger.info(
     `📦 Replaying block ${blockNumber} via madara_V0_1_0_replayBlock with ${request.transactions.length} transactions`,
   );
 
-  const response = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_replayBlock",
-    params: [request],
-  });
+  const response = await postWithRetry(
+    config.adminRpcUrlSyncingNode,
+    {
+      id: blockNumber,
+      jsonrpc: "2.0",
+      method: "madara_V0_1_0_replayBlock",
+      params: [request],
+    },
+    signal,
+  );
 
   const rpcResponse = response.data as MadaraRpcResponse;
   if (rpcResponse.error) {

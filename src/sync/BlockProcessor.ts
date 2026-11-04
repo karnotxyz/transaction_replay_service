@@ -134,21 +134,26 @@ export class BlockProcessor {
       transactions: TransactionWithHash[];
     },
     process: SyncProcess,
+    signal?: AbortSignal,
+    allowRecovery: boolean = true,
   ): Promise<BlockProcessResult> {
     try {
-      const result = await executeWithMadaraRecovery(
-        () => replayBlockRpc(blockNumber, sourceBlock),
-        `replay block ${blockNumber}`,
-        () => {
-          process.status = ProcessStatus.RECOVERING;
-        },
-        () => {
-          process.status = ProcessStatus.RUNNING;
-        },
-        () => {
-          process.status = ProcessStatus.FAILED;
-        },
-      );
+      const replay = () => replayBlockRpc(blockNumber, sourceBlock, signal);
+      const result = allowRecovery
+        ? await executeWithMadaraRecovery(
+            replay,
+            `replay block ${blockNumber}`,
+            () => {
+              process.status = ProcessStatus.RECOVERING;
+            },
+            () => {
+              process.status = ProcessStatus.RUNNING;
+            },
+            () => {
+              process.status = ProcessStatus.FAILED;
+            },
+          )
+        : await replay();
 
       logger.info(
         `✅ replayBlock confirmed block ${result.block_number} with hash ${result.block_hash}`,
