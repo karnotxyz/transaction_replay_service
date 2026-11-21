@@ -1,4 +1,5 @@
 import { Account, Deployer, hash } from 'starknet';
+import { randomInt } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +10,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const contractBase = join(here, 'fixture/target/dev/local_committed_data_replay_ReplayOracle');
 const output = process.env.RUN_FILE || join(here, 'run.json');
 const leafDomain = '0x43445f4d50545f4c4541465f5631';
-const batch = process.argv.includes('--batch');
+const stressArg = process.argv.find(arg => arg.startsWith('--stress-blocks='));
+const stressBlocks = stressArg ? Number(stressArg.split('=')[1]) : 0;
+if (!Number.isInteger(stressBlocks) || stressBlocks < 0) throw new Error('Invalid --stress-blocks count');
+const batch = process.argv.includes('--batch') || stressBlocks > 0;
 const adminRpc = process.env.C1_ADMIN_RPC || 'http://127.0.0.1:19943/rpc/v0.1.0/';
 
 function localDevnetAccount() {
@@ -21,7 +25,7 @@ function localDevnetAccount() {
 
 async function closeWhenPreconfirmed(hashes) {
   if (!batch) return;
-  const until = Date.now() + 30000;
+  const until = Date.now() + 120000;
   while (Date.now() < until) {
     const block = await rpc(c1, 'starknet_getBlockWithTxHashes', ['pre_confirmed']);
     const found = new Set(block.transactions.map(tx => typeof tx === 'string' ? tx : tx.transaction_hash));
@@ -74,8 +78,8 @@ async function main() {
     return originalFetch(method, params);
   };
 
-  async function sendRound(price) {
-    const initialNonce = batch ? BigInt(await rpc(c1, 'starknet_getNonce', ['latest', address])) : undefined;
+  async function sendRound(price, nonceOverride, deferClose = false) {
+    const initialNonce = nonceOverride ?? (batch ? BigInt(await rpc(c1, 'starknet_getNonce', ['latest', address])) : undefined);
     const details = (offset) => initialNonce === undefined ? {} : {
       nonce: `0x${(initialNonce + BigInt(offset)).toString(16)}`,
       resourceBounds: {
@@ -92,6 +96,8 @@ async function main() {
     if (pendingDataset) throw new Error('Combined dataset submission was not used');
     if (!batch) await receipt(c1, update.transaction_hash);
     const settle = await account.execute({ contractAddress: run.contract, entrypoint: 'settle', calldata: [2, 3] }, details(2));
+    const record = { price, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash };
+    if (deferClose) return record;
     await closeWhenPreconfirmed([tick.transaction_hash, update.transaction_hash, settle.transaction_hash]);
     const settledReceipt = await receipt(c1, settle.transaction_hash);
     if (settledReceipt.execution_status !== 'SUCCEEDED') throw new Error(`C1 settle failed: ${JSON.stringify(settledReceipt)}`);
@@ -102,13 +108,39 @@ async function main() {
         throw new Error('A price round crossed a C1 block boundary');
       }
     }
-    run.rounds.push({ price, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash });
+    run.rounds.push(record);
     writeFileSync(output, JSON.stringify(run, null, 2));
     console.log(`C1 price=${price} root=${root} settle=${settle.transaction_hash}`);
   }
 
-  if (!process.argv.includes('--continue')) {
+  if (!process.argv.includes('--continue') && !stressBlocks) {
     for (const price of [42, 43]) await sendRound(price);
+  }
+  if (stressBlocks) {
+    run.stressBlocks ||= [];
+    let price = run.rounds.at(-1)?.price + 1 || 42;
+    for (let blockIndex = run.stressBlocks.length; blockIndex < stressBlocks; blockIndex++) {
+      const rounds = randomInt(7, 34); // 21-99 transactions, exactly one third of each type.
+      const baseNonce = BigInt(await rpc(c1, 'starknet_getNonce', ['latest', address]));
+      const records = [];
+      for (let j = 0; j < rounds; j++) {
+        records.push(await sendRound(price++, baseNonce + BigInt(3 * j), true));
+      }
+      const hashes = records.flatMap(({ tick, update, settle }) => [tick, update, settle]);
+      await closeWhenPreconfirmed(hashes);
+      const last = await receipt(c1, hashes.at(-1));
+      const block = await rpc(c1, 'starknet_getBlockWithReceipts', [{ block_number: last.block_number }]);
+      const actual = block.transactions.map(({ receipt }) => receipt);
+      if (actual.length !== hashes.length || actual.some((entry, index) =>
+        BigInt(entry.transaction_hash) !== BigInt(hashes[index]) || entry.execution_status !== 'SUCCEEDED')) {
+        throw new Error(`C1 stress block ${blockIndex + 1} has a changed boundary, order, or execution status`);
+      }
+      run.rounds.push(...records);
+      run.stressBlocks.push({ blockNumber: last.block_number, rounds, txCount: hashes.length,
+        firstPrice: records[0].price, lastPrice: records.at(-1).price });
+      writeFileSync(output, JSON.stringify(run, null, 2));
+      console.log(`C1 stress ${blockIndex + 1}/${stressBlocks}: block=${last.block_number} txs=${hashes.length} (tick/root/settle=${rounds}/${rounds}/${rounds})`);
+    }
   }
   if (process.argv.includes('--follow')) {
     let nextPrice = run.rounds.length ? run.rounds.at(-1).price + 1 : 42;

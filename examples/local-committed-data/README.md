@@ -41,7 +41,7 @@ The local account keys are read from Madara's devnet startup logs; they are only
 
 ## Whole-block managed replay
 
-`start-managed-local.sh` starts a separate fresh pair: C1 runs the #1349 image with automatic block production, and C2 runs the combined #1349 + #1321 + managed-RPC image from Madara PR #1359 in paused-mempool replay mode. Its image defaults to `ghcr.io/madara-alliance/madara:manual-780f287`. C1 uses ports 39944/39943/39945/38080; C2 uses 49944/49943/49945/48080. C2's block timer is set to one day so only managed replay closes blocks during this exercise. Set `C1_ONLY=true` to start C1 while the C2 image downloads, then run the script again to start C2. This test replays from both local genesis blocks, which can have different timestamps and hashes. The managed service sends C1's timestamp and gas prices for each later block and validates them from C2's confirmed block response. The source producer's `--batch` option submits an oracle round together in one C1 block.
+`start-managed-local.sh` starts a separate fresh pair: C1 runs the #1349 image, and C2 runs the combined #1349 + #1321 + managed-RPC image from Madara PR #1359 in paused-mempool replay mode. Its image defaults to `ghcr.io/madara-alliance/madara:manual-780f287`. C1 uses ports 39944/39943/39945/38080; C2 uses 49944/49943/49945/48080. Both block timers are set to one day so only the producer or managed replay closes blocks during this exercise. Set `C1_ONLY=true` to start C1 while the C2 image downloads, then run the script again to start C2. This test replays from both local genesis blocks, which can have different timestamps and hashes. The managed service sends C1's timestamp and gas prices for each later block and validates them from C2's confirmed block response. The source producer's `--batch` option submits an oracle round together in one C1 block.
 
 ```sh
 ./examples/local-committed-data/start-managed-local.sh
@@ -69,3 +69,17 @@ curl -s -X POST http://127.0.0.1:3001/sync -H 'content-type: application/json' \
 The verified local run replayed one declare block, one deploy block, and two three-transaction oracle rounds. All eight transactions succeeded. C1 and C2 had the same timestamps, gas prices, transaction counts/order, receipt outcomes, and settle events; all four block hashes differed. Replaying already confirmed block 4 again returned its original C2 hash and passed validation. Both C1 and C2 feeder gateways exposed the same two committed-data roots.
 
 This managed-block run keeps the fixture's read mode at legacy on both chains while proving block metadata and boundaries. The earlier transaction-level run proves the C2 committed-read path. A future managed run that starts after an explicit C2-only admin toggle must establish an aligned fork boundary first; the toggle itself is an intentional C2 state difference and cannot be silently inserted into a replayed C1 block whose transaction count must match.
+
+### Twenty-block stress run
+
+With fresh `local-managed-c1` and `local-managed-c2` databases, run the producer above with `--stress-blocks=20` instead of `--batch`. It declares/deploys the fixture in blocks 1-2, then creates blocks 3-22 with a random 7-33 rounds per block. Each round has one legacy tick, one committed root update, and one settle, so every stress block has an exactly equal 1:1:1 mix and 21-99 transactions. If the producer stops after a completed block, resume with `--continue --stress-blocks=20`.
+
+Start the replay service with the same environment as above and call `/sync` with `{"startBlock":1,"endBlock":22}`. Then check the result independently:
+
+```sh
+C1_RPC=http://127.0.0.1:39944/rpc/v0.10.2/ \
+  C2_RPC=http://127.0.0.1:49944/rpc/v0.10.2/ \
+  node examples/local-committed-data/verify-stress.mjs
+```
+
+The 21 November stress run produced 1,128 transactions across 20 blocks, exactly 376 of each operation, with block sizes from 21 to 99. The replay service completed blocks 1-22 in 3.99 seconds. The independent verifier checked every stress block's metadata, transaction payload/order, successful receipts, and events; all matched despite different C1/C2 block hashes. Both feeder gateways exposed the same 376 committed-data roots.

@@ -16,7 +16,7 @@ if ! docker container inspect local-managed-c1 >/dev/null 2>&1; then
   -p 127.0.0.1:39944:9944 -p 127.0.0.1:39943:9943 \
   -p 127.0.0.1:39945:9945 -p 127.0.0.1:38080:8080 \
   -v local-managed-c1-db:/data "$c1_image" --devnet --name Local-Managed-C1 --base-path /data \
-  --chain-config-override chain_id=LOCAL_REPLAY,block_time=60s \
+  --chain-config-override chain_id=LOCAL_REPLAY,block_time=86400s \
   --rpc-external --rpc-admin --rpc-admin-external --rpc-unsafe \
   --rpc-committed-data --rpc-committed-data-external \
   --gateway-enable --gateway-external --feeder-gateway-enable \
