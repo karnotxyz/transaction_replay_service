@@ -26,15 +26,21 @@ async function main() {
   });
   const chainId = await source.getChainId();
   if (chainId !== '0x4c4f43414c5f5245504c4159') throw new Error(`Unexpected chain ID ${chainId}`);
-  const startBlock = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
-  const sierra = JSON.parse(readFileSync(`${contractBase}.contract_class.json`, 'utf8'));
-  const casm = JSON.parse(readFileSync(`${contractBase}.compiled_contract_class.json`, 'utf8'));
-  const declaration = await account.declareIfNot({ contract: sierra, casm });
-  if (declaration.transaction_hash) await receipt(c1, declaration.transaction_hash);
-  const deployment = await account.deploy({ classHash: declaration.class_hash, constructorCalldata: [address], unique: true });
-  await receipt(c1, deployment.transaction_hash);
-  const contract = deployment.contract_address[0];
-  const rounds = [];
+  let run;
+  if (process.argv.includes('--continue')) {
+    run = JSON.parse(readFileSync(output, 'utf8'));
+    if (BigInt(run.account) !== BigInt(address)) throw new Error('run.json belongs to another devnet account');
+  } else {
+    const startBlock = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
+    const sierra = JSON.parse(readFileSync(`${contractBase}.contract_class.json`, 'utf8'));
+    const casm = JSON.parse(readFileSync(`${contractBase}.compiled_contract_class.json`, 'utf8'));
+    const declaration = await account.declareIfNot({ contract: sierra, casm });
+    if (declaration.transaction_hash) await receipt(c1, declaration.transaction_hash);
+    const deployment = await account.deploy({ classHash: declaration.class_hash, constructorCalldata: [address], unique: true });
+    await receipt(c1, deployment.transaction_hash);
+    run = { startBlock, account: address, contract: deployment.contract_address[0], declaration: declaration.transaction_hash, deployment: deployment.transaction_hash, rounds: [] };
+    writeFileSync(output, JSON.stringify(run, null, 2));
+  }
 
   // Let starknet.js construct/sign the account transaction, then route this one
   // already signed INVOKE through Madara's atomic import-before-admission RPC.
@@ -49,21 +55,32 @@ async function main() {
     return originalFetch(method, params);
   };
 
-  for (const price of [42, 43]) {
+  async function sendRound(price) {
     const root = hash.computePoseidonHashOnElements([leafDomain, 0, price]);
-    const tick = await account.execute({ contractAddress: contract, entrypoint: 'set_legacy_price', calldata: [price] });
+    const tick = await account.execute({ contractAddress: run.contract, entrypoint: 'set_legacy_price', calldata: [price] });
     await receipt(c1, tick.transaction_hash);
     pendingDataset = { root, entries: [['0x0', `0x${price.toString(16)}`]] };
-    const update = await account.execute({ contractAddress: contract, entrypoint: 'set_root', calldata: [root] });
+    const update = await account.execute({ contractAddress: run.contract, entrypoint: 'set_root', calldata: [root] });
     if (pendingDataset) throw new Error('Combined dataset submission was not used');
     await receipt(c1, update.transaction_hash);
-    const settle = await account.execute({ contractAddress: contract, entrypoint: 'settle', calldata: [2, 3] });
+    const settle = await account.execute({ contractAddress: run.contract, entrypoint: 'settle', calldata: [2, 3] });
     const settledReceipt = await receipt(c1, settle.transaction_hash);
     if (settledReceipt.execution_status !== 'SUCCEEDED') throw new Error(`C1 settle failed: ${JSON.stringify(settledReceipt)}`);
-    rounds.push({ price, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash });
+    run.rounds.push({ price, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash });
+    writeFileSync(output, JSON.stringify(run, null, 2));
     console.log(`C1 price=${price} root=${root} settle=${settle.transaction_hash}`);
   }
-  writeFileSync(output, JSON.stringify({ startBlock, account: address, contract, declaration: declaration.transaction_hash, deployment: deployment.transaction_hash, rounds }, null, 2));
+
+  if (!process.argv.includes('--continue')) {
+    for (const price of [42, 43]) await sendRound(price);
+  }
+  if (process.argv.includes('--follow')) {
+    let nextPrice = run.rounds.length ? run.rounds.at(-1).price + 1 : 42;
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      await sendRound(nextPrice++);
+    }
+  }
   console.log(`Producer complete: ${output}`);
 }
 

@@ -22,6 +22,15 @@ The producer declares and deploys the simple Cairo contract on C1. For prices 42
 
 The replay process reads C1 blocks in order, imports unseen datasets from C1's feeder gateway into C2's private RPC, and broadcasts each signed transaction to C2. It also fetches the class for a `DECLARE` transaction. `--follow` keeps polling for new blocks. `checkpoint.json` saves the last completed source block for restart.
 
+To continue sending new price rounds and replaying in the background after the first run, use two terminal sessions:
+
+```sh
+node examples/local-committed-data/producer.mjs --continue --follow
+node examples/local-committed-data/replay.mjs --follow
+```
+
+The current laptop run uses `tmux` sessions `local-c1-producer` and `local-c2-replay`, with logs in workspace `context/build-logs/local-c1-producer.log` and `context/build-logs/local-c2-replay.log`. `stop-local.sh` stops these sessions and all three containers while retaining local volumes.
+
 For each transaction the replay checks that the hash and execution status match. For each settle it compares contract event keys, price, and arithmetic result while requiring the C1 event to mark legacy mode and the C2 event to mark committed mode. The observed two-round run produced price/result `42/47` and `43/48` on both chains with mode `0` on C1 and `1` on C2.
 
 ## Scope

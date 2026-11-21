@@ -18,6 +18,7 @@ try {
   if (checkpoint.account === run.account && checkpoint.contract === run.contract) {
     nextBlock = checkpoint.nextBlock;
     enabled = checkpoint.enabled;
+    for (const root of checkpoint.importedRoots || []) importedRoots.add(root);
   }
 } catch {}
 
@@ -133,7 +134,7 @@ async function processBlock(number) {
     seen.add(tx.transaction_hash);
   }
   nextBlock = number + 1;
-  writeFileSync(checkpointFile, JSON.stringify({ account: run.account, contract: run.contract, nextBlock, enabled }, null, 2));
+  writeFileSync(checkpointFile, JSON.stringify({ account: run.account, contract: run.contract, nextBlock, enabled, importedRoots: [...importedRoots] }, null, 2));
   if (block.transactions.length) console.log(`Replayed C1 block ${number}: ${block.transactions.length} transactions`);
 }
 
