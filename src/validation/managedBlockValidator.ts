@@ -67,7 +67,12 @@ export function validateManagedBlock(
     if (!sameFelt(hash, targetTx.transaction.transaction_hash) || !sameFelt(hash, result.transaction_hashes[index])) {
       throw new Error(`Block ${blockNumber} transaction ${index} hash/order differs`);
     }
+    assertEqual(`transaction ${index} source receipt hash`, hash, sourceTx.receipt.transaction_hash);
+    assertEqual(`transaction ${index} target receipt hash`, hash, targetTx.receipt.transaction_hash);
     assertEqual(`transaction ${index} execution status`, sourceTx.receipt.execution_status, targetTx.receipt.execution_status);
+    if (sourceTx.receipt.execution_status === "REVERTED") {
+      assertEqual(`transaction ${index} revert reason`, sourceTx.receipt.revert_reason, targetTx.receipt.revert_reason);
+    }
     const sourceEvents = selectedEvents(sourceTx.receipt, options.eventContractAddress);
     const targetEvents = selectedEvents(targetTx.receipt, options.eventContractAddress);
     if (sourceEvents.length !== targetEvents.length) throw new Error(`Transaction ${hash} application event count differs`);

@@ -1,3 +1,4 @@
 fixture/target/
 run.json
+managed-run.json
 checkpoint.json
