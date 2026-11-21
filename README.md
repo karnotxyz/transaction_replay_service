@@ -84,6 +84,12 @@ LOG_LEVEL=info
 VALIDATE_BLOCK_HASH=true
 REPLAY_BLOCK_RPC_ENABLED=false # Send each full managed block through one Madara admin RPC
 MANAGED_BLOCK_MAX_INFLIGHT=1   # 1..9; requires ordered pipelined replay support in Madara
+COMMITTED_DATA_REPLAY_ENABLED=false # Import C1 feeder datasets before each managed block
+COMMITTED_DATA_SOURCE_FEEDER_URL=http://127.0.0.1:18080/feeder_gateway
+COMMITTED_DATA_TARGET_RPC_URL=http://127.0.0.1:29945/rpc/v0.1.0/
+# Optional event filter for application-specific data fields that intentionally differ:
+REPLAY_EVENT_CONTRACT_ADDRESS=0x123
+REPLAY_EVENT_DATA_PREFIX_LENGTH=2
 PRE_CONFIRMED_VALIDATION_MAX_RETRIES=500
 PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS=200
 
@@ -107,6 +113,15 @@ Set `MANAGED_BLOCK_MAX_INFLIGHT` above `1` with
 `REPLAY_BLOCK_RPC_ENABLED=true` to keep multiple whole-block RPCs pending.
 Madara admits their primary execution in source order; the service persists
 progress only as confirmed responses retire in that same order.
+
+After each managed `replayBlock` response, the service fetches both confirmed
+blocks and validates block number, timestamp, gas prices, Starknet version,
+sequencer address, data-availability mode, ordered transaction hashes, receipt
+execution statuses, and application events. Block and parent hashes may differ.
+The returned C2 block hash must identify the fetched C2 block. Event comparison
+is exact by default; a contract address may restrict it to application events.
+The optional data-prefix setting is for a known, intentional event field
+difference and requires that address filter.
 
 Mempool replay submits transactions in source order and waits for each public
 RPC admission response before sending the next transaction. The interval is a

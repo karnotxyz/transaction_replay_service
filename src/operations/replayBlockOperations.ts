@@ -7,6 +7,9 @@ import { GasPrices, MadaraRpcResponse } from "../types.js";
 import { BlockHashMismatchError } from "../errors/index.js";
 import { expectedReplayBlockHash } from "../replayMode.js";
 import { postWithRetry } from "./transactionOperations.js";
+import { getBlockWithReceipts } from "./blockOperations.js";
+import { importCommittedDataBeforeBlock } from "./committedDataOperations.js";
+import { validateManagedBlock } from "../validation/managedBlockValidator.js";
 
 interface SourceBlockWithTxs {
   block_hash?: string;
@@ -146,6 +149,14 @@ function convertToBigInt(value: unknown): bigint {
   return BigInt(value as string | number);
 }
 
+function safeGasPrice(value: string, name: string): number {
+  const parsed = BigInt(value);
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${name} exceeds JavaScript's exact integer range; refusing to alter replay block metadata`);
+  }
+  return Number(parsed);
+}
+
 function buildCustomHeader(
   blockNumber: number,
   sourceBlock: SourceBlockWithTxs,
@@ -164,18 +175,12 @@ function buildCustomHeader(
     block_n: blockNumber,
     timestamp: sourceBlock.timestamp,
     gas_prices: {
-      eth_l1_gas_price: parseInt(gasPrices.l1_gas_price.price_in_wei, 16),
-      strk_l1_gas_price: parseInt(gasPrices.l1_gas_price.price_in_fri, 16),
-      eth_l1_data_gas_price: parseInt(
-        gasPrices.l1_data_gas_price.price_in_wei,
-        16,
-      ),
-      strk_l1_data_gas_price: parseInt(
-        gasPrices.l1_data_gas_price.price_in_fri,
-        16,
-      ),
-      eth_l2_gas_price: parseInt(gasPrices.l2_gas_price.price_in_wei, 16),
-      strk_l2_gas_price: parseInt(gasPrices.l2_gas_price.price_in_fri, 16),
+      eth_l1_gas_price: safeGasPrice(gasPrices.l1_gas_price.price_in_wei, "eth_l1_gas_price"),
+      strk_l1_gas_price: safeGasPrice(gasPrices.l1_gas_price.price_in_fri, "strk_l1_gas_price"),
+      eth_l1_data_gas_price: safeGasPrice(gasPrices.l1_data_gas_price.price_in_wei, "eth_l1_data_gas_price"),
+      strk_l1_data_gas_price: safeGasPrice(gasPrices.l1_data_gas_price.price_in_fri, "strk_l1_data_gas_price"),
+      eth_l2_gas_price: safeGasPrice(gasPrices.l2_gas_price.price_in_wei, "eth_l2_gas_price"),
+      strk_l2_gas_price: safeGasPrice(gasPrices.l2_gas_price.price_in_fri, "strk_l2_gas_price"),
     },
     expected_block_hash: expectedReplayBlockHash(
       sourceBlock.block_hash,
@@ -443,6 +448,7 @@ export async function replayBlock(
   sourceBlock: SourceBlockWithTxs,
   signal?: AbortSignal,
 ): Promise<ReplayBlockResult> {
+  await importCommittedDataBeforeBlock();
   const request = await buildReplayBlockRequest(blockNumber, sourceBlock);
   logger.info(
     `📦 Replaying block ${blockNumber} via madara_V0_1_0_replayBlock with ${request.transactions.length} transactions`,
@@ -473,5 +479,25 @@ export async function replayBlock(
     config.shouldValidateBlockHash,
     result,
   );
+  const sourceWithReceipts = await getBlockWithReceipts(originalProvider, blockNumber);
+  let targetWithReceipts = await getBlockWithReceipts(syncingProvider, blockNumber);
+  for (let attempt = 0; !targetWithReceipts && attempt < 20; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    targetWithReceipts = await getBlockWithReceipts(syncingProvider, blockNumber);
+  }
+  if (!sourceWithReceipts || !targetWithReceipts) {
+    throw new Error(`Could not fetch confirmed block ${blockNumber} receipts after replayBlock returned`);
+  }
+  const eventContractAddress = process.env.REPLAY_EVENT_CONTRACT_ADDRESS;
+  const prefixRaw = process.env.REPLAY_EVENT_DATA_PREFIX_LENGTH;
+  const eventDataPrefixLength = prefixRaw === undefined ? undefined : Number(prefixRaw);
+  if (eventDataPrefixLength !== undefined &&
+      (!eventContractAddress || !Number.isInteger(eventDataPrefixLength) || eventDataPrefixLength < 1)) {
+    throw new Error("REPLAY_EVENT_DATA_PREFIX_LENGTH requires a contract address and a positive integer");
+  }
+  validateManagedBlock(blockNumber, sourceWithReceipts, targetWithReceipts, result, {
+    eventContractAddress,
+    eventDataPrefixLength,
+  });
   return result;
 }

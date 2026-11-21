@@ -200,5 +200,6 @@ export interface BlockWithReceipts {
   l1_data_gas_price?: any;
   l2_gas_price?: any;
   starknet_version?: string;
+  l1_da_mode?: string;
   transactions: TransactionWithReceipt[];
 }

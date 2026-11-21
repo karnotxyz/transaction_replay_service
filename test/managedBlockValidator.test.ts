@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { validateManagedBlock } from "../src/validation/managedBlockValidator.js";
+import type { BlockWithReceipts } from "../src/types.js";
+
+function block(hash: string, mode: string): BlockWithReceipts {
+  const gas = { price_in_wei: "0x2", price_in_fri: "0x3" };
+  return {
+    block_hash: hash,
+    block_number: 5,
+    timestamp: 1234,
+    starknet_version: "0.14.2",
+    sequencer_address: "0x1",
+    l1_da_mode: "BLOB",
+    l1_gas_price: gas,
+    l1_data_gas_price: gas,
+    l2_gas_price: gas,
+    transactions: [{
+      transaction: { transaction_hash: "0xabc" },
+      receipt: {
+        transaction_hash: "0xabc", actual_fee: { amount: "0x1", unit: "FRI" },
+        execution_status: "SUCCEEDED", finality_status: "ACCEPTED_ON_L2", type: "INVOKE",
+        messages_sent: [], events: [{ from_address: "0x123", keys: ["0x99"], data: ["0x2a", "0x2f", mode] }],
+      },
+    }],
+  };
+}
+
+const eventOptions = { eventContractAddress: "0x123", eventDataPrefixLength: 2 };
+
+test("managed replay accepts different block hash and read mode with matching headers and business events", () => {
+  const source = block("0xaaa", "0x0");
+  const target = block("0xbbb", "0x1");
+  assert.doesNotThrow(() => validateManagedBlock(5, source, target, {
+    block_number: 5, block_hash: "0xbbb", transaction_hashes: ["0xabc"],
+  }, eventOptions));
+});
+
+test("managed replay rejects a changed timestamp, receipt status, or settlement value", () => {
+  const source = block("0xaaa", "0x0");
+  const result = { block_number: 5, block_hash: "0xbbb", transaction_hashes: ["0xabc"] };
+  const timestamp = block("0xbbb", "0x1");
+  timestamp.timestamp = 1235;
+  assert.throws(() => validateManagedBlock(5, source, timestamp, result, eventOptions), /timestamp differs/);
+  const status = block("0xbbb", "0x1");
+  status.transactions[0].receipt.execution_status = "REVERTED";
+  assert.throws(() => validateManagedBlock(5, source, status, result, eventOptions), /execution status differs/);
+  const event = block("0xbbb", "0x1");
+  event.transactions[0].receipt.events[0].data[1] = "0x30";
+  assert.throws(() => validateManagedBlock(5, source, event, result, eventOptions), /event 0 data differs/);
+});
+
+test("managed replay rejects extra transactions or wrong returned hash", () => {
+  const source = block("0xaaa", "0x0");
+  const target = block("0xbbb", "0x1");
+  target.transactions.push(target.transactions[0]);
+  assert.throws(() => validateManagedBlock(5, source, target, {
+    block_number: 5, block_hash: "0xbbb", transaction_hashes: ["0xabc"],
+  }, eventOptions), /transaction count differs/);
+  target.transactions.pop();
+  assert.throws(() => validateManagedBlock(5, source, target, {
+    block_number: 5, block_hash: "0xccc", transaction_hashes: ["0xabc"],
+  }, eventOptions), /Returned C2 block hash/);
+});
