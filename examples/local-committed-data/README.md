@@ -41,7 +41,7 @@ The local account keys are read from Madara's devnet startup logs; they are only
 
 ## Whole-block managed replay
 
-`start-managed-local.sh` starts a separate fresh pair: C1 runs the #1349 image with automatic block production, and C2 runs the combined #1349 + #1321 + managed-RPC image from Madara PR #1359 in paused-mempool replay mode. Its image defaults to `ghcr.io/madara-alliance/madara:manual-780f287`. C1 uses ports 39944/39943/39945/38080; C2 uses 49944/49943/49945/48080. This test replays from both local genesis blocks, which can have different timestamps and hashes. The managed service sends C1's timestamp and gas prices for each later block and validates them from C2's confirmed block response. The source producer's `--batch` option submits an oracle round together in one C1 block.
+`start-managed-local.sh` starts a separate fresh pair: C1 runs the #1349 image with automatic block production, and C2 runs the combined #1349 + #1321 + managed-RPC image from Madara PR #1359 in paused-mempool replay mode. Its image defaults to `ghcr.io/madara-alliance/madara:manual-780f287`. C1 uses ports 39944/39943/39945/38080; C2 uses 49944/49943/49945/48080. C2's block timer is set to one day so only managed replay closes blocks during this exercise. Set `C1_ONLY=true` to start C1 while the C2 image downloads, then run the script again to start C2. This test replays from both local genesis blocks, which can have different timestamps and hashes. The managed service sends C1's timestamp and gas prices for each later block and validates them from C2's confirmed block response. The source producer's `--batch` option submits an oracle round together in one C1 block.
 
 ```sh
 ./examples/local-committed-data/start-managed-local.sh
@@ -63,7 +63,9 @@ REPLAY_MODE=managed_blocks VALIDATE_BLOCK_HASH=false REPLAY_BLOCK_RPC_ENABLED=tr
   REPLAY_EVENT_CONTRACT_ADDRESS=$(jq -r .contract examples/local-committed-data/managed-run.json) \
   STATE_FILE_PATH=/tmp/local-managed-replay-state.json PORT=3001 node dist/index.js
 curl -s -X POST http://127.0.0.1:3001/sync -H 'content-type: application/json' \
-  -d '{"startBlock":1,"endBlock":"latest"}'
+  -d '{"startBlock":1,"endBlock":4}'
 ```
+
+The verified local run replayed one declare block, one deploy block, and two three-transaction oracle rounds. All eight transactions succeeded. C1 and C2 had the same timestamps, gas prices, transaction counts/order, receipt outcomes, and settle events; all four block hashes differed. Replaying already confirmed block 4 again returned its original C2 hash and passed validation. Both C1 and C2 feeder gateways exposed the same two committed-data roots.
 
 This managed-block run keeps the fixture's read mode at legacy on both chains while proving block metadata and boundaries. The earlier transaction-level run proves the C2 committed-read path. A future managed run that starts after an explicit C2-only admin toggle must establish an aligned fork boundary first; the toggle itself is an intentional C2 state difference and cannot be silently inserted into a replayed C1 block whose transaction count must match.

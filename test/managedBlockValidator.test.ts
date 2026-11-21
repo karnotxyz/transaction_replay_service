@@ -16,11 +16,14 @@ function block(hash: string, mode: string): BlockWithReceipts {
     l1_data_gas_price: gas,
     l2_gas_price: gas,
     transactions: [{
-      transaction: { transaction_hash: "0xabc" },
+      transaction: { type: "INVOKE", nonce: "0x1" },
       receipt: {
         transaction_hash: "0xabc", actual_fee: { amount: "0x1", unit: "FRI" },
         execution_status: "SUCCEEDED", finality_status: "ACCEPTED_ON_L2", type: "INVOKE",
-        messages_sent: [], events: [{ from_address: "0x123", keys: ["0x99"], data: ["0x2a", "0x2f", mode] }],
+        messages_sent: [], events: [
+          { from_address: "0x123", keys: ["0x99"], data: ["0x2a", "0x2f", mode] },
+          { from_address: "0x456", keys: ["0x98"], data: ["0x1"] },
+        ],
       },
     }],
   };
@@ -48,6 +51,9 @@ test("managed replay rejects a changed timestamp, receipt status, or settlement 
   const event = block("0xbbb", "0x1");
   event.transactions[0].receipt.events[0].data[1] = "0x30";
   assert.throws(() => validateManagedBlock(5, source, event, result, eventOptions), /event 0 data differs/);
+  const unrelatedEvent = block("0xbbb", "0x1");
+  unrelatedEvent.transactions[0].receipt.events[1].data[0] = "0x2";
+  assert.throws(() => validateManagedBlock(5, source, unrelatedEvent, result, eventOptions), /event 1 data differs/);
 });
 
 test("managed replay rejects extra transactions or wrong returned hash", () => {

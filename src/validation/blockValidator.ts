@@ -7,11 +7,11 @@ import { blockValidationRetry } from "../retry/index.js";
  * Validate that a block is ready to be synced
  * Ensures the syncing node is at block N-1 before syncing block N
  */
-export async function validateBlock(currentBlock: number): Promise<void> {
+export async function validateBlock(currentBlock: number, allowConfirmedRetry = false): Promise<void> {
   return blockValidationRetry.execute(async () => {
     const latestBlockNumber = await getLatestBlockNumber(syncingProvider);
 
-    if (latestBlockNumber + 1 !== currentBlock) {
+    if (latestBlockNumber + 1 !== currentBlock && !(allowConfirmedRetry && latestBlockNumber === currentBlock)) {
       throw new Error(
         `Sync block ${currentBlock} is not 1 + ${latestBlockNumber}`,
       );

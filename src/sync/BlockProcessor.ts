@@ -60,7 +60,7 @@ export class BlockProcessor {
     const endTimer = startTimer();
     try {
       await executeWithMadaraRecovery(
-        () => validateBlock(blockNumber),
+        () => validateBlock(blockNumber, config.replayBlockRpcEnabled),
         `validate block ${blockNumber}`,
         () => {
           process.status = ProcessStatus.RECOVERING;

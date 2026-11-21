@@ -32,10 +32,6 @@ function compareGas(label: string, source: Record<string, string> | undefined, t
   }
 }
 
-function selectedEvents(receipt: { events?: Array<{ from_address: string; keys: string[]; data: string[] }> }, address?: string) {
-  return (receipt.events || []).filter(event => !address || sameFelt(event.from_address, address));
-}
-
 export function validateManagedBlock(
   blockNumber: number,
   source: BlockWithReceipts,
@@ -63,18 +59,22 @@ export function validateManagedBlock(
   for (let index = 0; index < source.transactions.length; index++) {
     const sourceTx = source.transactions[index];
     const targetTx = target.transactions[index];
-    const hash = sourceTx.transaction.transaction_hash as string;
-    if (!sameFelt(hash, targetTx.transaction.transaction_hash) || !sameFelt(hash, result.transaction_hashes[index])) {
+    // Madara's getBlockWithReceipts puts the hash in the receipt; the nested
+    // transaction object may omit it even though getBlockWithTxs includes it.
+    const hash = sourceTx.receipt.transaction_hash;
+    if (!hash || !targetTx.receipt.transaction_hash || !result.transaction_hashes[index] ||
+        !sameFelt(hash, targetTx.receipt.transaction_hash) || !sameFelt(hash, result.transaction_hashes[index]) ||
+        (sourceTx.transaction.transaction_hash && !sameFelt(hash, sourceTx.transaction.transaction_hash)) ||
+        (targetTx.transaction.transaction_hash && !sameFelt(hash, targetTx.transaction.transaction_hash))) {
       throw new Error(`Block ${blockNumber} transaction ${index} hash/order differs`);
     }
-    assertEqual(`transaction ${index} source receipt hash`, hash, sourceTx.receipt.transaction_hash);
-    assertEqual(`transaction ${index} target receipt hash`, hash, targetTx.receipt.transaction_hash);
     assertEqual(`transaction ${index} execution status`, sourceTx.receipt.execution_status, targetTx.receipt.execution_status);
     if (sourceTx.receipt.execution_status === "REVERTED") {
       assertEqual(`transaction ${index} revert reason`, sourceTx.receipt.revert_reason, targetTx.receipt.revert_reason);
     }
-    const sourceEvents = selectedEvents(sourceTx.receipt, options.eventContractAddress);
-    const targetEvents = selectedEvents(targetTx.receipt, options.eventContractAddress);
+    type ReplayEvent = { from_address: string; keys: string[]; data: string[] };
+    const sourceEvents = (sourceTx.receipt.events || []) as ReplayEvent[];
+    const targetEvents = (targetTx.receipt.events || []) as ReplayEvent[];
     if (sourceEvents.length !== targetEvents.length) throw new Error(`Transaction ${hash} application event count differs`);
     for (let eventIndex = 0; eventIndex < sourceEvents.length; eventIndex++) {
       const a = sourceEvents[eventIndex];
@@ -82,7 +82,9 @@ export function validateManagedBlock(
       if (!sameFelt(a.from_address, b.from_address) || a.keys.length !== b.keys.length || a.keys.some((key, i) => !sameFelt(key, b.keys[i]))) {
         throw new Error(`Transaction ${hash} event ${eventIndex} origin/keys differ`);
       }
-      const fields = options.eventDataPrefixLength ?? a.data.length;
+      const fields = options.eventContractAddress && sameFelt(a.from_address, options.eventContractAddress)
+        ? options.eventDataPrefixLength ?? a.data.length
+        : a.data.length;
       if (a.data.length !== b.data.length || fields > a.data.length || a.data.slice(0, fields).some((value, i) => !sameFelt(value, b.data[i]))) {
         throw new Error(`Transaction ${hash} event ${eventIndex} data differs`);
       }

@@ -42,7 +42,7 @@ docker run -d --platform linux/amd64 --name local-managed-c2 --network local-com
   -p 127.0.0.1:49944:9944 -p 127.0.0.1:49943:9943 \
   -p 127.0.0.1:49945:9945 -p 127.0.0.1:48080:8080 \
   -v local-managed-c2-db:/data "$c2_image" --devnet --name Local-Managed-C2 --base-path /data \
-  --chain-config-override chain_id=LOCAL_REPLAY,block_time=60s \
+  --chain-config-override chain_id=LOCAL_REPLAY,block_time=86400s \
   --use-committed-data --replay-mode --mempool-paused --no-l1-sync \
   --rpc-external --rpc-admin --rpc-admin-external --rpc-unsafe \
   --rpc-committed-data --rpc-committed-data-external \
