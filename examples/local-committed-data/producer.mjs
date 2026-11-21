@@ -76,7 +76,14 @@ async function main() {
 
   async function sendRound(price) {
     const initialNonce = batch ? BigInt(await rpc(c1, 'starknet_getNonce', ['latest', address])) : undefined;
-    const details = (offset) => initialNonce === undefined ? {} : { nonce: `0x${(initialNonce + BigInt(offset)).toString(16)}` };
+    const details = (offset) => initialNonce === undefined ? {} : {
+      nonce: `0x${(initialNonce + BigInt(offset)).toString(16)}`,
+      resourceBounds: {
+        l1_gas: { max_amount: 0n, max_price_per_unit: 1_000_000n },
+        l2_gas: { max_amount: 3_000_000n, max_price_per_unit: 1_000_000n },
+        l1_data_gas: { max_amount: 1_024n, max_price_per_unit: 1_000_000n },
+      },
+    };
     const root = hash.computePoseidonHashOnElements([leafDomain, 0, price]);
     const tick = await account.execute({ contractAddress: run.contract, entrypoint: 'set_legacy_price', calldata: [price] }, details(0));
     if (!batch) await receipt(c1, tick.transaction_hash);
