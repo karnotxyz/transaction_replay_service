@@ -68,3 +68,14 @@ test("managed replay rejects extra transactions or wrong returned hash", () => {
     block_number: 5, block_hash: "0xccc", transaction_hashes: ["0xabc"],
   }, eventOptions), /Returned C2 block hash/);
 });
+
+test("managed replay permits explicitly expected event data divergence while checking event identity", () => {
+  const source = block("0xaaa", "0x0");
+  const target = block("0xbbb", "0x1");
+  target.transactions[0].receipt.events[0].data = ["0x3e8", "0x3ed", "0x1"];
+  target.transactions[0].receipt.events[1].data = ["0x2"];
+  const result = { block_number: 5, block_hash: "0xbbb", transaction_hashes: ["0xabc"] };
+  assert.doesNotThrow(() => validateManagedBlock(5, source, target, result, { eventDataPrefixLength: 0 }));
+  target.transactions[0].receipt.events[0].keys[0] = "0x100";
+  assert.throws(() => validateManagedBlock(5, source, target, result, { eventDataPrefixLength: 0 }), /origin\/keys differ/);
+});

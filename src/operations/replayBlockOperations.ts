@@ -492,8 +492,8 @@ export async function replayBlock(
   const prefixRaw = process.env.REPLAY_EVENT_DATA_PREFIX_LENGTH;
   const eventDataPrefixLength = prefixRaw === undefined ? undefined : Number(prefixRaw);
   if (eventDataPrefixLength !== undefined &&
-      (!eventContractAddress || !Number.isInteger(eventDataPrefixLength) || eventDataPrefixLength < 1)) {
-    throw new Error("REPLAY_EVENT_DATA_PREFIX_LENGTH requires a contract address and a positive integer");
+      (!Number.isInteger(eventDataPrefixLength) || eventDataPrefixLength < 0)) {
+    throw new Error("REPLAY_EVENT_DATA_PREFIX_LENGTH must be a non-negative integer");
   }
   validateManagedBlock(blockNumber, sourceWithReceipts, targetWithReceipts, result, {
     eventContractAddress,

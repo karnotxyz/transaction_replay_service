@@ -68,7 +68,7 @@ curl -s -X POST http://127.0.0.1:3001/sync -H 'content-type: application/json' \
 
 The verified local run replayed one declare block, one deploy block, and two three-transaction oracle rounds. All eight transactions succeeded. C1 and C2 had the same timestamps, gas prices, transaction counts/order, receipt outcomes, and settle events; all four block hashes differed. Replaying already confirmed block 4 again returned its original C2 hash and passed validation. Both C1 and C2 feeder gateways exposed the same two committed-data roots.
 
-This managed-block run keeps the fixture's read mode at legacy on both chains while proving block metadata and boundaries. The earlier transaction-level run proves the C2 committed-read path. A future managed run that starts after an explicit C2-only admin toggle must establish an aligned fork boundary first; the toggle itself is an intentional C2 state difference and cannot be silently inserted into a replayed C1 block whose transaction count must match.
+This first managed-block run keeps the fixture's read mode at legacy on both chains while proving block metadata and boundaries. The earlier transaction-level run proves the C2 committed-read path. The divergent managed run below establishes an aligned fork boundary and then proves both properties together.
 
 ### Twenty-block stress run
 
@@ -83,3 +83,30 @@ C1_RPC=http://127.0.0.1:39944/rpc/v0.10.2/ \
 ```
 
 The 21 November stress run produced 1,128 transactions across 20 blocks, exactly 376 of each operation, with block sizes from 21 to 99. The replay service completed blocks 1-22 in 3.99 seconds. The independent verifier checked every stress block's metadata, transaction payload/order, successful receipts, and events; all matched despite different C1/C2 block hashes. Both feeder gateways exposed the same 376 committed-data roots.
+
+### Divergent oracle reads across 20 managed blocks
+
+This run proves that C1 settles using its legacy tick while C2 settles using its committed dataset. Start with fresh local databases and run `C2_BOOTSTRAP=true ./examples/local-committed-data/start-managed-local.sh`. Produce C1 traffic with the same C1 environment shown above, plus `RUN_FILE=./examples/local-committed-data/divergent-run.json LEGACY_PRICE_OFFSET=1000`, and invoke `producer.mjs --stress-blocks=20 --fork-boundary`. The committed dataset holds price `P`, while the signed legacy tick sets `P + 1000`. C1 blocks 1-2 declare/deploy the fixture, block 3 is an empty fork boundary, and blocks 4-23 contain the 20 balanced oracle rounds.
+
+Before switching C2 to managed mode, mirror the declaration and deployment and enable committed reads on C2:
+
+```sh
+RUN_FILE=./examples/local-committed-data/divergent-run.json \
+  C1_RPC=http://127.0.0.1:39944/rpc/v0.10.2/ \
+  C2_RPC=http://127.0.0.1:49944/rpc/v0.10.2/ \
+  node examples/local-committed-data/bootstrap-c2-committed.mjs
+docker stop local-managed-c2
+docker rm local-managed-c2
+./examples/local-committed-data/start-managed-local.sh
+```
+
+C2 block 3 contains the one C2-only enable transaction. The same account signs all tick/root/settle transactions in blocks 4-23 on both chains; account #2 signs only the C2 boundary transaction. Start the replay service with the managed environment above, using `REPLAY_EVENT_DATA_PREFIX_LENGTH=0`, without `REPLAY_EVENT_CONTRACT_ADDRESS`, and with a fresh state-file path. This compares event count/order/origin/keys and receipts while allowing intentionally different event data and fee amounts. Call `/sync` with `{"startBlock":4,"endBlock":23}`. Then run:
+
+```sh
+RUN_FILE=./examples/local-committed-data/divergent-run.json \
+  C1_RPC=http://127.0.0.1:39944/rpc/v0.10.2/ \
+  C2_RPC=http://127.0.0.1:49944/rpc/v0.10.2/ \
+  node examples/local-committed-data/verify-stress.mjs
+```
+
+The verifier checks every settle event against its signed legacy tick and C2 committed dataset: C1 must emit `(P+1000, P+1005, 0)` and C2 must emit `(P, P+5, 1)`. It also checks every root/value page on C2, exact signed transaction payload/order, block metadata, receipt success, and the deliberate boundary difference. The verified 21 November run contained 1,320 transactions across the 20 post-boundary blocks, 440 of each operation. The first settle was C1 `(1042, 1047, 0)` and C2 `(42, 47, 1)`.

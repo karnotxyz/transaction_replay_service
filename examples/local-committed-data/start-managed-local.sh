@@ -38,12 +38,17 @@ fi
 # Distinct genesis timestamps make the block hashes diverge even when the
 # initial state and every replayed account transaction are identical.
 sleep 2
+if [ "${C2_BOOTSTRAP:-false}" = true ]; then
+  c2_mode_flags=''
+else
+  c2_mode_flags='--replay-mode --mempool-paused'
+fi
 docker run -d --platform linux/amd64 --name local-managed-c2 --network local-committed-replay \
   -p 127.0.0.1:49944:9944 -p 127.0.0.1:49943:9943 \
   -p 127.0.0.1:49945:9945 -p 127.0.0.1:48080:8080 \
   -v local-managed-c2-db:/data "$c2_image" --devnet --name Local-Managed-C2 --base-path /data \
   --chain-config-override chain_id=LOCAL_REPLAY,block_time=86400s \
-  --use-committed-data --replay-mode --mempool-paused --no-l1-sync \
+  --use-committed-data $c2_mode_flags --no-l1-sync \
   --rpc-external --rpc-admin --rpc-admin-external --rpc-unsafe \
   --rpc-committed-data --rpc-committed-data-external \
   --gateway-enable --gateway-external --feeder-gateway-enable \

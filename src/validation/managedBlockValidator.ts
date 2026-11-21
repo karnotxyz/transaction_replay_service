@@ -82,7 +82,7 @@ export function validateManagedBlock(
       if (!sameFelt(a.from_address, b.from_address) || a.keys.length !== b.keys.length || a.keys.some((key, i) => !sameFelt(key, b.keys[i]))) {
         throw new Error(`Transaction ${hash} event ${eventIndex} origin/keys differ`);
       }
-      const fields = options.eventContractAddress && sameFelt(a.from_address, options.eventContractAddress)
+      const fields = !options.eventContractAddress || sameFelt(a.from_address, options.eventContractAddress)
         ? options.eventDataPrefixLength ?? a.data.length
         : a.data.length;
       if (a.data.length !== b.data.length || fields > a.data.length || a.data.slice(0, fields).some((value, i) => !sameFelt(value, b.data[i]))) {

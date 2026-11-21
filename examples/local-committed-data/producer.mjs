@@ -13,6 +13,8 @@ const leafDomain = '0x43445f4d50545f4c4541465f5631';
 const stressArg = process.argv.find(arg => arg.startsWith('--stress-blocks='));
 const stressBlocks = stressArg ? Number(stressArg.split('=')[1]) : 0;
 if (!Number.isInteger(stressBlocks) || stressBlocks < 0) throw new Error('Invalid --stress-blocks count');
+const legacyOffset = Number(process.env.LEGACY_PRICE_OFFSET || 0);
+if (!Number.isSafeInteger(legacyOffset) || legacyOffset < 0) throw new Error('Invalid LEGACY_PRICE_OFFSET');
 const batch = process.argv.includes('--batch') || stressBlocks > 0;
 const adminRpc = process.env.C1_ADMIN_RPC || 'http://127.0.0.1:19943/rpc/v0.1.0/';
 
@@ -51,6 +53,7 @@ async function main() {
   if (process.argv.includes('--continue')) {
     run = JSON.parse(readFileSync(output, 'utf8'));
     if (BigInt(run.account) !== BigInt(address)) throw new Error('run.json belongs to another devnet account');
+    if ((run.legacyOffset || 0) !== legacyOffset) throw new Error('LEGACY_PRICE_OFFSET differs from this run');
   } else {
     const startBlock = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
     const sierra = JSON.parse(readFileSync(`${contractBase}.contract_class.json`, 'utf8'));
@@ -61,7 +64,17 @@ async function main() {
     const deployment = await account.deploy({ classHash: declaration.class_hash, constructorCalldata: [address], unique: true });
     await closeWhenPreconfirmed([deployment.transaction_hash]);
     await receipt(c1, deployment.transaction_hash);
-    run = { startBlock, account: address, contract: deployment.contract_address[0], declaration: declaration.transaction_hash, deployment: deployment.transaction_hash, rounds: [] };
+    run = { startBlock, account: address, contract: deployment.contract_address[0], declaration: declaration.transaction_hash,
+      deployment: deployment.transaction_hash, legacyOffset, rounds: [] };
+    if (process.argv.includes('--fork-boundary')) {
+      const boundary = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
+      await rpc(adminRpc, 'madara_V0_1_0_closeBlock');
+      while (Number(await rpc(c1, 'starknet_blockNumber')) < boundary) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      run.forkBoundaryBlock = boundary;
+      console.log(`C1 empty fork boundary block=${run.forkBoundaryBlock}`);
+    }
     writeFileSync(output, JSON.stringify(run, null, 2));
   }
 
@@ -89,14 +102,15 @@ async function main() {
       },
     };
     const root = hash.computePoseidonHashOnElements([leafDomain, 0, price]);
-    const tick = await account.execute({ contractAddress: run.contract, entrypoint: 'set_legacy_price', calldata: [price] }, details(0));
+    const legacyPrice = price + legacyOffset;
+    const tick = await account.execute({ contractAddress: run.contract, entrypoint: 'set_legacy_price', calldata: [legacyPrice] }, details(0));
     if (!batch) await receipt(c1, tick.transaction_hash);
     pendingDataset = { root, entries: [['0x0', `0x${price.toString(16)}`]] };
     const update = await account.execute({ contractAddress: run.contract, entrypoint: 'set_root', calldata: [root] }, details(1));
     if (pendingDataset) throw new Error('Combined dataset submission was not used');
     if (!batch) await receipt(c1, update.transaction_hash);
     const settle = await account.execute({ contractAddress: run.contract, entrypoint: 'settle', calldata: [2, 3] }, details(2));
-    const record = { price, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash };
+    const record = { price, legacyPrice, root, tick: tick.transaction_hash, update: update.transaction_hash, settle: settle.transaction_hash };
     if (deferClose) return record;
     await closeWhenPreconfirmed([tick.transaction_hash, update.transaction_hash, settle.transaction_hash]);
     const settledReceipt = await receipt(c1, settle.transaction_hash);
