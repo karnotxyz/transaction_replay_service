@@ -9,7 +9,9 @@ import { c1, c1Private, provider, rpc, receipt } from './common.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const contractBase = join(here, 'fixture/target/dev/local_committed_data_replay_ReplayOracle');
 const output = process.env.RUN_FILE || join(here, 'run.json');
-const leafDomain = '0x43445f4d50545f4c4541465f5631';
+const legacyLeafDomain = '0x43445f4d50545f4c4541465f5631';
+const rootFormat = process.env.COMMITTED_ROOT_FORMAT || 'legacy';
+if (!['legacy', 'patricia'].includes(rootFormat)) throw new Error('Invalid COMMITTED_ROOT_FORMAT');
 const stressArg = process.argv.find(arg => arg.startsWith('--stress-blocks='));
 const stressBlocks = stressArg ? Number(stressArg.split('=')[1]) : 0;
 if (!Number.isInteger(stressBlocks) || stressBlocks < 0) throw new Error('Invalid --stress-blocks count');
@@ -54,6 +56,7 @@ async function main() {
     run = JSON.parse(readFileSync(output, 'utf8'));
     if (BigInt(run.account) !== BigInt(address)) throw new Error('run.json belongs to another devnet account');
     if ((run.legacyOffset || 0) !== legacyOffset) throw new Error('LEGACY_PRICE_OFFSET differs from this run');
+    if ((run.committedRootFormat || 'legacy') !== rootFormat) throw new Error('COMMITTED_ROOT_FORMAT differs from this run');
   } else {
     const startBlock = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
     const sierra = JSON.parse(readFileSync(`${contractBase}.contract_class.json`, 'utf8'));
@@ -65,7 +68,7 @@ async function main() {
     await closeWhenPreconfirmed([deployment.transaction_hash]);
     await receipt(c1, deployment.transaction_hash);
     run = { startBlock, account: address, contract: deployment.contract_address[0], declaration: declaration.transaction_hash,
-      deployment: deployment.transaction_hash, legacyOffset, rounds: [] };
+      deployment: deployment.transaction_hash, legacyOffset, committedRootFormat: rootFormat, rounds: [] };
     if (process.argv.includes('--fork-boundary')) {
       const boundary = Number(await rpc(c1, 'starknet_blockNumber')) + 1;
       await rpc(adminRpc, 'madara_V0_1_0_closeBlock');
@@ -101,7 +104,10 @@ async function main() {
         l1_data_gas: { max_amount: 1_024n, max_price_per_unit: 1_000_000n },
       },
     };
-    const root = hash.computePoseidonHashOnElements([leafDomain, 0, price]);
+    // A single key 0 is one value leaf wrapped by a 251-bit Patricia edge.
+    const root = rootFormat === 'patricia'
+      ? `0x${(BigInt(hash.computePoseidonHash(price, 0)) + 251n).toString(16)}`
+      : hash.computePoseidonHashOnElements([legacyLeafDomain, 0, price]);
     const legacyPrice = price + legacyOffset;
     const tick = await account.execute({ contractAddress: run.contract, entrypoint: 'set_legacy_price', calldata: [legacyPrice] }, details(0));
     if (!batch) await receipt(c1, tick.transaction_hash);

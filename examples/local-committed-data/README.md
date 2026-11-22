@@ -110,3 +110,9 @@ RUN_FILE=./examples/local-committed-data/divergent-run.json \
 ```
 
 The verifier checks every settle event against its signed legacy tick and C2 committed dataset: C1 must emit `(P+1000, P+1005, 0)` and C2 must emit `(P, P+5, 1)`. It also checks every root/value page on C2, exact signed transaction payload/order, block metadata, receipt success, and the deliberate boundary difference. The verified 21 November run contained 1,320 transactions across the 20 post-boundary blocks, 440 of each operation. The first settle was C1 `(1042, 1047, 0)` and C2 `(42, 47, 1)`.
+
+### Standard Patricia images (#1362 C1, #1361 C2)
+
+The older #1349/#1359 images above use the legacy one-entry commitment, which remains the producer's default. For the current standard Patricia importer, set `COMMITTED_ROOT_FORMAT=patricia` on the producer. This computes the one-key root as `Poseidon(price, 0) + 251`, matching the frozen Rust reference. `start-managed-local.sh` accepts `C1_IMAGE` as well as `C2_IMAGE` so both images can be selected without editing the script.
+
+The 22 November run used C1 `manual-38557f5` from #1362 and bootstrapped C2 with exact #1361 `manual-c0efb9b`. The producer used `--stress-blocks=20 --fork-boundary`, `LEGACY_PRICE_OFFSET=1000`, and `COMMITTED_ROOT_FORMAT=patricia`. After the C2-only enable transaction in block 3, C2 restarted on `manual-19eb9de`, a test image that merges #1361 with the managed replay endpoint from #1359. Exact #1361 lacks `replayBlock` and cannot serve the whole-block replay request by itself. The service synced blocks 4–23, and `verify-stress.mjs` passed all 1,140 transactions and 380 settles with the expected divergent prices. Keep the image distinction when interpreting the result.

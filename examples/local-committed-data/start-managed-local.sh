@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-c1_image=ghcr.io/madara-alliance/madara:manual-5f78283
+c1_image=${C1_IMAGE:-ghcr.io/madara-alliance/madara:manual-5f78283}
 c2_image=${C2_IMAGE:-ghcr.io/madara-alliance/madara:manual-780f287}
 docker image inspect "$c1_image" >/dev/null 2>&1 || docker pull --platform linux/amd64 "$c1_image"
 docker network inspect local-committed-replay >/dev/null 2>&1 || docker network create local-committed-replay >/dev/null
