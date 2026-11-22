@@ -1,6 +1,8 @@
 import { BlockIdentifier } from "starknet";
 import { ProcessStatusType } from "./constants.js";
 
+export type ExecutionStatus = "SUCCEEDED" | "REVERTED";
+
 /**
  * Return type for sync bounds calculation
  */
@@ -23,6 +25,7 @@ export interface SyncProcess {
   syncTo: number;
   currentBlock: number;
   currentTxIndex: number;
+  currentTxHash?: string;
   totalBlocks: number | null; // null for continuous sync
   processedBlocks: number;
   startTime: Date;
@@ -32,6 +35,12 @@ export interface SyncProcess {
   completeCurrentBlock?: boolean;
   isContinuous?: boolean;
   originalTarget?: number;
+  lastEnqueuedBlock?: number;
+  lastClosedBlock?: number;
+  lastValidatedBlock?: number;
+  validationQueueDepth?: number;
+  comparatorBacklogBlocks?: number;
+  maxInflightBlocks?: number;
 }
 
 /**
@@ -39,10 +48,14 @@ export interface SyncProcess {
  * Minimal state - recovery queries syncing node for current position
  */
 export interface SyncState {
-  status: "running" | "idle";
+  status: "running" | "idle" | "paused";
   syncTo: number | "latest" | null;
   isContinuous: boolean;
   updatedAt: string;
+  error?: string;
+  currentBlock?: number;
+  currentTxIndex?: number;
+  currentTxHash?: string;
 }
 
 /**
@@ -50,6 +63,9 @@ export interface SyncState {
  */
 export interface SyncRequest {
   endBlock: BlockIdentifier;
+  startBlock?: number;
+  startTxIndex?: number;
+  startTxHash?: string;
 }
 
 /**
@@ -81,6 +97,41 @@ export interface MadaraRpcResponse {
     code: number;
     message: string;
   };
+}
+
+export interface ReplayBoundaryStatus {
+  block_n: number;
+  expected_tx_count: number;
+  dispatched_tx_count: number;
+  executed_tx_count: number;
+  last_executed_tx_hash: string | null;
+  reached_last_tx_hash: boolean;
+  boundary_met: boolean;
+  closed: boolean;
+  mismatch: string | null;
+}
+
+export interface ExecutionBoxStatus {
+  mode: string;
+  startup_mode: string;
+  startup_recovery_active: boolean;
+  reason: string | null;
+  taint_block: number | null;
+  replay_from: number | null;
+  replay_to: number | null;
+  replay_cursor: number | null;
+  replay_backlog_empty: boolean;
+  replay_supported: boolean;
+  comparator_enabled: boolean;
+  reexec_epoch: number;
+}
+
+export interface ValidationJob {
+  blockNumber: number;
+  txHashes: string[];
+  txCount: number;
+  expectedStatuses: Map<string, ExecutionStatus>;
+  requiresBoundaryClose: boolean;
 }
 
 /**
@@ -119,7 +170,7 @@ export interface TransactionReceipt {
     amount: string;
     unit: string;
   };
-  execution_status: "SUCCEEDED" | "REVERTED";
+  execution_status: ExecutionStatus;
   finality_status: string;
   type: string;
   messages_sent: any[];
@@ -149,5 +200,6 @@ export interface BlockWithReceipts {
   l1_data_gas_price?: any;
   l2_gas_price?: any;
   starknet_version?: string;
+  l1_da_mode?: string;
   transactions: TransactionWithReceipt[];
 }

@@ -99,12 +99,21 @@ class PersistenceLayer {
   /**
    * Mark sync as running
    */
-  public startSync(syncTo: number | "latest", isContinuous: boolean): void {
+  public startSync(
+    syncTo: number | "latest",
+    isContinuous: boolean,
+    currentBlock?: number,
+    currentTxIndex?: number,
+    currentTxHash?: string,
+  ): void {
     const state: SyncState = {
       status: ProcessStatus.RUNNING,
       syncTo,
       isContinuous,
       updatedAt: new Date().toISOString(),
+      currentBlock,
+      currentTxIndex,
+      currentTxHash,
     };
     this.writeState(state);
   }
@@ -122,6 +131,27 @@ class PersistenceLayer {
     this.writeState(state);
   }
 
+  public pauseSync(
+    syncTo: number | "latest",
+    isContinuous: boolean,
+    error?: string,
+    currentBlock?: number,
+    currentTxIndex?: number,
+    currentTxHash?: string,
+  ): void {
+    const state: SyncState = {
+      status: ProcessStatus.PAUSED,
+      syncTo,
+      isContinuous,
+      updatedAt: new Date().toISOString(),
+      error,
+      currentBlock,
+      currentTxIndex,
+      currentTxHash,
+    };
+    this.writeState(state);
+  }
+
   /**
    * Update sync target (for continuous sync)
    */
@@ -129,6 +159,21 @@ class PersistenceLayer {
     const currentState = this.readState();
     if (currentState && currentState.status === ProcessStatus.RUNNING) {
       currentState.syncTo = newTarget;
+      currentState.updatedAt = new Date().toISOString();
+      this.writeState(currentState);
+    }
+  }
+
+  public updateProgress(
+    currentBlock: number,
+    currentTxIndex: number = 0,
+    currentTxHash?: string,
+  ): void {
+    const currentState = this.readState();
+    if (currentState && currentState.status === ProcessStatus.RUNNING) {
+      currentState.currentBlock = currentBlock;
+      currentState.currentTxIndex = currentTxIndex;
+      currentState.currentTxHash = currentTxHash;
       currentState.updatedAt = new Date().toISOString();
       this.writeState(currentState);
     }
@@ -148,6 +193,8 @@ class PersistenceLayer {
    */
   public async validateAndGetResumePoint(): Promise<{
     resumeFrom: number;
+    startTxIndex: number;
+    startTxHash?: string;
     syncTo: number | "latest";
     isContinuous: boolean;
   }> {
@@ -162,6 +209,25 @@ class PersistenceLayer {
     // Get syncing node's latest block
     const syncingLatest = await getLatestBlockNumber(syncingProvider);
     logger.info(`📊 Syncing node latest block: ${syncingLatest}`);
+
+    if (config.isTransactionOnlyReplay) {
+      logger.info(
+        "⚡ Transaction-only replay mode: skipping block hash recovery validation",
+      );
+
+      let syncTo: number | "latest" = state.syncTo ?? "latest";
+      if (state.isContinuous) {
+        syncTo = "latest";
+      }
+
+      return {
+        resumeFrom: state.currentBlock ?? syncingLatest + 1,
+        startTxIndex: state.currentTxIndex ?? 0,
+        startTxHash: state.currentTxHash,
+        syncTo,
+        isContinuous: state.isContinuous,
+      };
+    }
 
     // Get the block from syncing node
     const syncingBlock = await getBlockWithTxHashes(
@@ -236,6 +302,8 @@ class PersistenceLayer {
 
     return {
       resumeFrom: syncingLatest + 1,
+      startTxIndex: 0,
+      startTxHash: undefined,
       syncTo,
       isContinuous: state.isContinuous,
     };

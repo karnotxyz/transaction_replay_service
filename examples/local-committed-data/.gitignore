@@ -1,0 +1,7 @@
+fixture/target/
+run.json
+managed-run.json
+managed-bootstrap.json
+divergent-run.json
+divergent-bootstrap.json
+checkpoint.json

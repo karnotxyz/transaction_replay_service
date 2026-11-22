@@ -9,6 +9,7 @@ export const RetryConfig = {
   MAX_RETRIES_BLOCK_VALIDATION: 5,
   MAX_RETRIES_BLOCK_HASH: 100,
   MAX_RETRIES_TRANSACTION_POST: 3,
+  MAX_RETRIES_TRANSIENT_DNS_POST: 180,
   MAX_RETRIES_PROBE: 5,
 
   // Connection error thresholds
@@ -65,6 +66,16 @@ export const ReceiptValidationConfig = {
 } as const;
 
 /**
+ * Transaction-only replay retry configuration
+ */
+export const TransactionOnlyReplayConfig = {
+  MAX_ATTEMPTS: 3,
+  RECEIPT_TIMEOUT_MS: 30 * 1000, // 30 seconds
+  REPLAY_BOUNDARY_TX_MAX_RETRIES: 1800,
+  REPLAY_BOUNDARY_TX_RETRY_DELAY_MS: 1000,
+} as const;
+
+/**
  * Block Processing Configuration
  */
 export const BlockProcessing = {
@@ -86,6 +97,7 @@ export const ProcessStatus = {
   CANCELLED: "cancelled",
   FAILED: "failed",
   RECOVERING: "recovering",
+  PAUSED: "paused",
 } as const;
 
 export type ProcessStatusType =
@@ -101,6 +113,19 @@ export const SyncMode = {
 } as const;
 
 export type SyncModeType = (typeof SyncMode)[keyof typeof SyncMode];
+
+/**
+ * Replay Modes
+ */
+export const ReplayMode = {
+  MANAGED_BLOCKS: "managed_blocks",
+  TRANSACTION_ONLY: "transaction_only",
+  TRANSACTION_ONLY_WITH_HASH_VALIDATION:
+    "transaction_only_with_hash_validation",
+  MEMPOOL: "mempool",
+} as const;
+
+export type ReplayModeType = (typeof ReplayMode)[keyof typeof ReplayMode];
 
 /**
  * RPC Version Paths
@@ -184,8 +209,11 @@ export const ErrorCode = {
   INVALID_BLOCK_TYPE: "INVALID_BLOCK_TYPE",
   BLOCK_NUMBER_TOO_LARGE: "BLOCK_NUMBER_TOO_LARGE",
   MADARA_DOWN: "MADARA_DOWN",
+  SOURCE_RPC_UNAVAILABLE: "SOURCE_RPC_UNAVAILABLE",
   CONFIGURATION_ERROR: "CONFIGURATION_ERROR",
   BLOCK_HASH_MISMATCH: "BLOCK_HASH_MISMATCH",
+  TRANSACTION_STATUS_MISMATCH: "TRANSACTION_STATUS_MISMATCH",
+  TRANSACTION_REPLAY_FAILED: "TRANSACTION_REPLAY_FAILED",
   UNSUPPORTED_STARKNET_VERSION: "UNSUPPORTED_STARKNET_VERSION",
   PROCESS_NOT_FOUND: "PROCESS_NOT_FOUND",
   INVALID_PROCESS_STATUS: "INVALID_PROCESS_STATUS",
@@ -206,4 +234,5 @@ export const LogConfig = {
  */
 export const L1HandlerConfig = {
   DEFAULT_PAID_FEE: 128328,
+  DEFAULT_PAID_FEE_HEX: "0x1f548",
 } as const;

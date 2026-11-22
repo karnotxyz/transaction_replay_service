@@ -4,9 +4,10 @@ import {
   wrapMadaraError,
   MadaraDownError,
   isMadaraDownError,
+  TransactionStatusMismatchError,
 } from "../errors/index.js";
 import { RetryConfig, ReceiptValidationConfig } from "../constants.js";
-import { RetryOptions, BlockWithReceipts } from "../types.js";
+import { RetryOptions, BlockWithReceipts, ExecutionStatus } from "../types.js";
 import axios, { AxiosResponse } from "axios";
 import { transactionPostRetry } from "../retry/index.js";
 import { incrementTransactionReceiptRetries } from "../telemetry/metrics.js";
@@ -26,7 +27,10 @@ export async function getTransactionReceipt(
     const receipt = await provider.getTransactionReceipt(transactionHash);
     return receipt;
   } catch (error) {
-    throw wrapMadaraError(error, `getTransactionReceipt(${transactionHash}) [${nodeName}]`);
+    throw wrapMadaraError(
+      error,
+      `getTransactionReceipt(${transactionHash}) [${nodeName}]`,
+    );
   }
 }
 
@@ -58,7 +62,9 @@ export async function validateTransactionReceipt(
 
       // Validate transaction status
       if (!receipt.isSuccess() && !receipt.isReverted()) {
-        throw new Error(`Transaction in unexpected state: ${txHash} [${nodeName}]`);
+        throw new Error(
+          `Transaction in unexpected state: ${txHash} [${nodeName}]`,
+        );
       }
 
       // Success
@@ -116,6 +122,91 @@ export async function validateTransactionReceipt(
   }
 }
 
+export function getReceiptExecutionStatus(
+  receipt: GetTransactionReceiptResponse,
+): ExecutionStatus | null {
+  if (receipt.isSuccess()) {
+    return "SUCCEEDED";
+  }
+  if (receipt.isReverted()) {
+    return "REVERTED";
+  }
+
+  const rawStatus = (receipt as any).execution_status;
+  return rawStatus === "SUCCEEDED" || rawStatus === "REVERTED"
+    ? rawStatus
+    : null;
+}
+
+export function assertTransactionExecutionStatusMatches(
+  blockNumber: number,
+  txHash: string,
+  txIndex: number,
+  originalStatus: ExecutionStatus,
+  syncingStatus: ExecutionStatus,
+): void {
+  if (originalStatus !== syncingStatus) {
+    throw new TransactionStatusMismatchError(
+      blockNumber,
+      txHash,
+      txIndex,
+      originalStatus,
+      syncingStatus,
+    );
+  }
+}
+
+export async function waitForTransactionExecutionStatus(
+  provider: RpcProvider,
+  txHash: string,
+  timeoutMs = ReceiptValidationConfig.TIMEOUT_MS,
+): Promise<ExecutionStatus> {
+  const nodeName = getNodeName(provider);
+  const startTime = Date.now();
+  let pollCount = 0;
+
+  await new Promise((resolve) =>
+    setTimeout(resolve, ReceiptValidationConfig.INITIAL_DELAY_MS),
+  );
+
+  while (true) {
+    const elapsed = Date.now() - startTime;
+
+    if (elapsed >= timeoutMs) {
+      throw new Error(
+        `Receipt validation timed out after ${Math.round(elapsed / 1000)}s for tx ${txHash} [${nodeName}]`,
+      );
+    }
+
+    pollCount++;
+    const interval = getPollingInterval(elapsed);
+
+    try {
+      const receipt = await getTransactionReceipt(provider, txHash);
+      const status = getReceiptExecutionStatus(receipt);
+
+      if (status) {
+        logger.debug(
+          `Receipt for ${txHash} [${nodeName}] reached ${status} after ${pollCount} polls`,
+        );
+        return status;
+      }
+    } catch (error) {
+      if (error instanceof MadaraDownError || isMadaraDownError(error)) {
+        logger.warn(
+          `Receipt RPC connection failure for ${txHash} [${nodeName}] (poll ${pollCount}); retrying: ${error}`,
+        );
+      } else {
+        logger.debug(
+          `Receipt for ${txHash} [${nodeName}] not ready (poll ${pollCount}): ${error}`,
+        );
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 /**
  * Post data to RPC endpoint with retry logic and Madara health detection
  *
@@ -126,15 +217,17 @@ export async function validateTransactionReceipt(
 export async function postWithRetry(
   url: string,
   data: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<AxiosResponse<any>> {
   const { checkMadaraHealth } = await import("../madara/index.js");
 
   let attempt = 0;
   const maxAttempts = RetryConfig.MAX_RETRIES_TRANSACTION_POST;
+  let transientDnsAttempts = 0;
 
   while (attempt <= maxAttempts) {
     try {
-      const result = await axios.post(url, data);
+      const result = await axios.post(url, data, { signal });
 
       // Check for account validation error (code 55) - needs retry
       if (result.data.error && result.data.error.code === 55) {
@@ -152,12 +245,39 @@ export async function postWithRetry(
         continue;
       }
 
+      if (result.data.error) {
+        throw new Error(
+          `RPC Error: ${result.data.error.message} (Code: ${result.data.error.code})`,
+        );
+      }
+
       // Success
       if (attempt > 0) {
         logger.info(`✅ POST ${url} succeeded on attempt ${attempt + 1}`);
       }
       return result;
     } catch (error) {
+      if (signal?.aborted) {
+        throw new Error(`POST ${url} aborted`);
+      }
+
+      const errorCode = String(
+        (error as any)?.code ?? (error as any)?.cause?.code ?? "",
+      ).toUpperCase();
+      if (errorCode === "EAI_AGAIN") {
+        if (
+          transientDnsAttempts >= RetryConfig.MAX_RETRIES_TRANSIENT_DNS_POST
+        ) {
+          throw error;
+        }
+        transientDnsAttempts++;
+        logger.warn(
+          `Transient DNS failure posting to ${url}; retrying in 1000ms (${transientDnsAttempts}/${RetryConfig.MAX_RETRIES_TRANSIENT_DNS_POST})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+
       const wrappedError = wrapMadaraError(error, `postWithRetry(${url})`);
 
       // Check if this is a connection error (potential Madara down)
@@ -237,6 +357,7 @@ export async function validateBlockReceipts(
   provider: RpcProvider,
   blockNumber: number,
   expectedTxHashes: string[],
+  expectedStatuses?: Map<string, ExecutionStatus>,
 ): Promise<void> {
   const nodeName = getNodeName(provider);
   const startTime = Date.now();
@@ -269,7 +390,10 @@ export async function validateBlockReceipts(
     const interval = getPollingInterval(elapsed);
 
     try {
-      const blockWithReceipts = await getBlockWithReceipts(provider, blockNumber);
+      const blockWithReceipts = await getBlockWithReceipts(
+        provider,
+        blockNumber,
+      );
 
       if (!blockWithReceipts) {
         // Block not ready yet, wait and retry
@@ -302,14 +426,17 @@ export async function validateBlockReceipts(
           continue;
         }
 
-        // Check execution status
-        if (
+        const expectedStatus = expectedStatuses?.get(txHash);
+
+        if (expectedStatus && receipt.execution_status !== expectedStatus) {
+          failedTxs.push(
+            `${txHash} (expected: ${expectedStatus}, actual: ${receipt.execution_status})`,
+          );
+        } else if (
           receipt.execution_status !== "SUCCEEDED" &&
           receipt.execution_status !== "REVERTED"
         ) {
-          failedTxs.push(
-            `${txHash} (status: ${receipt.execution_status})`,
-          );
+          failedTxs.push(`${txHash} (status: ${receipt.execution_status})`);
         }
       }
 

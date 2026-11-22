@@ -1,20 +1,25 @@
 import * as starknet from "starknet";
 import { postWithRetry } from "../utils.js";
 import { config } from "../config.js";
+import { getSyncingUserRpcUrl } from "../providers.js";
+import type { TransactionSubmissionMode } from "./index.js";
 
 /**
  * General deploy account transaction handler
  */
-export async function generalDeployAccount(tx: starknet.TransactionWithHash) {
+export async function generalDeployAccount(
+  tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode = "bypass",
+) {
   let tx_version = tx.version;
 
   switch (tx_version) {
     case "0x1": {
-      return deployAccountV1(tx);
+      return deployAccountV1(tx, submissionMode);
     }
 
     case "0x3": {
-      return deployAccountV3(tx);
+      return deployAccountV3(tx, submissionMode);
     }
     default: {
       throw new Error(
@@ -24,7 +29,10 @@ export async function generalDeployAccount(tx: starknet.TransactionWithHash) {
   }
 }
 
-async function deployAccountV1(tx: starknet.TransactionWithHash) {
+async function deployAccountV1(
+  tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
+) {
   type DEPLOY_ACCOUNT_TXN_V1 = {
     type: "DEPLOY_ACCOUNT";
     max_fee: starknet.FELT;
@@ -37,28 +45,39 @@ async function deployAccountV1(tx: starknet.TransactionWithHash) {
   };
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V1;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddDeployAccountTransaction",
-    params: [
-      {
-        type: "DEPLOY_ACCOUNT",
-        max_fee: txn.max_fee,
-        version: txn.version,
-        signature: txn.signature,
-        nonce: txn.nonce,
-        contract_address_salt: txn.contract_address_salt,
-        constructor_calldata: txn.constructor_calldata,
-        class_hash: txn.class_hash,
-      },
-    ],
-  });
+  const result = await postWithRetry(
+    submissionMode === "mempool"
+      ? getSyncingUserRpcUrl()
+      : config.adminRpcUrlSyncingNode,
+    {
+      id: 1,
+      jsonrpc: "2.0",
+      method:
+        submissionMode === "mempool"
+          ? "starknet_addDeployAccountTransaction"
+          : "madara_V0_1_0_bypassAddDeployAccountTransaction",
+      params: [
+        {
+          type: "DEPLOY_ACCOUNT",
+          max_fee: txn.max_fee,
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+          contract_address_salt: txn.contract_address_salt,
+          constructor_calldata: txn.constructor_calldata,
+          class_hash: txn.class_hash,
+        },
+      ],
+    },
+  );
 
   return result.data.result.transaction_hash;
 }
 
-async function deployAccountV3(tx: starknet.TransactionWithHash) {
+async function deployAccountV3(
+  tx: starknet.TransactionWithHash,
+  submissionMode: TransactionSubmissionMode,
+) {
   type DEPLOY_ACCOUNT_TXN_V3 = {
     type: "DEPLOY_ACCOUNT";
     version: "0x3";
@@ -76,27 +95,35 @@ async function deployAccountV3(tx: starknet.TransactionWithHash) {
 
   let txn = tx as unknown as DEPLOY_ACCOUNT_TXN_V3;
 
-  const result = await postWithRetry(config.adminRpcUrlSyncingNode, {
-    id: 1,
-    jsonrpc: "2.0",
-    method: "madara_V0_1_0_bypassAddDeployAccountTransaction",
-    params: [
-      {
-        type: "DEPLOY_ACCOUNT",
-        version: txn.version,
-        signature: txn.signature,
-        nonce: txn.nonce,
-        contract_address_salt: txn.contract_address_salt,
-        constructor_calldata: txn.constructor_calldata,
-        class_hash: txn.class_hash,
-        resource_bounds: txn.resource_bounds,
-        tip: txn.tip,
-        paymaster_data: txn.paymaster_data,
-        nonce_data_availability_mode: txn.nonce_data_availability_mode,
-        fee_data_availability_mode: txn.fee_data_availability_mode,
-      },
-    ],
-  });
+  const result = await postWithRetry(
+    submissionMode === "mempool"
+      ? getSyncingUserRpcUrl()
+      : config.adminRpcUrlSyncingNode,
+    {
+      id: 1,
+      jsonrpc: "2.0",
+      method:
+        submissionMode === "mempool"
+          ? "starknet_addDeployAccountTransaction"
+          : "madara_V0_1_0_bypassAddDeployAccountTransaction",
+      params: [
+        {
+          type: "DEPLOY_ACCOUNT",
+          version: txn.version,
+          signature: txn.signature,
+          nonce: txn.nonce,
+          contract_address_salt: txn.contract_address_salt,
+          constructor_calldata: txn.constructor_calldata,
+          class_hash: txn.class_hash,
+          resource_bounds: txn.resource_bounds,
+          tip: txn.tip,
+          paymaster_data: txn.paymaster_data,
+          nonce_data_availability_mode: txn.nonce_data_availability_mode,
+          fee_data_availability_mode: txn.fee_data_availability_mode,
+        },
+      ],
+    },
+  );
 
   return result.data.result.transaction_hash;
 }

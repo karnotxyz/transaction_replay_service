@@ -128,6 +128,17 @@ NODE_ENV=development|production
 STATE_FILE_PATH=./sync-state.json      # Path to state file
 CLEAN_SLATE=false                       # Clear state file on startup
 SEQUENTIAL_VALIDATION=false             # Confirm each tx in PRE_CONFIRMED before sending next
+REPLAY_MODE=managed_blocks               # transaction_only skips expected block-hash equality
+VALIDATE_BLOCK_HASH=true                 # Set false to accept a different destination block hash
+REPLAY_BLOCK_RPC_ENABLED=false           # Send each full managed block through one Madara admin RPC
+MANAGED_BLOCK_MAX_INFLIGHT=1             # 1..9; requires ordered pipelined replay support in Madara
+PRE_CONFIRMED_VALIDATION_MAX_RETRIES=500
+PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS=200
+MEMPOOL_TRANSACTION_INTERVAL_MS=20       # Minimum source-ordered submission start interval
+TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS=1   # >1 enables bounded comparator backlog
+TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS=100
+TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS=1800000
+TRANSACTION_ONLY_REQUIRE_MIXED_MODE=false # Stop if ExecutionBox leaves healthy Mixed mode
 
 # OpenTelemetry
 OTEL_ENABLED=false

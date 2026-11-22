@@ -36,6 +36,17 @@ export class MadaraDownError extends AppError {
 }
 
 /**
+ * Original/source RPC is temporarily unreachable.
+ */
+export class SourceRpcUnavailableError extends AppError {
+  constructor(message: string) {
+    super(message, ErrorCode.SOURCE_RPC_UNAVAILABLE, 503, true);
+  }
+}
+
+export type RpcProviderRole = "original" | "syncing" | "unknown";
+
+/**
  * Configuration error
  */
 export class ConfigurationError extends AppError {
@@ -82,6 +93,54 @@ export class BlockHashMismatchError extends AppError {
     this.blockNumber = blockNumber;
     this.originalNodeHash = originalNodeHash;
     this.syncingNodeHash = syncingNodeHash;
+  }
+}
+
+/**
+ * Transaction execution status differs from the original node.
+ */
+export class TransactionStatusMismatchError extends AppError {
+  public readonly blockNumber: number;
+  public readonly txHash: string;
+  public readonly txIndex: number;
+  public readonly originalStatus: string;
+  public readonly syncingStatus: string;
+
+  constructor(
+    blockNumber: number,
+    txHash: string,
+    txIndex: number,
+    originalStatus: string,
+    syncingStatus: string,
+  ) {
+    const message = `Transaction status mismatch at block ${blockNumber}, tx ${txIndex} (${txHash}): original=${originalStatus}, syncing=${syncingStatus}`;
+    super(message, ErrorCode.TRANSACTION_STATUS_MISMATCH, 409, true);
+    this.blockNumber = blockNumber;
+    this.txHash = txHash;
+    this.txIndex = txIndex;
+    this.originalStatus = originalStatus;
+    this.syncingStatus = syncingStatus;
+  }
+}
+
+/**
+ * Transaction-only replay could not produce a matching receipt for a tx.
+ */
+export class TransactionReplayFailedError extends AppError {
+  public readonly blockNumber: number;
+  public readonly txHash: string;
+  public readonly txIndex: number;
+
+  constructor(
+    blockNumber: number,
+    txHash: string,
+    txIndex: number,
+    message: string,
+  ) {
+    super(message, ErrorCode.TRANSACTION_REPLAY_FAILED, 409, true);
+    this.blockNumber = blockNumber;
+    this.txHash = txHash;
+    this.txIndex = txIndex;
   }
 }
 
@@ -148,6 +207,10 @@ export class InvalidProcessStatusError extends AppError {
  * Check if an error indicates Madara is down
  */
 export function isMadaraDownError(error: any): boolean {
+  if (error instanceof SourceRpcUnavailableError) {
+    return false;
+  }
+
   if (error instanceof MadaraDownError) {
     return true;
   }
@@ -178,9 +241,23 @@ export function isMadaraDownError(error: any): boolean {
 /**
  * Wrap potential Madara errors
  */
-export function wrapMadaraError(error: any, context: string): Error {
+export function wrapMadaraError(
+  error: any,
+  context: string,
+  providerRole: RpcProviderRole = "unknown",
+): Error {
+  if (
+    error instanceof MadaraDownError ||
+    error instanceof SourceRpcUnavailableError
+  ) {
+    return error;
+  }
+
   if (isMadaraDownError(error)) {
-    return new MadaraDownError(`${context}: ${error.message || error}`);
+    const message = `${context}: ${error.message || error}`;
+    return providerRole === "original"
+      ? new SourceRpcUnavailableError(message)
+      : new MadaraDownError(message);
   }
   return error;
 }

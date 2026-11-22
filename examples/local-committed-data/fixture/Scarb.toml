@@ -1,0 +1,11 @@
+[package]
+name = "local_committed_data_replay"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = "2.14.0"
+
+[[target.starknet-contract]]
+sierra = true
+casm = true

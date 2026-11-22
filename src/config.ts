@@ -2,6 +2,13 @@ import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
+import { ReplayMode, ReplayModeType } from "./constants.js";
+import {
+  isMempoolReplayMode,
+  isTransactionReplayMode,
+  parseReplayMode,
+  resolveBlockHashValidation,
+} from "./replayMode.js";
 
 dotenv.config();
 
@@ -28,7 +35,18 @@ interface EnvironmentConfig {
   // Features
   cleanSlate: boolean;
   sequentialValidation: boolean;
+  replayMode: ReplayModeType;
+  validateBlockHash: boolean;
+  replayBlockRpcEnabled: boolean;
+  managedBlockMaxInflight: number;
   maxSupportedStarknetVersion?: string;
+  mempoolTransactionIntervalMs: number;
+  transactionOnlyMaxInflightBlocks: number;
+  transactionOnlyBoundaryPollIntervalMs: number;
+  transactionOnlyBoundaryTimeoutMs: number;
+  transactionOnlyRequireMixedMode: boolean;
+  preConfirmedValidationMaxRetries: number;
+  preConfirmedValidationRetryDelayMs: number;
 }
 
 class Config {
@@ -73,12 +91,12 @@ class Config {
       "ADMIN_RPC_URL_SYNCING_NODE",
     );
 
-    const maxSupportedStarknetVersion =
-      this.parseOptionalStarknetVersion(
-        process.env.MAX_SUPPORTED_STARKNET_VERSION,
-        "MAX_SUPPORTED_STARKNET_VERSION",
-      );
+    const maxSupportedStarknetVersion = this.parseOptionalStarknetVersion(
+      process.env.MAX_SUPPORTED_STARKNET_VERSION,
+      "MAX_SUPPORTED_STARKNET_VERSION",
+    );
 
+    const replayMode = this.parseReplayMode(process.env.REPLAY_MODE);
     const config: EnvironmentConfig = {
       // Server
       port: this.parsePort(process.env.PORT),
@@ -98,8 +116,77 @@ class Config {
       cleanSlate: process.env.CLEAN_SLATE?.toLowerCase() === "true",
       sequentialValidation:
         process.env.SEQUENTIAL_VALIDATION?.toLowerCase() === "true",
+      replayMode,
+      validateBlockHash: resolveBlockHashValidation(
+        replayMode,
+        process.env.VALIDATE_BLOCK_HASH,
+      ),
+      replayBlockRpcEnabled:
+        process.env.REPLAY_BLOCK_RPC_ENABLED?.toLowerCase() === "true",
+      managedBlockMaxInflight: this.parsePositiveInt(
+        process.env.MANAGED_BLOCK_MAX_INFLIGHT,
+        1,
+        "MANAGED_BLOCK_MAX_INFLIGHT",
+      ),
       maxSupportedStarknetVersion,
+      mempoolTransactionIntervalMs: this.parseNonNegativeInt(
+        process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
+        20,
+        "MEMPOOL_TRANSACTION_INTERVAL_MS",
+      ),
+      transactionOnlyMaxInflightBlocks: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS,
+        1,
+        "TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS",
+      ),
+      transactionOnlyBoundaryPollIntervalMs: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS,
+        100,
+        "TRANSACTION_ONLY_BOUNDARY_POLL_INTERVAL_MS",
+      ),
+      transactionOnlyBoundaryTimeoutMs: this.parsePositiveInt(
+        process.env.TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS,
+        30 * 60 * 1000,
+        "TRANSACTION_ONLY_BOUNDARY_TIMEOUT_MS",
+      ),
+      transactionOnlyRequireMixedMode:
+        process.env.TRANSACTION_ONLY_REQUIRE_MIXED_MODE?.toLowerCase() ===
+        "true",
+      preConfirmedValidationMaxRetries: this.parsePositiveInt(
+        process.env.PRE_CONFIRMED_VALIDATION_MAX_RETRIES,
+        500,
+        "PRE_CONFIRMED_VALIDATION_MAX_RETRIES",
+      ),
+      preConfirmedValidationRetryDelayMs: this.parsePositiveInt(
+        process.env.PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS,
+        200,
+        "PRE_CONFIRMED_VALIDATION_RETRY_DELAY_MS",
+      ),
     };
+
+    if (config.transactionOnlyMaxInflightBlocks > 10) {
+      throw new ConfigurationError(
+        `Invalid TRANSACTION_ONLY_MAX_INFLIGHT_BLOCKS value: ${config.transactionOnlyMaxInflightBlocks}. Madara supports at most 10 speculative blocks.`,
+      );
+    }
+    if (config.managedBlockMaxInflight > 9) {
+      throw new ConfigurationError(
+        `Invalid MANAGED_BLOCK_MAX_INFLIGHT value: ${config.managedBlockMaxInflight}. Madara supports at most 9 managed blocks in flight.`,
+      );
+    }
+    if (config.managedBlockMaxInflight > 1 && !config.replayBlockRpcEnabled) {
+      throw new ConfigurationError(
+        "MANAGED_BLOCK_MAX_INFLIGHT greater than 1 requires REPLAY_BLOCK_RPC_ENABLED=true.",
+      );
+    }
+    if (
+      config.replayBlockRpcEnabled &&
+      config.replayMode !== ReplayMode.MANAGED_BLOCKS
+    ) {
+      throw new ConfigurationError(
+        "REPLAY_BLOCK_RPC_ENABLED requires REPLAY_MODE=managed_blocks.",
+      );
+    }
 
     this.logConfiguration(config);
 
@@ -124,6 +211,50 @@ class Config {
     }
 
     return port;
+  }
+
+  private parsePositiveInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string,
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a positive integer.`,
+      );
+    }
+    return parsed;
+  }
+
+  private parseNonNegativeInt(
+    value: string | undefined,
+    defaultValue: number,
+    name: string,
+  ): number {
+    if (value === undefined || value === "") {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new ConfigurationError(
+        `Invalid ${name} value: ${value}. Must be a non-negative integer.`,
+      );
+    }
+    return parsed;
+  }
+
+  private parseReplayMode(mode: string | undefined): ReplayModeType {
+    try {
+      return parseReplayMode(mode);
+    } catch (error) {
+      throw new ConfigurationError((error as Error).message);
+    }
   }
 
   private parseOptionalStarknetVersion(
@@ -159,10 +290,44 @@ class Config {
       `  • Clean Slate: ${config.cleanSlate ? "ENABLED" : "disabled"}`,
     );
     logger.info(
-      `  • Sequential Validation: ${config.sequentialValidation ? "ENABLED" : "disabled"}`,
+      `  • Sequential Validation: ${
+        config.sequentialValidation ? "ENABLED" : "disabled"
+      }`,
+    );
+    logger.info(`  • Replay Mode: ${config.replayMode}`);
+    logger.info(
+      `  • Validate Block Hash: ${config.validateBlockHash ? "ENABLED" : "disabled"}`,
     );
     logger.info(
-      `  • Max Supported Starknet Version: ${config.maxSupportedStarknetVersion || "not set"}`,
+      `  • Replay Block RPC: ${config.replayBlockRpcEnabled ? "ENABLED" : "disabled"}`,
+    );
+    logger.info(
+      `  • Managed-block Max Inflight: ${config.managedBlockMaxInflight}`,
+    );
+    logger.info(
+      `  • Max Supported Starknet Version: ${
+        config.maxSupportedStarknetVersion || "not set"
+      }`,
+    );
+    logger.info(
+      `  • Mempool Transaction Interval: ${config.mempoolTransactionIntervalMs}ms`,
+    );
+    logger.info(
+      `  • Transaction-only Max Inflight Blocks: ${config.transactionOnlyMaxInflightBlocks}`,
+    );
+    logger.info(
+      `  • Transaction-only Boundary Poll Interval: ${config.transactionOnlyBoundaryPollIntervalMs}ms`,
+    );
+    logger.info(
+      `  • Transaction-only Boundary Timeout: ${config.transactionOnlyBoundaryTimeoutMs}ms`,
+    );
+    logger.info(
+      `  • Transaction-only Require Mixed Mode: ${
+        config.transactionOnlyRequireMixedMode ? "ENABLED" : "disabled"
+      }`,
+    );
+    logger.info(
+      `  • Pre-confirmed Validation: ${config.preConfirmedValidationMaxRetries} retries @ ${config.preConfirmedValidationRetryDelayMs}ms`,
     );
 
     // OpenTelemetry Configuration
@@ -226,8 +391,60 @@ class Config {
     return this.config.sequentialValidation;
   }
 
+  public get replayMode(): ReplayModeType {
+    return this.config.replayMode;
+  }
+
+  public get isTransactionOnlyReplay(): boolean {
+    return isTransactionReplayMode(this.config.replayMode);
+  }
+
+  public get isMempoolReplay(): boolean {
+    return isMempoolReplayMode(this.config.replayMode);
+  }
+
+  public get shouldValidateBlockHash(): boolean {
+    return this.config.validateBlockHash;
+  }
+
+  public get replayBlockRpcEnabled(): boolean {
+    return this.config.replayBlockRpcEnabled;
+  }
+
+  public get managedBlockMaxInflight(): number {
+    return this.config.managedBlockMaxInflight;
+  }
+
   public get maxSupportedStarknetVersion(): string | undefined {
     return this.config.maxSupportedStarknetVersion;
+  }
+
+  public get mempoolTransactionIntervalMs(): number {
+    return this.config.mempoolTransactionIntervalMs;
+  }
+
+  public get transactionOnlyMaxInflightBlocks(): number {
+    return this.config.transactionOnlyMaxInflightBlocks;
+  }
+
+  public get transactionOnlyBoundaryPollIntervalMs(): number {
+    return this.config.transactionOnlyBoundaryPollIntervalMs;
+  }
+
+  public get transactionOnlyBoundaryTimeoutMs(): number {
+    return this.config.transactionOnlyBoundaryTimeoutMs;
+  }
+
+  public get transactionOnlyRequireMixedMode(): boolean {
+    return this.config.transactionOnlyRequireMixedMode;
+  }
+
+  public get preConfirmedValidationMaxRetries(): number {
+    return this.config.preConfirmedValidationMaxRetries;
+  }
+
+  public get preConfirmedValidationRetryDelayMs(): number {
+    return this.config.preConfirmedValidationRetryDelayMs;
   }
 
   public get isDevelopment(): boolean {

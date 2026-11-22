@@ -87,9 +87,7 @@ export class RetryExecutor {
           logger.error(
             `❌ ${operationName} failed after ${attempt + 1} attempts. Last error: ${lastError.message}`,
           );
-          throw new Error(
-            `${operationName} failed after ${attempt + 1} attempts: ${lastError.message}`,
-          );
+          throw lastError;
         }
 
         logger.warn(
