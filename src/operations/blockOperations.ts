@@ -80,6 +80,15 @@ export async function getLatestBlockNumber(
   }, `getLatestBlockNumber [${nodeName}]`);
 }
 
+export async function getLatestReplayTarget(): Promise<number> {
+  const sourceHead = await getLatestBlockNumber(originalProvider);
+  if (!Number.isSafeInteger(sourceHead) || sourceHead < 0) {
+    throw new Error("Source RPC did not return a confirmed block number");
+  }
+  // -1 means even block zero is still inside the required gap.
+  return Math.max(-1, sourceHead - config.minimumReplayLagBlocks);
+}
+
 /**
  * Get block with transaction hashes
  */

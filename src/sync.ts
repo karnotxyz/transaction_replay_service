@@ -15,6 +15,7 @@ import { blockProcessor, RecoveryAction } from "./sync/BlockProcessor.js";
 import { parallelTransactionProcessor } from "./sync/TransactionProcessor.js";
 import {
   getLatestBlockNumber,
+  getLatestReplayTarget,
   getBlockWithTxs,
   getOriginalBlockWithTxsAndProofFacts,
   getBlockWithReceipts,
@@ -77,12 +78,17 @@ export async function startSync(
   const isContinuous =
     endBlock === BlockTag.LATEST || endBlock === "latest" || endBlock === null;
 
-  const targetBlock = await getTargetBlock(endBlock);
+  const targetBlock = isContinuous
+    ? await getLatestReplayTarget()
+    : await getTargetBlock(endBlock);
 
   const syncingNodeLatestBlock = await getLatestBlockNumber(syncingProvider);
   const startBlock = startBlockOverride ?? syncingNodeLatestBlock + 1;
 
-  if (startBlock > targetBlock) {
+  if (
+    startBlock > targetBlock &&
+    (!isContinuous || config.minimumReplayLagBlocks === 0)
+  ) {
     return {
       success: true,
       alreadyComplete: true,
@@ -103,7 +109,7 @@ export async function startSync(
     currentBlock: startBlock,
     currentTxIndex: startTxIndex,
     currentTxHash: startTxHash,
-    totalBlocks: targetBlock - startBlock + 1,
+    totalBlocks: Math.max(0, targetBlock - startBlock + 1),
     processedBlocks: 0,
     startTime: new Date(),
     cancelRequested: false,
@@ -165,6 +171,7 @@ export async function startSync(
       `🔄 Continuous sync enabled - will track new blocks as they arrive`,
     );
     logger.info(`📍 Initial target: block ${targetBlock}`);
+    logger.info(`Minimum replay lag: ${config.minimumReplayLagBlocks} blocks`);
     const probeInterval = probeManager.createProbeInterval(newProcess);
     syncStateManager.setProbeInterval(probeInterval);
   }
@@ -269,6 +276,9 @@ export const syncEndpoint = async (req: Request, res: Response) => {
 
     return res.status(HttpStatus.ACCEPTED).json(response);
   } catch (error: any) {
+    if (error instanceof InvalidBlockError) {
+      return res.status(HttpStatus.BAD_REQUEST).json({ error: error.message });
+    }
     if (error.code === "SYNC_IN_PROGRESS") {
       return res.status(HttpStatus.CONFLICT).json({
         error: error.message,
@@ -286,27 +296,28 @@ export const syncEndpoint = async (req: Request, res: Response) => {
  * Get the target block number from BlockIdentifier
  */
 async function getTargetBlock(endBlock: BlockIdentifier): Promise<number> {
-  if (typeof endBlock === "number") {
-    return endBlock;
+  if (typeof endBlock !== "number" && typeof endBlock !== "string") {
+    throw new InvalidBlockError(`Unsupported endBlock type: ${typeof endBlock}`);
   }
 
-  if (endBlock === BlockTag.LATEST || endBlock === "latest") {
-    const latestBlock = await getLatestBlockNumber(originalProvider);
-    return latestBlock;
+  const target =
+    typeof endBlock === "number"
+      ? endBlock
+      : parseInt(endBlock, endBlock.startsWith("0x") ? 16 : 10);
+  if (!Number.isSafeInteger(target) || target < 0) {
+    throw new InvalidBlockError(`Invalid block identifier: ${endBlock}`);
   }
-
-  if (typeof endBlock === "string") {
-    const parsed = endBlock.startsWith("0x")
-      ? parseInt(endBlock, 16)
-      : parseInt(endBlock, 10);
-
-    if (isNaN(parsed)) {
-      throw new InvalidBlockError(`Invalid block identifier: ${endBlock}`);
+  if (config.minimumReplayLagBlocks > 0) {
+    const latestAllowed = await getLatestReplayTarget();
+    if (target > latestAllowed) {
+      throw new InvalidBlockError(
+        latestAllowed < 0
+          ? "The source has no blocks eligible under MIN_REPLAY_LAG_BLOCKS"
+          : `endBlock ${target} exceeds the latest eligible block ${latestAllowed} under MIN_REPLAY_LAG_BLOCKS`,
+      );
     }
-    return parsed;
   }
-
-  throw new InvalidBlockError(`Unsupported endBlock type: ${typeof endBlock}`);
+  return target;
 }
 
 /**

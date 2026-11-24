@@ -1,8 +1,7 @@
 import logger from "../logger.js";
 import { SyncProcess } from "../types.js";
 import { persistence } from "../persistence.js";
-import { getLatestBlockNumber } from "../operations/blockOperations.js";
-import { originalProvider } from "../providers.js";
+import { getLatestReplayTarget } from "../operations/blockOperations.js";
 import { config } from "../config.js";
 import {
   incrementProbeChecks,
@@ -39,34 +38,39 @@ export class ProbeManager {
 
     while (retryCount < this.maxRetries) {
       try {
-        const latestBlock = await getLatestBlockNumber(originalProvider);
+        const target = await getLatestReplayTarget();
 
-        if (latestBlock > process.syncTo) {
+        if (
+          target > process.syncTo ||
+          (target < process.syncTo && config.minimumReplayLagBlocks > 0)
+        ) {
           const oldTarget = process.syncTo;
-          const newBlocks = latestBlock - oldTarget;
+          const newBlocks = Math.max(0, target - oldTarget);
 
           // Update in-memory process
-          process.syncTo = latestBlock;
+          process.syncTo = target;
           if (process.totalBlocks !== null) {
-            process.totalBlocks =
-              latestBlock -
-              (process.currentBlock - process.processedBlocks) +
-              1;
+            process.totalBlocks = Math.max(
+              process.processedBlocks,
+              target - process.syncFrom + 1,
+            );
           }
 
           // Update state file
-          persistence.updateSyncTarget(latestBlock);
+          persistence.updateSyncTarget(target);
 
           logger.info(
-            `📈 Sync target updated: ${oldTarget} → ${latestBlock} (${newBlocks} new blocks detected)`,
+            `📈 Sync target updated: ${oldTarget} → ${target} (${newBlocks} new eligible blocks)`,
           );
 
           // Record metrics
-          incrementProbeChecks("new_blocks");
-          incrementProbeNewBlocks(newBlocks);
+          incrementProbeChecks(newBlocks > 0 ? "new_blocks" : "no_change");
+          if (newBlocks > 0) {
+            incrementProbeNewBlocks(newBlocks);
+          }
         } else {
           logger.debug(
-            `🔍 Probe: No new blocks (latest: ${latestBlock}, target: ${process.syncTo})`,
+            `🔍 Probe: No new eligible blocks (target: ${process.syncTo})`,
           );
 
           // Record metrics

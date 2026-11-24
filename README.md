@@ -78,6 +78,7 @@ STATE_FILE_PATH=./sync-state.json
 CLEAN_SLATE=false
 MAX_SUPPORTED_STARKNET_VERSION=0.14.1
 LOG_LEVEL=info
+MIN_REPLAY_LAG_BLOCKS=0       # Minimum distance behind the source confirmed head
 
 # Managed-block replay preserves source headers and explicitly closes each block.
 # Set false when destination block hashes are allowed to differ from the source.
@@ -262,6 +263,13 @@ Features:
 - Updates target dynamically as new blocks arrive
 - Auto-resume on restart
 - Works with both sequential and snap sync
+
+Set `MIN_REPLAY_LAG_BLOCKS=5` to replay through block 95 when the source
+confirmed head is 100. The next block becomes eligible when the source head
+reaches 101. A continuous run started or resumed inside the requested gap
+keeps its current confirmed height and waits for the source to advance.
+Fixed-range requests that would cross the gap are rejected. The default is
+`0`, which follows the source tip.
 
 ## Development
 
