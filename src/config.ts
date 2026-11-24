@@ -40,6 +40,7 @@ interface EnvironmentConfig {
   replayBlockRpcEnabled: boolean;
   managedBlockMaxInflight: number;
   continuousSyncProbeIntervalMs: number;
+  minimumReplayLagBlocks: number;
   maxSupportedStarknetVersion?: string;
   mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
@@ -98,6 +99,17 @@ class Config {
     );
 
     const replayMode = this.parseReplayMode(process.env.REPLAY_MODE);
+    const minimumReplayLagBlocks = Number(
+      process.env.MIN_REPLAY_LAG_BLOCKS ?? 0,
+    );
+    if (
+      !Number.isSafeInteger(minimumReplayLagBlocks) ||
+      minimumReplayLagBlocks < 0
+    ) {
+      throw new ConfigurationError(
+        "MIN_REPLAY_LAG_BLOCKS must be a non-negative integer.",
+      );
+    }
     const config: EnvironmentConfig = {
       // Server
       port: this.parsePort(process.env.PORT),
@@ -134,6 +146,7 @@ class Config {
         ProbeConfig.INTERVAL_MS,
         "CONTINUOUS_SYNC_PROBE_INTERVAL_MS",
       ),
+      minimumReplayLagBlocks,
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
         process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
@@ -431,6 +444,10 @@ class Config {
 
   public get continuousSyncProbeIntervalMs(): number {
     return this.config.continuousSyncProbeIntervalMs;
+  }
+
+  public get minimumReplayLagBlocks(): number {
+    return this.config.minimumReplayLagBlocks;
   }
 
   public get transactionOnlyMaxInflightBlocks(): number {
