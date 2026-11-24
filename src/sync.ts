@@ -1462,7 +1462,9 @@ async function syncBlocksAsync(process: SyncProcess): Promise<void> {
         logger.info(
           `⏸️  Caught up to target block ${process.syncTo}, waiting for new blocks...`,
         );
-        logger.info(`🔍 Probe will check for new blocks every 60 seconds`);
+        logger.info(
+          `🔍 Probe will check for new blocks every ${probeManager.getProbeInterval() / 1000} seconds`,
+        );
 
         await new Promise((resolve) =>
           setTimeout(resolve, ProbeConfig.CAUGHT_UP_WAIT_MS),

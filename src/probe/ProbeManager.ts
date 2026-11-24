@@ -3,7 +3,7 @@ import { SyncProcess } from "../types.js";
 import { persistence } from "../persistence.js";
 import { getLatestBlockNumber } from "../operations/blockOperations.js";
 import { originalProvider } from "../providers.js";
-import { ProbeConfig } from "../constants.js";
+import { config } from "../config.js";
 import {
   incrementProbeChecks,
   incrementProbeNewBlocks,
@@ -18,7 +18,7 @@ export class ProbeManager {
   private readonly maxRetries: number;
 
   constructor(
-    probeIntervalMs: number = ProbeConfig.INTERVAL_MS,
+    probeIntervalMs: number = config.continuousSyncProbeIntervalMs,
     maxRetries: number = 5,
   ) {
     this.probeIntervalMs = probeIntervalMs;
@@ -111,7 +111,12 @@ export class ProbeManager {
       `🔍 Starting probe loop for continuous sync (checks every ${this.probeIntervalMs / 1000}s)`,
     );
 
+    let probeInProgress = false;
     return setInterval(async () => {
+      if (probeInProgress) {
+        return;
+      }
+      probeInProgress = true;
       try {
         await this.probeForNewBlocks(process);
       } catch (error) {
@@ -119,6 +124,8 @@ export class ProbeManager {
         if (onError) {
           onError(error as Error);
         }
+      } finally {
+        probeInProgress = false;
       }
     }, this.probeIntervalMs);
   }
