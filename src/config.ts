@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
-import { ReplayMode, ReplayModeType } from "./constants.js";
+import { ProbeConfig, ReplayMode, ReplayModeType } from "./constants.js";
 import {
   isMempoolReplayMode,
   isTransactionReplayMode,
@@ -39,6 +39,7 @@ interface EnvironmentConfig {
   validateBlockHash: boolean;
   replayBlockRpcEnabled: boolean;
   managedBlockMaxInflight: number;
+  continuousSyncProbeIntervalMs: number;
   maxSupportedStarknetVersion?: string;
   mempoolTransactionIntervalMs: number;
   transactionOnlyMaxInflightBlocks: number;
@@ -127,6 +128,11 @@ class Config {
         process.env.MANAGED_BLOCK_MAX_INFLIGHT,
         1,
         "MANAGED_BLOCK_MAX_INFLIGHT",
+      ),
+      continuousSyncProbeIntervalMs: this.parsePositiveInt(
+        process.env.CONTINUOUS_SYNC_PROBE_INTERVAL_MS,
+        ProbeConfig.INTERVAL_MS,
+        "CONTINUOUS_SYNC_PROBE_INTERVAL_MS",
       ),
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
@@ -421,6 +427,10 @@ class Config {
 
   public get mempoolTransactionIntervalMs(): number {
     return this.config.mempoolTransactionIntervalMs;
+  }
+
+  public get continuousSyncProbeIntervalMs(): number {
+    return this.config.continuousSyncProbeIntervalMs;
   }
 
   public get transactionOnlyMaxInflightBlocks(): number {
