@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { readProxyReplaySettings, type ProxyReplaySettings } from "./operations/proxyCommittedData.js";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
@@ -39,6 +40,7 @@ interface EnvironmentConfig {
   validateBlockHash: boolean;
   replayBlockRpcEnabled: boolean;
   managedBlockMaxInflight: number;
+  committedDataProxy?: ProxyReplaySettings;
   continuousSyncProbeIntervalMs: number;
   minimumReplayLagBlocks: number;
   maxSupportedStarknetVersion?: string;
@@ -147,6 +149,7 @@ class Config {
         "CONTINUOUS_SYNC_PROBE_INTERVAL_MS",
       ),
       minimumReplayLagBlocks,
+      committedDataProxy: readProxyReplaySettings(process.env),
       maxSupportedStarknetVersion,
       mempoolTransactionIntervalMs: this.parseNonNegativeInt(
         process.env.MEMPOOL_TRANSACTION_INTERVAL_MS,
@@ -204,6 +207,13 @@ class Config {
     ) {
       throw new ConfigurationError(
         "REPLAY_BLOCK_RPC_ENABLED requires REPLAY_MODE=managed_blocks.",
+      );
+    }
+
+    if (config.committedDataProxy &&
+        (!config.replayBlockRpcEnabled || config.managedBlockMaxInflight !== 1)) {
+      throw new ConfigurationError(
+        "Proxy committed-data replay requires REPLAY_BLOCK_RPC_ENABLED=true and MANAGED_BLOCK_MAX_INFLIGHT=1.",
       );
     }
 
@@ -432,6 +442,10 @@ class Config {
 
   public get managedBlockMaxInflight(): number {
     return this.config.managedBlockMaxInflight;
+  }
+
+  public get committedDataProxy(): ProxyReplaySettings | undefined {
+    return this.config.committedDataProxy;
   }
 
   public get maxSupportedStarknetVersion(): string | undefined {

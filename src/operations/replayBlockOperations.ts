@@ -448,7 +448,7 @@ export async function replayBlock(
   sourceBlock: SourceBlockWithTxs,
   signal?: AbortSignal,
 ): Promise<ReplayBlockResult> {
-  await importCommittedDataBeforeBlock();
+  await importCommittedDataBeforeBlock(sourceBlock.transactions, signal);
   const request = await buildReplayBlockRequest(blockNumber, sourceBlock);
   logger.info(
     `📦 Replaying block ${blockNumber} via madara_V0_1_0_replayBlock with ${request.transactions.length} transactions`,
