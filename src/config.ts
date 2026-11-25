@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { readMongoReplaySettings } from "./operations/mongoCommittedData.js";
 import path from "path";
 import logger from "./logger.js";
 import { normalizeStarknetVersion } from "./starknetVersion.js";
@@ -204,6 +205,13 @@ class Config {
     ) {
       throw new ConfigurationError(
         "REPLAY_BLOCK_RPC_ENABLED requires REPLAY_MODE=managed_blocks.",
+      );
+    }
+
+    if (readMongoReplaySettings(process.env) &&
+        (!config.replayBlockRpcEnabled || config.managedBlockMaxInflight !== 1)) {
+      throw new ConfigurationError(
+        "Mongo committed-data replay requires managed REPLAY_BLOCK_RPC_ENABLED=true and MANAGED_BLOCK_MAX_INFLIGHT=1.",
       );
     }
 

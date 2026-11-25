@@ -85,7 +85,8 @@ MIN_REPLAY_LAG_BLOCKS=0       # Minimum distance behind the source confirmed hea
 VALIDATE_BLOCK_HASH=true
 REPLAY_BLOCK_RPC_ENABLED=false # Send each full managed block through one Madara admin RPC
 MANAGED_BLOCK_MAX_INFLIGHT=1   # 1..9; requires ordered pipelined replay support in Madara
-COMMITTED_DATA_REPLAY_ENABLED=false # Import C1 feeder datasets before each managed block
+COMMITTED_DATA_REPLAY_ENABLED=false # Enable the committed-data import gate
+COMMITTED_DATA_REPLAY_SOURCE=feeder # feeder or mongo
 COMMITTED_DATA_SOURCE_FEEDER_URL=http://127.0.0.1:18080/feeder_gateway
 COMMITTED_DATA_TARGET_RPC_URL=http://127.0.0.1:29945/rpc/v0.1.0/
 # Optional event filter for application-specific data fields that intentionally differ:
@@ -362,3 +363,36 @@ The service tracks:
 ## License
 
 ISC
+
+
+### Mongo-backed committed-data replay
+
+Set `COMMITTED_DATA_REPLAY_ENABLED=true` and
+`COMMITTED_DATA_REPLAY_SOURCE=mongo` to preload the datasets published in
+each confirmed C1 block. The worker recognizes Cairo 1 account calls to
+`publish_snapshot_root(root, snapshot_id, timestamp)` from the configured
+executor to the configured oracle. It matches archived signed INVOKEs to
+C1, verifies the chunked payload, and imports any missing namespace-scoped
+base roots before their updates. Every required import must acknowledge
+before the worker sends `replayBlock`. After an archive lookup or import
+failure, restart sync at the same block once its data is available.
+
+| Variable | Purpose |
+| --- | --- |
+| `COMMITTED_DATA_MONGO_URI` | Read-only connection to the proxy's MongoDB archive |
+| `COMMITTED_DATA_MONGO_DATABASE` | Database, defaults to `committed_data` |
+| `COMMITTED_DATA_MONGO_AUDIT_COLLECTION` | Manifest collection, defaults to `proxy_rpc_calls` |
+| `COMMITTED_DATA_EXECUTOR_ADDRESS` | C1 oracle executor account |
+| `COMMITTED_DATA_ORACLE_ADDRESS` | C1 oracle contract |
+| `COMMITTED_DATA_TARGET_RPC_URL` | C2 committed-data RPC on port 9945 |
+| `COMMITTED_DATA_TARGET_FEEDER_URL` | C2 feeder gateway, ending in `/feeder_gateway` |
+
+This mode requires `REPLAY_MODE=managed_blocks`,
+`REPLAY_BLOCK_RPC_ENABLED=true`, and `MANAGED_BLOCK_MAX_INFLIGHT=1`. Run the
+proxy binary's `--index-archive` once the archive-only proxy is live and
+before enabling Mongo-backed replay against existing records. At cutover,
+seed any missing datasets published before the replay checkpoint that later
+transactions can read.
+
+Set `E2E_MONGO_URI` to a disposable MongoDB instance to run the archive
+integration test with `npm test`.

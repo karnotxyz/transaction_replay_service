@@ -1,3 +1,4 @@
+import { closeMongoCommittedData } from "./operations/mongoCommittedData.js";
 // Initialize OpenTelemetry FIRST, before any other imports
 import { initializeTelemetry, shutdownTelemetry } from "./telemetry/config.js";
 initializeTelemetry();
@@ -164,6 +165,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   try {
     // Stop all probes
     await syncStateManager.shutdown();
+    await closeMongoCommittedData();
 
     // Shutdown OpenTelemetry
     await shutdownTelemetry();
