@@ -1,5 +1,6 @@
 import axios from "axios";
-import { importMongoCommittedData, readMongoReplaySettings } from "./mongoCommittedData.js";
+import { config } from "../config.js";
+import { importProxyCommittedData } from "./proxyCommittedData.js";
 
 const ROOTS_PER_PAGE = 64;
 const importedRoots = new Set<string>();
@@ -57,14 +58,13 @@ async function importMissingDatasets(feeder: string, privateRpc: string): Promis
   }
 }
 
-/** Import every C1 dataset seen by the feeder before submitting the next managed block. */
+/** Import committed data before submitting the next managed block. */
 export async function importCommittedDataBeforeBlock(
   transactions: readonly Record<string, unknown>[],
   signal?: AbortSignal,
 ): Promise<void> {
-  const mongo = readMongoReplaySettings(process.env);
-  if (mongo) {
-    await importMongoCommittedData(mongo, transactions, signal);
+  if (config.committedDataProxy) {
+    await importProxyCommittedData(config.committedDataProxy, transactions, signal);
     return;
   }
   const configured = endpoints();

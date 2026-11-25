@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import { Binary, MongoClient, ObjectId } from "mongodb";
 import { hash } from "starknet";
-import { closeMongoCommittedData, publishedRoots } from "../src/operations/mongoCommittedData.js";
+import { publishedRoots } from "../src/operations/proxyCommittedData.js";
 
 const executor = "0x4";
 const oracle = "0x5";
@@ -24,16 +22,16 @@ test("extracts configured oracle roots from executor multicalls only", () => {
   assert.throws(() => publishedRoots({ ...invoke, calldata: invoke.calldata.slice(0, -1) }, executor, oracle), /Truncated/);
 });
 
-const mongoUri = process.env.E2E_MONGO_URI;
-test("holds replay until both archived roots and their namespace base are acknowledged", { skip: !mongoUri }, async (t) => {
-  const mongo = new MongoClient(mongoUri!);
-  const db = mongo.db("replay_archive_test_" + new ObjectId().toHexString());
-  t.after(async () => {
-    await closeMongoCommittedData();
-    await db.dropDatabase();
-    await mongo.close();
-  });
-
+test("fetches signed updates from the proxy and waits for C2 namespace imports before replay", async (t) => {
+  const token = "test-proxy-token-at-least-32-characters";
+  const update = (base_root: string | null) => ({ application_id: "0x1", dataset_id: "0x2", base_root });
+  const records: Record<string, unknown> = {
+    "0x10": { root: "0x10", update: update(null), entries: [], signatures: signature },
+    "0x20": { root: "0x0020", update: update("0x10"), entries: [], signatures: signature },
+    "0x30": { root: "0x30", update: update("0x20"), entries: [], signatures: signature },
+  };
+  const lookups: string[] = [];
+  let proxyStatus = 404;
   const applied = new Set<string>();
   const trace: string[] = [];
   let reject = true;
@@ -48,13 +46,36 @@ test("holds replay until both archived roots and their namespace base are acknow
   const receipts = { ...block, transactions: [{ transaction: tx, receipt: {
     transaction_hash: tx.transaction_hash, execution_status: "SUCCEEDED", events: [],
   } }] };
+  const proxy = createServer((req, res) => {
+    assert.equal(req.method, "GET");
+    assert.equal(req.headers.authorization, "Bearer " + token);
+    const url = new URL(req.url!, "http://localhost");
+    assert.equal(url.pathname, "/feeder_gateway/get_signed_committed_data_update");
+    const root = url.searchParams.get("root")!;
+    lookups.push(root);
+    if (root === "0x10") {
+      assert.equal(url.searchParams.get("application_id"), "0x1");
+      assert.equal(url.searchParams.get("dataset_id"), "0x2");
+      assert.equal(url.searchParams.has("transaction_hash"), false);
+    } else {
+      assert.equal(url.searchParams.get("transaction_hash"), "0x123");
+      assert.equal(url.searchParams.has("application_id"), false);
+    }
+    res.statusCode = proxyStatus;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(proxyStatus === 200 ? records[root] : {}));
+    if (proxyStatus === 503) proxyStatus = 200;
+  }).listen(0, "127.0.0.1");
+  t.after(() => proxy.close());
+  await new Promise<void>(resolve => proxy.once("listening", resolve));
+  const proxyUrl = "http://127.0.0.1:" + (proxy.address() as AddressInfo).port;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
     res.setHeader("Content-Type", "application/json");
     if (req.method === "GET") {
-      // Root 0x10 has data but lacks its namespace label until the standalone update is imported.
+      // Both roots exist globally. Their namespace labels are registered only after import.
       const roots = url.pathname.endsWith("get_committed_data_roots")
-        ? ["0x10", ...applied].filter((root, index, values) => values.indexOf(root) === index)
+        ? ["0x10", "0x20", ...applied].filter((root, index, values) => values.indexOf(root) === index)
         : [...applied];
       const cursor = url.searchParams.get("after") ?? url.searchParams.get("root") ?? "-1";
       const available = roots.filter(root => BigInt(root) > BigInt(cursor)).sort();
@@ -93,57 +114,21 @@ test("holds replay until both archived roots and their namespace base are acknow
   Object.assign(process.env, {
     RPC_URL_ORIGINAL_NODE: url, RPC_URL_SYNCING_NODE: url, ADMIN_RPC_URL_SYNCING_NODE: url,
     REPLAY_MODE: "managed_blocks", REPLAY_BLOCK_RPC_ENABLED: "true", MANAGED_BLOCK_MAX_INFLIGHT: "1",
-    COMMITTED_DATA_REPLAY_ENABLED: "true", COMMITTED_DATA_REPLAY_SOURCE: "mongo", COMMITTED_DATA_MONGO_URI: mongoUri,
-    COMMITTED_DATA_MONGO_DATABASE: db.databaseName, COMMITTED_DATA_MONGO_AUDIT_COLLECTION: "calls",
+    COMMITTED_DATA_REPLAY_ENABLED: "true", COMMITTED_DATA_REPLAY_SOURCE: "proxy",
+    COMMITTED_DATA_PROXY_FEEDER_URL: proxyUrl + "/feeder_gateway", COMMITTED_DATA_PROXY_TOKEN: token,
     COMMITTED_DATA_EXECUTOR_ADDRESS: executor, COMMITTED_DATA_ORACLE_ADDRESS: oracle,
     COMMITTED_DATA_TARGET_RPC_URL: url, COMMITTED_DATA_TARGET_FEEDER_URL: url + "/feeder_gateway",
   });
 
-  async function archive(method: string, params: unknown, roots: string[], padding = 0) {
-    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) + " ".repeat(padding));
-    const id = new ObjectId();
-    const chunkSize = 4 * 1024 * 1024;
-    const count = Math.ceil(body.length / chunkSize);
-    for (let index = 0; index < count; index++) {
-      await db.collection<{ _id: string; call_id: ObjectId; index: number; payload: Binary }>("calls_chunks").insertOne({
-        _id: id.toHexString() + ":" + index, call_id: id, index,
-        payload: new Binary(body.subarray(index * chunkSize, (index + 1) * chunkSize)),
-      });
-    }
-    await db.collection("calls").insertOne({
-      _id: id, method, dataset_roots: roots, request_bytes: body.length, chunk_count: count,
-      payload_sha256: new Binary(createHash("sha256").update(body).digest()),
-    });
-    return id;
-  }
-
   const source = { ...block, transactions: [tx] };
   const { replayBlock } = await import("../src/operations/replayBlockOperations.js");
   const replay = () => replayBlock(10, source as Parameters<typeof replayBlock>[1]);
-  await assert.rejects(replay, /No matching archived committed dataset for root 0x20/);
+  await assert.rejects(replay, /Proxy signed dataset lookup failed for root 0x20: 404/);
   assert.deepEqual(trace, []);
-
-  const update = (base_root: string | null) => ({ application_id: "0x1", dataset_id: "0x2", base_root });
-  await archive("madara_V0_1_0_updateCommittedDataSet", [update(null), "0x10", [], signature], ["0x10"]);
-  const datasets = [
-    { root: "0x0020", update: update("0x10"), entries: [], signatures: signature },
-    { root: "0x30", update: update("0x20"), entries: [], signatures: signature },
-  ];
-  const combinedId = await archive("madara_V0_1_0_importCommittedDataAndSubmitTransaction",
-    { datasets, transaction: invoke }, ["0x20", "0x30"], 4 * 1024 * 1024);
-  // A newer archive row for a different signed INVOKE must not shadow the C1 transaction.
-  await archive("madara_V0_1_0_importCommittedDataAndSubmitTransaction",
-    { datasets, transaction: { ...invoke, signature: ["0x6"] } }, ["0x20", "0x30"]);
-
-  const manifests = db.collection("calls");
-  const original = await manifests.findOne({ _id: combinedId });
-  await manifests.updateOne({ _id: combinedId }, { $set: { payload_sha256: new Binary(Buffer.alloc(32)) } });
-  await assert.rejects(replay, /Archive digest mismatch/);
-  assert.deepEqual(trace, []);
-  await manifests.updateOne({ _id: combinedId }, { $set: { payload_sha256: original!.payload_sha256 } });
-
+  proxyStatus = 503;
   await assert.rejects(replay, /C2 did not acknowledge committed dataset 0x20/);
   assert.deepEqual(trace, ["0x10", "0x20"]);
+  assert.deepEqual(lookups.slice(0, 5), ["0x20", "0x20", "0x20", "0x10", "0x20"]);
   reject = false;
   await replay();
   assert.deepEqual(trace, ["0x10", "0x20", "0x20", "0x30", "replay"]);
