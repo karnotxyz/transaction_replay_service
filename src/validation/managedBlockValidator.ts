@@ -9,6 +9,7 @@ interface ReplayResult {
 export interface ManagedBlockValidationOptions {
   eventContractAddress?: string;
   eventDataPrefixLength?: number;
+  compareEvents?: boolean;
 }
 
 function sameFelt(a: string, b: string): boolean {
@@ -72,6 +73,7 @@ export function validateManagedBlock(
     if (sourceTx.receipt.execution_status === "REVERTED") {
       assertEqual(`transaction ${index} revert reason`, sourceTx.receipt.revert_reason, targetTx.receipt.revert_reason);
     }
+    if (options.compareEvents === false) continue;
     type ReplayEvent = { from_address: string; keys: string[]; data: string[] };
     const sourceEvents = (sourceTx.receipt.events || []) as ReplayEvent[];
     const targetEvents = (targetTx.receipt.events || []) as ReplayEvent[];

@@ -35,6 +35,7 @@ test("fetches signed updates from the proxy and waits for C2 namespace imports b
   const applied = new Set<string>();
   const trace: string[] = [];
   let reject = true;
+  let acknowledgeWithoutStore = false;
   const tx = { ...invoke, transaction_hash: "0x123" };
   const gas = { price_in_wei: "0x1", price_in_fri: "0x2" };
   const block = {
@@ -95,7 +96,7 @@ test("fetches signed updates from the proxy and waits for C2 namespace imports b
         res.end(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: 500, message: "import rejected" } }));
         return;
       }
-      applied.add(root);
+      if (!acknowledgeWithoutStore) applied.add(root);
     } else if (request.method === "madara_V0_1_0_replayBlock") {
       assert.deepEqual([...applied], ["0x10", "0x20", "0x30"]);
       assert.equal(request.params[0].transactions[0].transaction_hash, tx.transaction_hash);
@@ -130,6 +131,10 @@ test("fetches signed updates from the proxy and waits for C2 namespace imports b
   assert.deepEqual(trace, ["0x10", "0x20"]);
   assert.deepEqual(lookups.slice(0, 5), ["0x20", "0x20", "0x20", "0x10", "0x20"]);
   reject = false;
+  acknowledgeWithoutStore = true;
+  await assert.rejects(replay, /acknowledged committed dataset 0x20 but it is not available/);
+  assert.equal(trace.at(-1), "0x20");
+  acknowledgeWithoutStore = false;
   await replay();
-  assert.deepEqual(trace, ["0x10", "0x20", "0x20", "0x30", "replay"]);
+  assert.deepEqual(trace, ["0x10", "0x20", "0x20", "0x20", "0x30", "replay"]);
 });
