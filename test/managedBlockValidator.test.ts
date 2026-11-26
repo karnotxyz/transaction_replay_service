@@ -79,3 +79,13 @@ test("managed replay permits explicitly expected event data divergence while che
   target.transactions[0].receipt.events[0].keys[0] = "0x100";
   assert.throws(() => validateManagedBlock(5, source, target, result, { eventDataPrefixLength: 0 }), /origin\/keys differ/);
 });
+
+test("restart validation ignores intentional event divergence but checks transaction outcomes", () => {
+  const source = block("0xaaa", "0x0");
+  const target = block("0xbbb", "0x1");
+  target.transactions[0].receipt.events = [];
+  const result = { block_number: 5, block_hash: "0xbbb", transaction_hashes: ["0xabc"] };
+  assert.doesNotThrow(() => validateManagedBlock(5, source, target, result, { compareEvents: false }));
+  target.transactions[0].receipt.execution_status = "REVERTED";
+  assert.throws(() => validateManagedBlock(5, source, target, result, { compareEvents: false }), /execution status differs/);
+});

@@ -205,6 +205,9 @@ export async function importProxyCommittedData(
     if (data?.jsonrpc !== "2.0" || data.id !== root || data.result !== null || "error" in data) {
       throw new Error(`C2 did not acknowledge committed dataset ${root}: ${data?.error?.message ?? "invalid response"}`);
     }
+    if (!await available(root, update, signal)) {
+      throw new Error(`C2 acknowledged committed dataset ${root} but it is not available from the feeder`);
+    }
   }
 
   async function ensure(lookup: Lookup) {

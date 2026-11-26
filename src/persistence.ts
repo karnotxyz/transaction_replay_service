@@ -7,7 +7,9 @@ import { ProcessStatus, ProcessStatusType } from "./constants.js";
 import {
   getLatestBlockNumber,
   getBlockWithTxHashes,
+  getBlockWithReceipts,
 } from "./operations/blockOperations.js";
+import { validateManagedBlock } from "./validation/managedBlockValidator.js";
 import { originalProvider, syncingProvider } from "./providers.js";
 import { BlockHashMismatchError } from "./errors/index.js";
 
@@ -225,6 +227,29 @@ class PersistenceLayer {
         startTxIndex: state.currentTxIndex ?? 0,
         startTxHash: state.currentTxHash,
         syncTo,
+        isContinuous: state.isContinuous,
+      };
+    }
+
+    if (config.replayBlockRpcEnabled && !config.shouldValidateBlockHash) {
+      const [source, target] = await Promise.all([
+        getBlockWithReceipts(originalProvider, syncingLatest),
+        getBlockWithReceipts(syncingProvider, syncingLatest),
+      ]);
+      if (!source || !target || !target.block_hash) {
+        throw new Error(`Cannot validate confirmed recovery block ${syncingLatest}`);
+      }
+      validateManagedBlock(syncingLatest, source, target, {
+        block_number: syncingLatest,
+        block_hash: target.block_hash,
+        transaction_hashes: target.transactions.map(({ receipt }) => receipt.transaction_hash),
+      }, { compareEvents: false });
+      logger.info(`✅ Divergent block ${syncingLatest} matches source metadata, ordered transactions, and execution statuses`);
+      return {
+        resumeFrom: syncingLatest + 1,
+        startTxIndex: 0,
+        startTxHash: undefined,
+        syncTo: state.isContinuous ? "latest" : state.syncTo ?? "latest",
         isContinuous: state.isContinuous,
       };
     }
