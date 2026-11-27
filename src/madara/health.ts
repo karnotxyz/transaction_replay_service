@@ -14,7 +14,7 @@ import {
  */
 export async function checkMadaraHealth(): Promise<boolean> {
   try {
-    const healthUrl = `${config.rpcUrlSyncingNode}/health`;
+    const healthUrl = new URL("/health", config.rpcUrlSyncingNode).href;
     const response = await axios.get(healthUrl, {
       timeout: TimeoutConfig.MADARA_HEALTH_CHECK_TIMEOUT,
     });
